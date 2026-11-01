@@ -19,16 +19,14 @@ def main():
     os.chdir(ROOT)
     try:
         log('Starting native client. Python: '+sys.executable)
-        import client
+        import qt_client as client
         if sys.argv[1:]==['--startup-check']:
-            # Hidden diagnostic of the actual CMD/interpreter/import/Tk
+            # Hidden diagnostic of the actual CMD/interpreter/import/Qt
             # startup route. No game, visible client or GPU work is required.
-            root=client.tk.Tk()
-            try:root.withdraw();root.update_idletasks()
-            finally:root.destroy()
+            client.startup_check()
             log('STARTUP_CHECK_OK');print('STARTUP_CHECK_OK');return 0
-        client.main()
-        log('Client closed normally.');return 0
+        result=client.main()
+        log('Client closed normally.');return int(result or 0)
     except Exception:
         detail=traceback.format_exc()
         try:log(detail)

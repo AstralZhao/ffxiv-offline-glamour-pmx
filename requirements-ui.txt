@@ -1,0 +1,2 @@
+# Core/Gui/Widgets only. Install into artifacts/runtime/pyside6-6.8.3.
+PySide6-Essentials==6.8.3
