@@ -290,7 +290,9 @@ class QtClient(NativeClient):
     def open_guide(self):
         from user_guide import GUIDE
         dialog=W.QDialog(self.window);dialog.setWindowTitle('操作说明 · 幻衣间');dialog.resize(680,720)
-        layout=vertical(dialog,20,12);browser=W.QTextBrowser();browser.setOpenExternalLinks(False);browser.setHtml(GUIDE)
+        layout=vertical(dialog,20,12);browser=W.QTextBrowser();browser.setOpenExternalLinks(False)
+        browser.document().setDefaultStyleSheet('body,p,li { color:#edf1f7; } h2,h3 { color:#a3e4d5; } a { color:#89d5c4; }')
+        browser.document().setDocumentMargin(14);browser.setHtml(GUIDE)
         layout.addWidget(browser);layout.addWidget(button('知道了',dialog.accept,primary=True));self.show_dialog(dialog)
         return dialog
 

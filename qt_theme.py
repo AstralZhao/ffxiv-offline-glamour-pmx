@@ -36,6 +36,7 @@ QFrame#OutfitCard { background:#202733; border:1px solid #303a49; border-radius:
 QFrame#OutfitCard[selected="true"] { border-color:#79b9af; background:#24383d; }
 QLineEdit, QComboBox, QSpinBox, QPlainTextEdit { background:#121821; border:1px solid #323d4d; border-radius:7px; padding:8px 10px; selection-background-color:#386c65; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color:#89d5c4; }
+QTextBrowser { background:#191e27; color:#edf1f7; border:1px solid #323d4d; border-radius:8px; padding:8px; selection-background-color:#386c65; selection-color:#ffffff; }
 QComboBox::drop-down { border:0; width:25px; }
 QComboBox QAbstractItemView { background:#202733; border:1px solid #3a485b; selection-background-color:#345751; outline:0; padding:5px; }
 QListWidget { background:transparent; border:0; outline:0; }
