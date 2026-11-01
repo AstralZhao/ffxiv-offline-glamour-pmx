@@ -15,12 +15,15 @@ from geometry_probe import local_matrix
 from havok_probe import read_skeleton
 from prepare_preset_customization import bundle_arrays
 from preset_customization import sha
-from preset_outfit import PresetOutfit
+from preset_outfit import PresetOutfit,outfit_visibility
 from materials import DemoMaterials
 
 
 class DemoOutfit(DemoMaterials,PresetOutfit):
     mesh_owned_joints=True
+
+    def visible_meshes(self,meshes,slot,flags,mask):
+        return outfit_visibility(meshes,slot,flags,mask,race=self.base.pose['preset']['parameters']['race'])
 
     def __init__(self,base):
         super().__init__(base)
