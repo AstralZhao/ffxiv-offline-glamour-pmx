@@ -18,7 +18,7 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,ComboBox,slot_icon,swatch_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,slot_icon,swatch_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -152,6 +152,9 @@ class QtClient(NativeClient):
         self.dye_by_id={};self.raw_status='';self.dialogs=[];self.build_ui()
         self.message.callback=self.display_status;self.display_status(self.message.get())
         self.engine=None;self.icon_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeIcons');self.pending_icons={};self.icon_timer=None
+        self.library=None
+        from equipment_library import EquipmentLibrary
+        self.library_future=self.icon_pool.submit(EquipmentLibrary,self.session_path.parent/'equipment-library.sqlite',ROOT/'artifacts/cn-data/catalog.sqlite')
         self.loading_kind='正在加载角色…';self.sync_loading()
         # Let Qt paint the complete shell before starting asset preparation.
         self.root.after(50,lambda:self.start_engine(game,preset,preset_directory))
@@ -180,12 +183,22 @@ class QtClient(NativeClient):
         for text,parts in(('防具',ARMOR),('饰品',ACCESSORIES)):
             b=button(text,lambda p=parts:self.switch_group(p));b.setCheckable(True);b.setChecked(parts==ARMOR);groups.addWidget(b);self.browse_groups.append(b)
         left.addLayout(groups);self.part_bar=horizontal(spacing=5);self.slot_buttons={};left.addLayout(self.part_bar);self.rebuild_part_tabs()
-        self.search=W.QLineEdit();self.search.setClearButtonEnabled(True);self.search.setPlaceholderText('搜索装备名称或编号')
+        self.search=W.QLineEdit();self.search.setClearButtonEnabled(True);self.search.setPlaceholderText('名称、编号、标签 · 支持多词组合')
+        self.search.setToolTip('空格分隔多个条件（同时满足）。#标签、标签:礼服 只搜索标签。')
         self.search.textChanged.connect(self.search_changed);left.addWidget(self.search)
+        self.search.returnPressed.connect(self.load_catalog)
         self.query.callback=lambda text:self.search.setText(text)if self.search.text()!=text else None
+        filters=horizontal(spacing=6);self.tag_picker=ComboBox();self.tag_picker.setMinimumWidth(90);self.tag_picker.addItem('按标签筛选',None)
+        self.tag_picker.setSizeAdjustPolicy(W.QComboBox.AdjustToMinimumContentsLengthWithIcon);self.tag_picker.setMinimumContentsLength(5)
+        self.tag_picker.activated.connect(self.pick_tag);filters.addWidget(self.tag_picker,1)
+        self.favorite_filter=button('★ 收藏',self.filters_changed);self.favorite_filter.setCheckable(True);self.favorite_filter.setToolTip('只显示收藏的装备；同模目录匹配任一收藏成员')
+        filters.addWidget(self.favorite_filter);self.view_toggle=button('图标',self.toggle_catalog_view);self.view_toggle.setCheckable(True);filters.addWidget(self.view_toggle);left.addLayout(filters)
+        self.active_tags=[];self.tag_summary=button('',self.clear_tag_filters,ghost=True);self.tag_summary.hide();left.addWidget(self.tag_summary)
         nav=horizontal(spacing=4);self.back_button=button('‹',self.back_folder,ghost=True);self.back_button.setFixedWidth(29);nav.addWidget(self.back_button)
-        self.breadcrumb=label('全部同模目录','Muted');nav.addWidget(self.breadcrumb,1);left.addLayout(nav)
+        self.breadcrumb=label('全部装备','Muted');nav.addWidget(self.breadcrumb,1)
+        nav.addWidget(button('刷新',self.load_catalog,ghost=True));left.addLayout(nav)
         self.catalog=W.QListWidget();self.catalog.setMouseTracking(True);self.catalog.setItemDelegate(EquipmentDelegate(self.catalog))
+        self.catalog.setContextMenuPolicy(C.Qt.CustomContextMenu);self.catalog.customContextMenuRequested.connect(self.catalog_context)
         self.catalog.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel);self.catalog.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
         self.catalog.itemClicked.connect(self.activate_item)
         enter=G.QShortcut(G.QKeySequence('Return'),self.catalog);enter.activated.connect(lambda:self.activate_item(self.catalog.currentItem())if self.catalog.currentItem()else None)
@@ -193,6 +206,7 @@ class QtClient(NativeClient):
         self.load_more=button('加载更多',lambda:self.load_catalog(True));left.addWidget(self.load_more)
         self.load_more.hide();self.back_button.hide()
         self.count_note=label('正在读取装备目录…','Muted');self.count_note.setStyleSheet('font-size:10px');left.addWidget(self.count_note);body_layout.addWidget(self.browser)
+        self.icon_mode=False;self.set_catalog_view(True,persist=False)
         scene=W.QFrame();scene.setObjectName('Panel');middle=vertical(scene,1,0)
         title=horizontal(margin=16);title.addWidget(label('试衣预览','Section'));title.addStretch()
         self.loading_panel=W.QWidget();loading=horizontal(self.loading_panel,0,6)
@@ -224,6 +238,8 @@ class QtClient(NativeClient):
         card_content=W.QWidget();cards=vertical(card_content,0,8);card_scroll.setWidget(card_content);right.addWidget(card_scroll,1)
         for slot in SLOTS:
             card=OutfitCard(slot,self);card.selected.connect(self.select_slot);cards.addWidget(card);self.outfit_cards[slot]=card;card.setVisible(slot in ARMOR)
+            card.setContextMenuPolicy(C.Qt.CustomContextMenu)
+            card.customContextMenuRequested.connect(lambda point,s=slot:self.outfit_context(s,point))
         cards.addStretch()
         self.head_check=W.QCheckBox('显示头饰');self.head_check.setChecked(True);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
         body_layout.addWidget(self.dressing)
@@ -281,6 +297,12 @@ class QtClient(NativeClient):
 
     def poll_startup(self):
         if self.engine is None:return
+        if self.library is None:
+            if not self.library_future.done():self.root.after(30,self.poll_startup);return
+            try:
+                self.library=self.library_future.result();self.refresh_tag_picker()
+                self.set_catalog_view(self.library.setting('icon_mode','1')=='1',persist=False)
+            except Exception as error:self.message.set('装备标签库未能加载：'+str(error));self.loading_spinner.set_running(False);self.footer_spinner.set_running(False);return
         super().poll_startup()
         if not self.closed:self.sync_loading()
 
@@ -390,6 +412,8 @@ class QtClient(NativeClient):
                 if identifier in changed:item.setIcon(self.icons[identifier])
             for card in self.outfit_cards.values():
                 if getattr(card,'display_key',None)and card.display_key[3]in changed:card.display_key=None
+            for dialog in self.dialogs:
+                if getattr(dialog,'icon_id',None)in changed:dialog.icon_label.setPixmap(self.icons[dialog.icon_id].pixmap(60,60))
             self.update_outfit()
         if self.pending_icons:self.icon_timer=self.root.after(30,self.poll_icons)
 
@@ -397,38 +421,122 @@ class QtClient(NativeClient):
         if not append:self.catalog.clear()
         for row in rows:
             item=W.QListWidgetItem(row['name']);item.setData(C.Qt.UserRole,row);item.setIcon(self.icon(row.get('icon_id')))
-            item.setToolTip(row['name']+(' · 同模目录'if row.get('is_group')else''));self.catalog.addItem(item)
+            item.setToolTip(self.equipment_tooltip(row));self.catalog.addItem(item)
+
+    def equipment_tooltip(self,row):
+        folder=row.get('is_group')and row.get('group_count',1)>1
+        tooltip=row['name']+(f" · 同模 {row['group_count']} 款"if folder else'')
+        return tooltip+'\n'+(('含收藏款式 · 'if folder else'已收藏 · ')if row.get('favorite')else'')+' / '.join(row.get('tags',[]))+'\n右键查看详情、编辑标签和收藏'
+
+    def set_catalog_view(self,icons,persist=True):
+        self.icon_mode=bool(icons);self.view_toggle.setChecked(self.icon_mode)
+        self.view_toggle.setText('图标'if self.icon_mode else'列表');self.view_toggle.setToolTip('切换图标 / 列表显示')
+        if self.icon_mode:
+            self.catalog.setViewMode(W.QListView.IconMode);self.catalog.setResizeMode(W.QListView.Adjust)
+            self.catalog.setMovement(W.QListView.Static);self.catalog.setWrapping(True)
+            self.catalog.setGridSize(C.QSize(72,78));self.catalog.setItemDelegate(IconEquipmentDelegate(self.catalog))
+        else:
+            self.catalog.setViewMode(W.QListView.ListMode);self.catalog.setWrapping(False);self.catalog.setGridSize(C.QSize())
+            self.catalog.setItemDelegate(EquipmentDelegate(self.catalog))
+        self.catalog.doItemsLayout()
+        if persist and self.library:self.library.set_setting('icon_mode','1'if self.icon_mode else'0')
+
+    def toggle_catalog_view(self):self.set_catalog_view(not self.icon_mode)
+
+    def refresh_tag_picker(self):
+        self.tag_picker.blockSignals(True);self.tag_picker.clear();self.tag_picker.addItem('按标签筛选',None)
+        for row in self.library.tags():self.tag_picker.addItem(row['tag']+f" ({row['count']})",row['tag'])
+        self.tag_picker.blockSignals(False)
+
+    def pick_tag(self,index):
+        tag=self.tag_picker.itemData(index);self.tag_picker.setCurrentIndex(0)
+        if tag and tag not in self.active_tags:self.active_tags.append(tag);self.filters_changed()
+
+    def clear_tag_filters(self):self.active_tags=[];self.filters_changed()
+
+    def filters_changed(self):
+        self.tag_summary.setVisible(bool(self.active_tags));text=' + '.join(self.active_tags)
+        self.tag_summary.setText(G.QFontMetrics(self.tag_summary.font()).elidedText('标签：'+text+'  ×',C.Qt.ElideRight,255))
+        self.tag_summary.setToolTip('同时满足：'+text+'\n点击清除标签筛选');self.load_catalog()
+
+    def refresh_library(self):
+        self.refresh_tag_picker();self.library.refresh_annotations(self.rows,self.slot_key())
+        for i,row in enumerate(self.rows):
+            if i>=self.catalog.count():break
+            item=self.catalog.item(i);item.setData(C.Qt.UserRole,row);item.setToolTip(self.equipment_tooltip(row))
+        self.catalog.viewport().update()
+        if self.outer:self.library.refresh_annotations(self.outer['rows'],self.slot_key())
+
+    def toggle_favorite(self,identifier):
+        if not self.library:return
+        try:
+            row=self.library.item(identifier);self.library.set_favorite(identifier,not row['favorite']);self.refresh_library()
+            self.message.set('已取消装备收藏；下次搜索或刷新时重新排序'if row['favorite']else'装备已收藏；下次搜索或刷新时优先显示')
+        except Exception as error:self.message.set('收藏未能保存：'+str(error))
+
+    def catalog_context(self,position):
+        item=self.catalog.itemAt(position)
+        if not item or not self.library:return
+        menu=self.equipment_context_menu(item)
+        menu.exec(self.catalog.viewport().mapToGlobal(position))
+
+    def equipment_context_menu(self,item):
+        row=item.data(C.Qt.UserRole);menu=W.QMenu(self.catalog)
+        menu.addAction('查看详情 / 编辑标签',lambda:self.open_equipment_details(row))
+        exact=self.library.item(row['item_id']);folder=row.get('is_group')and row.get('group_count',1)>1
+        text=('取消收藏'if exact['favorite']else'收藏装备')+('（目录代表款式）'if folder else'')
+        menu.addAction(text,lambda:self.toggle_favorite(row['item_id']))
+        if folder:menu.addAction('打开同模目录',lambda:self.activate_item(item))
+        return menu
+
+    def outfit_context(self,slot,position):
+        identifier=self.state['equipment'][slot]['item_id']
+        if not identifier or not self.library:return
+        self.open_equipment_details({'item_id':identifier})
+
+    def open_equipment_details(self,row):
+        if not self.library:return
+        dialog=EquipmentDetailsDialog(self,row);self.show_dialog(dialog);return dialog
 
     def load_catalog(self,append=False):
         self.cancel_search()
         if not self.boot:return
         if append and not self.more:return
-        if not append:self.offset=0;self.rows=[]
-        result=equipment_rows(self.slot_key(),self.query.get(),self.offset,grouped=self.folder is None,model_set=self.folder)
+        if not append:
+            self.offset=0;self.rows=[];self.favorite_snapshot=self.library.favorite_ids()if self.library else None
+        result=equipment_rows(self.slot_key(),self.query.get(),self.offset,grouped=self.folder is None,model_set=self.folder,
+            library=self.library,favorites_only=self.favorite_filter.isChecked(),tags=self.active_tags,favorite_snapshot=self.favorite_snapshot)
         self.items.update({r['item_id']:r for r in result['items']});self.rows.extend(result['items']);self.offset+=len(result['items']);self.more=result['more']
         self.populate_catalog(result['items'],append);self.load_more.setVisible(self.more);self.back_button.setVisible(self.folder is not None)
-        text='全部同模目录'if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
-        self.search.setPlaceholderText('搜索装备名称或编号'if self.folder is None else'搜索此目录的款式')
-        self.count_note.setText(f"{result['total']:,} "+('个同模目录 · 单击浏览'if self.folder is None else'款装备 · 单击试穿'))
+        text='全部装备'if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
+        self.search.setPlaceholderText('名称、编号、标签 · 多词组合'if self.folder is None else'搜索此目录的款式或标签')
+        self.count_note.setText(f"{result['total']:,} "+('项 · 收藏优先 · 右键查看详情'if self.folder is None else'款装备 · 收藏优先'))
         if not append:self.catalog.verticalScrollBar().setValue(0)
         self.update_outfit()
 
     def activate_item(self,item):
         if not self.ready:return
         row=item.data(C.Qt.UserRole)
-        if row.get('is_group'):
+        if row.get('is_group')and row.get('group_count',1)>1:
             self.outer={'query':self.query.get(),'rows':list(self.rows),'offset':self.offset,'more':self.more,'scroll':self.catalog.verticalScrollBar().value(),
-                'name':row['name'],'count':self.count_note.text()}
+                'name':row['name'],'count':self.count_note.text(),
+                'filters':(self.favorite_filter.isChecked(),tuple(self.active_tags)),'favorite_snapshot':self.favorite_snapshot}
             self.folder=row['model_set'];self.query.set('');self.load_catalog();return
         self.state['equipment'][self.slot_key()]={'item_id':row['item_id'],'first':0,'second':0};self.update_outfit();self.queue_render()
 
     def back_folder(self):
         if self.folder is None or not self.outer:return
         record=self.outer;self.folder=None;self.outer=None;self.query.set(record['query']);self.cancel_search()
-        self.rows=record['rows'];self.offset=record['offset'];self.more=record['more'];self.populate_catalog(self.rows)
+        rebuild=record.get('filters')!=(self.favorite_filter.isChecked(),tuple(self.active_tags))
+        if rebuild:
+            self.load_catalog()
+            while self.more and self.offset<record['offset']:self.load_catalog(True)
+        else:
+            self.rows=record['rows'];self.offset=record['offset'];self.more=record['more'];self.favorite_snapshot=record['favorite_snapshot'];self.populate_catalog(self.rows)
         self.catalog.doItemsLayout();self.catalog.verticalScrollBar().setValue(record['scroll'])
-        self.breadcrumb.setText('全部同模目录');self.back_button.hide();self.load_more.setVisible(self.more);self.count_note.setText(record['count'])
-        self.search.setPlaceholderText('搜索装备名称或编号');self.update_outfit()
+        self.breadcrumb.setText('全部装备');self.back_button.hide();self.load_more.setVisible(self.more)
+        if not rebuild:self.count_note.setText(record['count'])
+        self.search.setPlaceholderText('名称、编号、标签 · 多词组合');self.update_outfit()
 
     def head_toggled(self,checked):self.show_head.set(checked);self.toggle_head()
 
@@ -533,6 +641,55 @@ class QtClient(NativeClient):
             b=button(record['name']+'\n'+record['time'],choose);b.setMinimumHeight(66);rows.addWidget(b)
         if not saved:rows.addWidget(label('还没有收藏。完成搭配后，点击“收藏这套”。','Muted'))
         rows.addStretch();self.show_dialog(dialog)
+
+
+class EquipmentDetailsDialog(W.QDialog):
+    def __init__(self,controller,row):
+        super().__init__(controller.window);self.c=controller;self.item_id=row['item_id'];self.setWindowTitle('装备详情与标签');self.resize(560,650)
+        outer=vertical(self,22,14);heading=horizontal();self.icon_label=label();self.icon_label.setFixedSize(64,64);heading.addWidget(self.icon_label)
+        names=vertical(spacing=4);self.name=label('','Title');self.name.setWordWrap(True);names.addWidget(self.name);self.info=label('','Muted');self.info.setWordWrap(True);names.addWidget(self.info)
+        heading.addLayout(names,1);outer.addLayout(heading)
+        self.member_picker=ComboBox();outer.addWidget(self.member_picker)
+        self.member_picker.setSizeAdjustPolicy(W.QComboBox.AdjustToMinimumContentsLengthWithIcon);self.member_picker.setMinimumContentsLength(12)
+        self.favorite=W.QCheckBox('收藏这件装备（目录和款式中优先显示）');outer.addWidget(self.favorite)
+        outer.addWidget(label('装备标签','Section'))
+        hint=label('每件装备可添加多个标签，用逗号分隔。自动标签也可以修改或删除。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
+        self.tag_edit=W.QPlainTextEdit();self.tag_edit.setPlaceholderText('例如：礼服，优雅，我的常用搭配');self.tag_edit.setMaximumHeight(110);outer.addWidget(self.tag_edit)
+        outer.addWidget(label('当前标签（点标签进行检索）','Muted'))
+        tag_scroll=W.QScrollArea();tag_scroll.setWidgetResizable(True);tag_scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff);tag_scroll.setMinimumHeight(85);tag_scroll.setMaximumHeight(140)
+        self.tag_buttons=W.QWidget();self.tag_layout=W.QGridLayout(self.tag_buttons);self.tag_layout.setContentsMargins(0,0,0,0);self.tag_layout.setSpacing(6)
+        tag_scroll.setWidget(self.tag_buttons);outer.addWidget(tag_scroll)
+        self.origin_note=label('','Muted');self.origin_note.setWordWrap(True);outer.addWidget(self.origin_note)
+        self.error=label('','Warning');self.error.setWordWrap(True);outer.addWidget(self.error);outer.addStretch()
+        actions=horizontal();actions.addWidget(button('关闭',self.reject,ghost=True));actions.addStretch();actions.addWidget(button('保存标签与收藏',self.save,primary=True));outer.addLayout(actions)
+        exact=controller.library.item(self.item_id);members=controller.library.members(exact['slot'],exact['model_set'])
+        for member in members:self.member_picker.addItem(member['name']+' · #'+str(member['item_id']),member['item_id'])
+        self.member_picker.setCurrentIndex(next(i for i,m in enumerate(members)if m['item_id']==self.item_id));self.member_picker.setVisible(len(members)>1)
+        self.member_picker.setToolTip('同模目录内选择具体装备，每件的标签和收藏独立保存')
+        self.member_picker.activated.connect(lambda index:self.load_item(self.member_picker.itemData(index)));self.load_item(self.item_id)
+
+    def load_item(self,identifier):
+        self.item_id=identifier;row=self.c.library.item(identifier);self.icon_id=row['icon_id'];self.name.setText(row['name']);self.icon_label.setPixmap(self.c.icon(row['icon_id']).pixmap(60,60))
+        self.info.setText(f"#{identifier}  ·  {SLOTS.get(row['slot'],row['slot'])}  ·  Lv.{row['level']}  ·  {row['dye_count']} 个染色区\n模型 {row['model_set']}  ·  {row['category_name']}")
+        self.favorite.setChecked(row['favorite']);self.tag_edit.setPlainText('，'.join(row['tags']));self.error.clear()
+        while self.tag_layout.count():
+            item=self.tag_layout.takeAt(0)
+            if item.widget():item.widget().hide();item.widget().deleteLater()
+        for i,tag in enumerate(row['tag_details']):
+            def search(value=tag['tag']):
+                if value not in self.c.active_tags:self.c.active_tags.append(value)
+                self.c.select_slot(row['slot']);self.c.filters_changed();self.accept()
+            b=button(tag['tag'],search,ghost=True);b.setText(G.QFontMetrics(b.font()).elidedText(tag['tag'],C.Qt.ElideRight,92));b.setMinimumWidth(0)
+            b.setToolTip(tag['tag']+' · '+('自动建议（可删除）'if tag['origin']=='auto'else'用户标签'));self.tag_layout.addWidget(b,i//4,i%4)
+        automatic=[t['tag']for t in row['tag_details']if t['origin']=='auto']
+        self.origin_note.setText('自动建议：'+('、'.join(automatic)if automatic else'无')+'\n自动标签依据部位、染色能力和名称关键词推断，可自行纠正。')
+
+    def save(self):
+        from equipment_library import parse_tags
+        try:
+            self.c.library.save(self.item_id,parse_tags(self.tag_edit.toPlainText()),favorite=self.favorite.isChecked())
+            self.c.refresh_library();self.load_item(self.item_id);self.c.message.set('装备标签与收藏已保存')
+        except Exception as error:self.error.setText(str(error))
 
 
 class AppearanceDialog(W.QDialog):

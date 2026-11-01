@@ -34,7 +34,7 @@ QPushButton[clear="true"] { padding:0; border:0; background:transparent; color:#
 QPushButton[clear="true"]:hover { color:#f0b7aa; background:#3a2c32; }
 QFrame#OutfitCard { background:#202733; border:1px solid #303a49; border-radius:8px; }
 QFrame#OutfitCard[selected="true"] { border-color:#79b9af; background:#24383d; }
-QLineEdit, QComboBox, QSpinBox { background:#121821; border:1px solid #323d4d; border-radius:7px; padding:8px 10px; selection-background-color:#386c65; }
+QLineEdit, QComboBox, QSpinBox, QPlainTextEdit { background:#121821; border:1px solid #323d4d; border-radius:7px; padding:8px 10px; selection-background-color:#386c65; }
 QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color:#89d5c4; }
 QComboBox::drop-down { border:0; width:25px; }
 QComboBox QAbstractItemView { background:#202733; border:1px solid #3a485b; selection-background-color:#345751; outline:0; padding:5px; }
@@ -51,6 +51,9 @@ QCheckBox { spacing:8px; color:#abb8ca; }
 QCheckBox::indicator { width:15px; height:15px; border:1px solid #526074; border-radius:4px; background:#141b24; }
 QCheckBox::indicator:checked { background:#89d5c4; border-color:#89d5c4; image:none; }
 QToolTip { color:#edf1f7; background:#283344; border:1px solid #56667b; padding:6px; }
+QMenu { background:#202733; border:1px solid #45556b; padding:5px; }
+QMenu::item { padding:8px 16px; border-radius:4px; }
+QMenu::item:selected { background:#345751; }
 QTabWidget::pane { border:0; }
 QTabBar::tab { background:transparent; color:#8c9bad; padding:10px 15px; border-bottom:2px solid transparent; }
 QTabBar::tab:selected { color:#a6e7d8; border-bottom-color:#89d5c4; }
@@ -160,13 +163,40 @@ class EquipmentDelegate(W.QStyledItemDelegate):
         if isinstance(icon,G.QIcon):icon.paint(painter,iconbox.adjusted(3,3,-3,-3))
         x=area.left()+70;right=area.right()-14
         painter.setPen(G.QColor(TEXT));font=G.QFont('Microsoft YaHei UI',10);font.setWeight(G.QFont.Medium);painter.setFont(font)
-        title=painter.fontMetrics().elidedText(row['name'],C.Qt.ElideRight,max(10,right-x))
-        painter.drawText(C.QRect(x,area.top()+12,right-x,24),C.Qt.AlignVCenter,title)
+        title=painter.fontMetrics().elidedText(row['name'],C.Qt.ElideRight,max(10,right-x-18))
+        painter.drawText(C.QRect(x,area.top()+12,right-x-18,24),C.Qt.AlignVCenter,title)
+        if row.get('favorite'):
+            painter.setPen(G.QColor('#e9cb86'));painter.drawText(C.QRect(right-15,area.top()+12,18,24),C.Qt.AlignCenter,'★')
         painter.setFont(G.QFont('Microsoft YaHei UI',8));painter.setPen(G.QColor(ACCENT if row.get('is_group')else MUTED))
-        detail=(f"同模 · {row['group_count']} 款"if row.get('is_group')else f"Lv.{row['level']} · {row['category_name']}")
+        detail=(f"同模 · {row['group_count']} 款"if row.get('is_group')and row.get('group_count',1)>1 else f"Lv.{row['level']} · {row['category_name']}")
         detail=painter.fontMetrics().elidedText(detail,C.Qt.ElideRight,max(10,right-x-47))
         painter.drawText(C.QRect(x,area.top()+39,right-x-45,22),C.Qt.AlignVCenter,detail)
         for i in range(2):
             painter.setBrush(G.QColor(ACCENT if row['dye_count']>i else'#384353'));painter.setPen(C.Qt.NoPen)
             painter.drawEllipse(C.QPointF(right-22+i*13,area.top()+51),3,3)
+        painter.restore()
+
+
+class IconEquipmentDelegate(W.QStyledItemDelegate):
+    def sizeHint(self,option,index):return C.QSize(72,78)
+
+    def paint(self,painter,option,index):
+        row=index.data(C.Qt.UserRole)
+        if not row:return
+        painter.save();painter.setRenderHint(G.QPainter.Antialiasing)
+        area=C.QRectF(option.rect.x()+3,option.rect.y()+4,64,66)
+        selected=bool(index.data(C.Qt.UserRole+1));hover=bool(option.state&W.QStyle.State_MouseOver)
+        painter.setBrush(G.QColor('#253b3e'if selected else'#293343'if hover else'#202733'))
+        painter.setPen(G.QPen(G.QColor('#89d5c4'if selected else'#56677c'if hover else'#334051')))
+        folder=row.get('is_group')and row.get('group_count',1)>1
+        if folder:
+            painter.drawRoundedRect(C.QRectF(area.left()+2,area.top()-2,27,13),3,3)
+        painter.drawRoundedRect(area,7,7)
+        icon=index.data(C.Qt.DecorationRole)
+        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(round(area.left()+7),round(area.top()+7),50,50))
+        if row.get('favorite'):
+            painter.setPen(G.QColor('#f5d184'));painter.setFont(G.QFont('Microsoft YaHei UI',10));painter.drawText(C.QRectF(area.right()-18,area.top(),18,20),C.Qt.AlignCenter,'★')
+        if folder:
+            badge=C.QRectF(area.right()-28,area.bottom()-18,27,17);painter.setPen(C.Qt.NoPen);painter.setBrush(G.QColor('#263e43'));painter.drawRoundedRect(badge,4,4)
+            painter.setPen(G.QColor('#a6e7d8'));painter.setFont(G.QFont('Microsoft YaHei UI',8));painter.drawText(badge,C.Qt.AlignCenter,str(row['group_count']))
         painter.restore()

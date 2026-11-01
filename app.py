@@ -71,12 +71,14 @@ def parse_state(raw):
     return {'equipment':result,'head_visible':visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan)}
 
 
-def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=None):
+def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,library=None,favorites_only=False,tags=(),favorite_snapshot=None):
     if slot not in SLOTS:raise ValueError('部位尚未接入原型')
     if not 0<=offset<=50000 or not 1<=limit<=100:raise ValueError('分页范围不正确')
     if model_set is not None and(type(model_set)is not int or not 0<model_set<=65535):raise ValueError('装备模型目录不正确')
     from catalogue import equipment_rows as rows
     with closing(database())as conn:
+        if library is not None:return library.equipment_rows(conn,slot,query,offset,limit,grouped=grouped,model_set=model_set,
+            preferred_item=EXAMPLE.get(slot,0),favorites_only=favorites_only,tags=tags,favorite_snapshot=favorite_snapshot)
         return rows(conn,slot,query,offset,limit,grouped=grouped,model_set=model_set,preferred_item=EXAMPLE.get(slot,0))
 
 
