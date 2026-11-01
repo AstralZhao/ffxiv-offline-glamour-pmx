@@ -6,7 +6,7 @@ const icon=slot=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" str
 const gearIcon=(s,item)=>`<span class="gear-icon">${icon(s)}${item?.icon_id?`<img class="gear-image" src="/api/icons/${Number(item.icon_id)}.png" alt="" width="40" height="40" loading="lazy" decoding="async">`:''}</span>`;
 let boot=null,slot='Head',group='防具',items=new Map(),state={equipment:{},head_visible:true,yaw:0,zoom:1,pitch:0,pan:0},good=null,offset=0,more=false,query='',busy=false,pending=false,ready=false,searchSerial=0,dyeTarget=null;
 let toastTimer,renderTimer,searchTimer;
-let currentModel=null,currentFolder='',outerQuery='';
+let currentModel=null,currentFolder='',outerQuery='',outerList=null;
 let frameImage=null;
 function paintFrame(){const canvas=$('#preview'),rect=$('#viewport').getBoundingClientRect();if(!frameImage||rect.width<1||rect.height<1)return;const ratio=devicePixelRatio||1;canvas.width=Math.round(rect.width*ratio);canvas.height=Math.round(rect.height*ratio);const ctx=canvas.getContext('2d');ctx.fillStyle='#0b0d13';ctx.fillRect(0,0,canvas.width,canvas.height);const scale=Math.min(canvas.width/frameImage.width,canvas.height/frameImage.height);ctx.drawImage(frameImage,(canvas.width-frameImage.width*scale)/2,(canvas.height-frameImage.height*scale)/2,frameImage.width*scale,frameImage.height*scale)}
 async function setPreview(url,notices=[]){const response=await fetch(url);if(!response.ok)return;const bitmap=await createImageBitmap(await response.blob());if(frameImage)frameImage.close();frameImage=bitmap;paintFrame();const note=$('#preview-notice');note.textContent=(notices||[]).join(' ');note.hidden=!notices?.length}
@@ -25,10 +25,13 @@ function updateOutfit(){
  document.querySelectorAll('.slot-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.slot===slot));
  document.querySelectorAll('.equipment-item').forEach(b=>b.classList.toggle('selected',b.dataset.model?Number(b.dataset.model)===items.get(state.equipment[slot]?.item_id)?.model_set:Number(b.dataset.id)===state.equipment[slot]?.item_id));
 }
-async function loadItems(append=false){
- const serial=++searchSerial;if(!append)offset=0;
+function updateFolderNav(){
  $('#folder-nav').hidden=currentModel===null;$('#folder-title').textContent=currentFolder;$('#folder-title').title=currentFolder;
  $('#search').placeholder=currentModel===null?'搜索装备名称或编号':'搜索此目录内的装备';
+}
+async function loadItems(append=false){
+ const serial=++searchSerial;if(!append)offset=0;
+ updateFolderNav();
  try{
   const params=new URLSearchParams({slot,q:query,offset});
   if(currentModel===null)params.set('view','groups');else params.set('model',currentModel);
@@ -41,7 +44,22 @@ async function loadItems(append=false){
   if(!append)$('#equipment-list').scrollTop=0;updateOutfit();
  }catch(e){showError(e.message)}
 }
-function resetFolder(){if(currentModel!==null){query=outerQuery;$('#search').value=query}currentModel=null;currentFolder=''}
+function resetFolder(){if(currentModel!==null){query=outerQuery;$('#search').value=query}currentModel=null;currentFolder='';outerList=null}
+function openFolder(folder){
+ clearTimeout(searchTimer);
+ const list=$('#equipment-list');
+ outerList={html:list.innerHTML,scrollTop:list.scrollTop,offset,more,count:$('#result-count').textContent};
+ outerQuery=query;query='';$('#search').value='';currentModel=Number(folder.dataset.model);currentFolder=folder.dataset.name+' · 同模';loadItems();
+}
+function backFolder(){
+ clearTimeout(searchTimer);++searchSerial;
+ const saved=outerList;resetFolder();
+ if(!saved){loadItems();return}
+ offset=saved.offset;more=saved.more;updateFolderNav();
+ const list=$('#equipment-list');list.innerHTML=saved.html;
+ $('#result-count').textContent=saved.count;$('#load-more').hidden=!more;
+ list.scrollTop=saved.scrollTop;updateOutfit();
+}
 async function selectSlot(s){resetFolder();slot=s;updateOutfit();await loadItems()}
 function scheduleRender(delay=100){if(!ready)return;pending=true;clearTimeout(renderTimer);renderTimer=setTimeout(pumpRender,delay)}
 async function pumpRender(){if(busy||!pending||!ready)return;pending=false;const requested=clone(state);statusBusy(true);try{const result=await request('/api/render',requested);good=clone(result.state);await setPreview(result.image,result.notices);$('#stage-status').textContent=`三维场景 · ${result.seconds.toFixed(2)} 秒 / 帧`;$ ('#error-bar').hidden=true;if(!pending)state=clone(good);}catch(e){if(!pending&&good)state=clone(good);showError(e.message,e.detail||'');}finally{statusBusy(false);updateOutfit();if(pending)pumpRender()}}
@@ -59,8 +77,8 @@ function installEvents(){
  groupTabs();$('#group-tabs').onclick=e=>{const b=e.target.closest('[data-group]');if(!b)return;group=b.dataset.group;slot=boot.groups[group][0];resetFolder();groupTabs();updateOutfit();loadItems()};
  $('#slot-tabs').onclick=e=>{const b=e.target.closest('[data-slot]');if(b)selectSlot(b.dataset.slot)};
  $('#search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{query=$('#search').value;loadItems()},230)};$('#load-more').onclick=()=>loadItems(true);
- $('#equipment-list').onclick=e=>{const folder=e.target.closest('[data-model]');if(folder){outerQuery=query;query='';$('#search').value='';currentModel=Number(folder.dataset.model);currentFolder=folder.dataset.name+' · 同模';loadItems();return}const b=e.target.closest('[data-id]');if(!b||!ready)return;state.equipment[slot]={item_id:Number(b.dataset.id),first:0,second:0};changed()};
- $('#folder-back').onclick=()=>{resetFolder();loadItems()};
+ $('#equipment-list').onclick=e=>{const folder=e.target.closest('[data-model]');if(folder){openFolder(folder);return}const b=e.target.closest('[data-id]');if(!b||!ready)return;state.equipment[slot]={item_id:Number(b.dataset.id),first:0,second:0};changed()};
+ $('#folder-back').onclick=backFolder;
  document.addEventListener('error',e=>{if(e.target.classList?.contains('gear-image'))e.target.hidden=true},true);
  $('#outfit-slots').onclick=e=>{const remove=e.target.closest('[data-remove]'),color=e.target.closest('[data-dye]');if(remove){state.equipment[remove.dataset.remove]={item_id:null,first:0,second:0};changed();return}if(color){if(!color.disabled)showDyes(color.dataset.dye,Number(color.dataset.channel));return}const s=e.target.closest('[data-slot]');if(s)selectSlot(s.dataset.slot)};
  $('#clear-all').onclick=()=>{Object.keys(boot.slots).forEach(s=>state.equipment[s]={item_id:null,first:0,second:0});changed()};
