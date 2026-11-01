@@ -6,6 +6,9 @@ from preset_customization import sha
 
 
 class DemoMaterials:
+    def variant_supported(self,imc):
+        return bool(imc['material_id'])and not(imc['vfx']or imc['material_animation'])
+
     def material_supported(self,path,shader,material):
         if path not in SHADERS or sha(shader)!=SHADERS[path]:return False
         return not material['translucent']or path.endswith('/characterglass.shpk')
@@ -57,4 +60,13 @@ class DemoMaterials:
         elif shader=='characterglass.shpk':
             result.update(transparent=True,forward_transparent=True,
                 extra_constants={'g_GlassOffscreenParam':struct.pack('<4f',1,0,0,0)})
+        decal=item.get('imc',{}).get('decal',0)
+        if decal:
+            path=f'chara/common/texture/decal_equip/-decal_{decal:03}.tex'
+            self.pack.locate(path)
+            result['extra_textures']={**result.get('extra_textures',{}),'g_SamplerDecal':path}
+            # Slot decals use their own neutral preview multiplier. Face-paint
+            # tint belongs to the Face slot and must not recolor outfit decals.
+            result['extra_constants']={**result.get('extra_constants',{}),
+                'g_DecalColor':struct.pack('<4f',1,1,1,1)}
         return result
