@@ -5,7 +5,7 @@ Object.assign(paths,{Ears:'M12 3v5 M12 8a5 5 0 1 0 .1 0 M10 4h4',Neck:'M4 4q1 13
 const icon=slot=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round" stroke-linecap="round"><path d="${paths[slot]}"></path></svg>`;
 const gearIcon=(s,item)=>`<span class="gear-icon">${icon(s)}${item?.icon_id?`<img class="gear-image" src="/api/icons/${Number(item.icon_id)}.png" alt="" width="40" height="40" loading="lazy" decoding="async">`:''}</span>`;
 let boot=null,slot='Head',group='防具',items=new Map(),state={equipment:{},head_visible:true,yaw:0,zoom:1,pitch:0,pan:0},good=null,offset=0,more=false,query='',busy=false,pending=false,ready=false,searchSerial=0,dyeTarget=null;
-let toastTimer,renderTimer,searchTimer;
+let toastTimer,renderTimer=null,searchTimer;
 let currentModel=null,currentFolder='',outerQuery='',outerList=null;
 let frameImage=null;
 function paintFrame(){const canvas=$('#preview'),rect=$('#viewport').getBoundingClientRect();if(!frameImage||rect.width<1||rect.height<1)return;const ratio=devicePixelRatio||1;canvas.width=Math.round(rect.width*ratio);canvas.height=Math.round(rect.height*ratio);const ctx=canvas.getContext('2d');ctx.fillStyle='#0b0d13';ctx.fillRect(0,0,canvas.width,canvas.height);const scale=Math.min(canvas.width/frameImage.width,canvas.height/frameImage.height);ctx.drawImage(frameImage,(canvas.width-frameImage.width*scale)/2,(canvas.height-frameImage.height*scale)/2,frameImage.width*scale,frameImage.height*scale)}
@@ -61,8 +61,8 @@ function backFolder(){
  list.scrollTop=saved.scrollTop;updateOutfit();
 }
 async function selectSlot(s){resetFolder();slot=s;updateOutfit();await loadItems()}
-function scheduleRender(delay=100){if(!ready)return;pending=true;clearTimeout(renderTimer);renderTimer=setTimeout(pumpRender,delay)}
-async function pumpRender(){if(busy||!pending||!ready)return;pending=false;const requested=clone(state);statusBusy(true);try{const result=await request('/api/render',requested);good=clone(result.state);await setPreview(result.image,result.notices);$('#stage-status').textContent=`三维场景 · ${result.seconds.toFixed(2)} 秒 / 帧`;$ ('#error-bar').hidden=true;if(!pending)state=clone(good);}catch(e){if(!pending&&good)state=clone(good);showError(e.message,e.detail||'');}finally{statusBusy(false);updateOutfit();if(pending)pumpRender()}}
+function scheduleRender(delay=100){if(!ready)return;pending=true;if(renderTimer===null)renderTimer=setTimeout(pumpRender,delay)}
+async function pumpRender(){clearTimeout(renderTimer);renderTimer=null;if(busy||!pending||!ready)return;pending=false;const requested=clone(state);statusBusy(true);try{const result=await request('/api/render',requested);good=clone(result.state);await setPreview(result.image,result.notices);$('#stage-status').textContent=`三维场景 · ${result.seconds.toFixed(2)} 秒 / 帧`;$ ('#error-bar').hidden=true;if(!pending)state=clone(good);}catch(e){if(!pending&&good)state=clone(good);showError(e.message,e.detail||'');}finally{statusBusy(false);updateOutfit();if(pending)pumpRender()}}
 function changed(){updateOutfit();scheduleRender()}
 async function ensureItems(equipment){for(const [s,c]of Object.entries(equipment)){if(!c.item_id||items.has(c.item_id))continue;const r=await request(`/api/equipment?slot=${s}&q=${c.item_id}`);r.items.forEach(i=>items.set(i.item_id,i))}}
 async function applyPreset(id){if(busy)return;statusBusy(true);try{const r=await request('/api/preset',{id});boot.preset_id=r.preset.id;boot.appearance=r.appearance;state=clone(r.state);good=clone(state);ready=true;$('#preview').hidden=false;$('#loading').hidden=true;$('#view-hint').hidden=false;await setPreview(r.image,r.notices);$('#error-bar').hidden=true;pending=false;updatePreset();updateOutfit();}catch(e){updatePreset();showError(e.message,e.detail||'')}finally{statusBusy(false)}}

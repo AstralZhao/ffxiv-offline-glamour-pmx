@@ -81,10 +81,11 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 class DemoEngine:
     """All native GPU and SQLite outfit work stays on one dedicated thread."""
-    def __init__(self,game,preset,*,preset_directory=None):
+    def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None):
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
         self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
         self.rendered_parameters=None;self.appearance_is_preview=False
+        self.native_hwnd=native_hwnd
         from icons import ItemIcons
         self.item_icons=ItemIcons(self.game)
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
@@ -94,6 +95,7 @@ class DemoEngine:
         self.token=secrets.token_urlsafe(24);self.ready=self.pool.submit(self.initialize)
 
     def image_record(self,image):
+        if image is None:return None  # Native presentation has no CPU image.
         output=BytesIO();image.save(output,format='PNG');raw=output.getvalue();key=hashlib.sha256(raw).hexdigest()
         with self.lock:
             self.images[key]=raw;self.images.move_to_end(key)
@@ -124,11 +126,47 @@ class DemoEngine:
             from static_hair_scene import StaticHairScenes
             from render_preset_materials import PresetMaterialRenderer
             from static_material_inputs import camera_payload
+            native_hwnd=self.native_hwnd
             class PreviewRenderer(PresetMaterialRenderer):
                 zoom=1.;pitch=0.;pan=0.
                 def __init__(self,*args,**kwargs):
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
+                    self.native_surface=None
                     super().__init__(*args,**kwargs)
+                    if native_hwnd:
+                        from native_surface import NativeSurface
+                        self.native_surface=NativeSurface(self,native_hwnd)
+
+                def texture(self,format_,bind,usage=0,cpu=0):
+                    if native_hwnd and format_==10 and bind==32:bind=40
+                    return super().texture(format_,bind,usage,cpu)
+
+                def finish_scene_frame(self):
+                    if self.native_surface:
+                        self.native_surface.present(self.color)
+                        return None,None
+                    return super().finish_scene_frame()
+
+                def resize_native(self,width,height):
+                    from d3d11_debug import P
+                    if not self.native_surface:return
+                    width=max(64,int(width));height=max(64,int(height));scale=min(1.,2048/max(width,height))
+                    width=max(64,round(width*scale));height=max(64,round(height*scale))
+                    if(width,height)==(self.width,self.height):return
+                    self.context(110,[])
+                    # Drop the SRV first so the previous FP16 target can die.
+                    self.native_surface.release(self.native_surface.source_srv)
+                    self.native_surface.source_srv=None;self.native_surface.source=None
+                    old=[self.color,self.rtv,self.depth,self.dsv]+[p for target in self.gbuffers for p in target]
+                    for pointer in old:self.resources.remove(pointer);self.probe.release(pointer)
+                    self.gbuffers=[];self.width=width;self.height=height
+                    self.color=self.texture(10,40);self.rtv=self.create(9,[P,P],self.color,None)
+                    self.depth=self.texture(40,64);self.dsv=self.create(10,[P,P],self.depth,None)
+                    self.native_surface.resize(width,height)
+
+                def close(self):
+                    if self.native_surface:self.native_surface.close()
+                    return super().close()
 
                 def context(self,index,types,*arguments,result=None):
                     key=(index,tuple(types),result)
