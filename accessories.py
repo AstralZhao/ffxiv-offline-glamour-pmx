@@ -80,7 +80,7 @@ class Accessories:
                 table=mraw[start:start+2048]
             prepared={'slot':slot,'source_mesh':source.source_mesh,'vertices':vertices,'indices':shown.indices,
                 'palette':palette,'posed_positions':positions,'material_path':mpath,'material':material,'constants':constants,
-                'table':table,'shader_path':shader,'plan':plans.get('direct',plans.get('gbuffer_color')),'plans':plans,'transparent':False,'overlay':None,
+                'table':table,'shader_path':shader,'plan':plans.get('direct',plans.get('gbuffer_color',next(iter(plans.values())))),'plans':plans,'transparent':False,'overlay':None,
                 'source_sha256':sha(raw),'pose_position_error':None,'item_id':item_id,'dyes':[0,0],
                 'original_color_table_sha256':sha(table)if table else None,'color_table_sha256':sha(table)if table else None,
                 '_source_material':mraw}

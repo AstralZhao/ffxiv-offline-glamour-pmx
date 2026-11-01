@@ -10,12 +10,14 @@ class DemoMaterials:
         return bool(imc['material_id'])and not(imc['vfx']or imc['material_animation'])
 
     def material_supported(self,path,shader,material):
-        if path not in SHADERS or sha(shader)!=SHADERS[path]:return False
-        return not material['translucent']or path.endswith('/characterglass.shpk')
+        return path in SHADERS and sha(shader)==SHADERS[path]
 
     def material_programs(self,package,material,count):
-        if material['shader']=='characterstockings.shpk':roles=('material','gbuffer_color')
+        overlay={'charactertattoo.shpk':'overlay_tattoo','characterocclusion.shpk':'overlay_occlusion'}.get(material['shader'])
+        if overlay:roles=(overlay,)
+        elif material['shader']=='characterstockings.shpk':roles=('material','gbuffer_color')
         elif material['shader']=='characterglass.shpk':roles=('direct',)
+        elif material['shader']=='charactertransparency.shpk'or(material['translucent']and material['shader']!='hair.shpk'):roles=('direct',)
         else:return super().material_programs(package,material,count)
         return {role:static_pass(package,material['shader_keys'],count,role)for role in roles}
 
@@ -60,6 +62,12 @@ class DemoMaterials:
         elif shader=='characterglass.shpk':
             result.update(transparent=True,forward_transparent=True,
                 extra_constants={'g_GlassOffscreenParam':struct.pack('<4f',1,0,0,0)})
+        elif shader in('charactertattoo.shpk','characterocclusion.shpk'):
+            role='overlay_tattoo'if shader=='charactertattoo.shpk'else'overlay_occlusion'
+            result.update(overlay=role,transparent=True,plan=result['plans'][role])
+        elif shader=='charactertransparency.shpk'or(result['material']['translucent']and shader not in('hair.shpk','characterstockings.shpk')):
+            result.update(transparent=True,forward_transparent=True)
+        elif result['material']['translucent']:result['transparent']=True
         decal=item.get('imc',{}).get('decal',0)
         if decal:
             path=f'chara/common/texture/decal_equip/-decal_{decal:03}.tex'

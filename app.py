@@ -63,7 +63,7 @@ def parse_state(raw):
     yaw=raw.get('yaw',0);zoom=raw.get('zoom',1);visible=raw.get('head_visible',True)
     pitch=raw.get('pitch',0);pan=raw.get('pan',0)
     if type(yaw)not in(int,float)or not math.isfinite(yaw)or not -3600<=yaw<=3600:raise ValueError('观察角度不正确')
-    if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .65<=zoom<=2.5:raise ValueError('缩放范围不正确')
+    if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .25<=zoom<=4:raise ValueError('缩放范围不正确')
     if type(visible)is not bool:raise ValueError('头饰显示状态不正确')
     if type(pitch)not in(int,float)or not math.isfinite(pitch)or not -65<=pitch<=65:raise ValueError('俯仰角度不正确')
     if type(pan)not in(int,float)or not math.isfinite(pan)or not -1<=pan<=1:raise ValueError('相机平移范围不正确')
@@ -214,7 +214,16 @@ class DemoEngine:
             chosen={s:CHOICES[s](**state['equipment'][s])for s in CHOICES}
             scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
                 head=chosen['Head'],head_visible=state['head_visible'])
-            scene=self.accessories.resolve(scene,state,info);self.scene_cache[key]=scene
+            scene=self.accessories.resolve(scene,state,info)
+            # Keep the preset framing as a minimum, expanding only for actual
+            # referenced geometry such as wings. Dye changes reuse this scene.
+            import numpy as np
+            low=scene.bounds.min(axis=0).copy();high=scene.bounds.max(axis=0).copy()
+            for mesh in scene.meshes:
+                if not len(mesh['indices']):continue
+                visible=mesh['posed_positions'][np.unique(mesh['indices'])]
+                low=np.minimum(low,visible.min(axis=0));high=np.maximum(high,visible.max(axis=0))
+            scene.bounds=np.asarray((low,high));self.scene_cache[key]=scene
             while len(self.scene_cache)>6:self.scene_cache.popitem(last=False)
         if scene.pending_meshes or scene.omitted:raise NotImplementedError('当前装备含尚未接入的可见部件')
         self.renderer.zoom=state['zoom'];self.renderer.pitch=state['pitch'];self.renderer.pan=state['pan']
