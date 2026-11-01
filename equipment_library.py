@@ -18,7 +18,7 @@ RULES=(('礼服',('礼服','礼裙','晚礼')),('裙装',('裙','礼服')),('铠
 
 
 def automatic_tags(row):
-    tags=[PARTS.get(row['slot'],row['slot']),('不可染色','单染色','双染色')[min(2,max(0,row['dye_count']))]]
+    tags=[('不可染色','单染色','双染色')[min(2,max(0,row['dye_count']))]]
     for tag,words in RULES:
         if any(word in row['name']for word in words):tags.append(tag)
     return list(dict.fromkeys(tags))
@@ -43,7 +43,7 @@ def like(value):return '%'+value.replace('\\','\\\\').replace('%','\\%').replace
 
 
 class EquipmentLibrary:
-    def __init__(self,path,catalog):
+    def __init__(self,path,catalog,*,game=None):
         self.path=Path(path).resolve();self.catalog=Path(catalog).resolve();self.lock=threading.RLock()
         if self.path==self.catalog:raise ValueError('装备标签库必须独立于原始目录')
         self.path.parent.mkdir(parents=True,exist_ok=True)
@@ -52,18 +52,36 @@ class EquipmentLibrary:
                 CREATE TABLE IF NOT EXISTS favorites(item_id INTEGER PRIMARY KEY);
                 CREATE TABLE IF NOT EXISTS tags(item_id INTEGER NOT NULL,tag TEXT NOT NULL COLLATE NOCASE,origin TEXT NOT NULL,PRIMARY KEY(item_id,tag));
                 CREATE INDEX IF NOT EXISTS tags_label ON tags(tag,item_id);
+                CREATE TABLE IF NOT EXISTS model_hints(slot TEXT NOT NULL,model_set INTEGER NOT NULL,tag TEXT NOT NULL,PRIMARY KEY(slot,model_set,tag));
                 CREATE TABLE IF NOT EXISTS hidden_auto(item_id INTEGER NOT NULL,tag TEXT NOT NULL COLLATE NOCASE,PRIMARY KEY(item_id,tag));''')
         with closing(sqlite3.connect(self.catalog.as_uri()+'?mode=ro',uri=True))as source:
             source.row_factory=sqlite3.Row
-            rows=[dict(r)for r in source.execute('SELECT item_id,name,slot,dye_count FROM equipment WHERE slot IN('+','.join('?'for _ in PARTS)+') ORDER BY item_id',list(PARTS))]
-        signature=hashlib.sha256(json.dumps([2,rows],ensure_ascii=False).encode()).hexdigest()
+            rows=[dict(r)for r in source.execute('SELECT item_id,name,slot,dye_count,model_main FROM equipment WHERE slot IN('+','.join('?'for _ in PARTS)+') ORDER BY item_id',list(PARTS))]
+        self.model_tags={};self.feature_source=None
+        if game is not None:
+            from equipment_tag_features import load_model_features
+            self.model_tags,self.feature_source=load_model_features(game,rows)
+            with self.connect()as conn:
+                conn.execute('DELETE FROM model_hints')
+                conn.executemany('INSERT INTO model_hints VALUES(?,?,?)',[(slot,model,tag)for(slot,model),tags in self.model_tags.items()for tag in tags])
+                conn.execute("INSERT OR REPLACE INTO settings VALUES('model_feature_source',?)",(json.dumps(self.feature_source),))
+        else:
+            with self.connect()as conn:
+                for slot,model,tag in conn.execute('SELECT slot,model_set,tag FROM model_hints ORDER BY slot,model_set,tag'):
+                    self.model_tags.setdefault((slot,model),[]).append(tag)
+                stored=conn.execute("SELECT value FROM settings WHERE key='model_feature_source'").fetchone()
+                if stored:self.feature_source=json.loads(stored[0])
+        signature=hashlib.sha256(json.dumps([3,RULES,rows,self.feature_source],ensure_ascii=False).encode()).hexdigest()
         with self.connect()as conn:
             existing=conn.execute("SELECT value FROM settings WHERE key='auto_signature'").fetchone()
             if existing is None or existing[0]!=signature:
                 conn.execute("DELETE FROM tags WHERE origin='auto'")
                 conn.executemany("INSERT OR IGNORE INTO tags(item_id,tag,origin) SELECT ?,?,'auto' WHERE NOT EXISTS(SELECT 1 FROM hidden_auto WHERE item_id=? AND tag=?)",
-                    [(r['item_id'],tag,r['item_id'],tag)for r in rows for tag in automatic_tags(r)])
+                    [(r['item_id'],tag,r['item_id'],tag)for r in rows for tag in self.automatic_tags(r)])
                 conn.execute("INSERT OR REPLACE INTO settings VALUES('auto_signature',?)",(signature,))
+
+    def automatic_tags(self,row):
+        return list(dict.fromkeys(automatic_tags(row)+self.model_tags.get((row['slot'],row['model_main']&65535),[])))
 
     @contextmanager
     def connect(self):
@@ -81,6 +99,9 @@ class EquipmentLibrary:
         with self.connect()as conn:
             result['favorite']=bool(conn.execute('SELECT 1 FROM favorites WHERE item_id=?',(identifier,)).fetchone())
             result['tag_details']=[{'tag':r[0],'origin':r[1]}for r in conn.execute('SELECT tag,origin FROM tags WHERE item_id=? ORDER BY origin,tag',(identifier,))]
+        model_tags=self.model_tags.get((result['slot'],result['model_set']),[])
+        for detail in result['tag_details']:
+            detail['source']='user'if detail['origin']=='user'else'model'if detail['tag']in model_tags else'name'if detail['tag']in dict(RULES)else'dye'
         result['tags']=[r['tag']for r in result['tag_details']];return result
 
     def members(self,slot,model):
@@ -89,7 +110,7 @@ class EquipmentLibrary:
             return [{'item_id':r[0],'name':r[1]}for r in conn.execute('SELECT item_id,name FROM equipment WHERE slot=? AND (model_main & 65535)=? ORDER BY dye_count DESC,item_id DESC',(slot,model))]
 
     def save(self,identifier,tags,*,favorite=None):
-        tags=clean_tags(tags);row=self.item(identifier);auto=automatic_tags(row)
+        tags=clean_tags(tags);row=self.item(identifier);auto=self.automatic_tags(row)
         with self.lock,self.connect()as conn:
             conn.execute('DELETE FROM tags WHERE item_id=?',(identifier,));conn.execute('DELETE FROM hidden_auto WHERE item_id=?',(identifier,))
             desired={tag.casefold()for tag in tags}
@@ -171,8 +192,10 @@ class EquipmentLibrary:
                 cte=('WITH ranked AS (SELECT '+fields+',ROW_NUMBER() OVER(PARTITION BY (model_main & 65535) ORDER BY dye_count DESC,item_id DESC) AS rank,'
                     'COUNT(*) OVER(PARTITION BY (model_main & 65535)) AS group_count FROM equipment WHERE slot=?),'
                     'matched AS (SELECT DISTINCT e.model_main & 65535 AS model_set FROM equipment e WHERE '+where+'),'
-                    'folders AS (SELECT ranked.*,(SELECT count(*) FROM equipment x JOIN '+favorite_table+' f ON f.item_id=x.item_id WHERE x.slot=? AND (x.model_main & 65535)=ranked.model_set) AS favorite_count '
-                    'FROM ranked JOIN matched USING(model_set) WHERE rank=1) ')
+                    'favorite_groups AS (SELECT x.model_main & 65535 AS model_set,count(*) AS favorite_count FROM equipment x '
+                    'JOIN '+favorite_table+' f ON f.item_id=x.item_id WHERE x.slot=? GROUP BY x.model_main & 65535),'
+                    'folders AS (SELECT ranked.*,COALESCE(favorite_groups.favorite_count,0) AS favorite_count '
+                    'FROM ranked JOIN matched USING(model_set) LEFT JOIN favorite_groups USING(model_set) WHERE rank=1) ')
                 if prefix:cte=prefix.rstrip()+','+cte.removeprefix('WITH ')
                 parameters=[*prefix_args,slot,*args,slot]
                 total,item_total=conn.execute(cte+'SELECT count(*),COALESCE(sum(group_count),0) FROM folders',parameters).fetchone()
