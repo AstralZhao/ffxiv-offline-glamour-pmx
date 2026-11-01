@@ -46,6 +46,8 @@ class EquipmentLibrary:
     def __init__(self,path,catalog,*,game=None):
         self.path=Path(path).resolve();self.catalog=Path(catalog).resolve();self.lock=threading.RLock()
         if self.path==self.catalog:raise ValueError('装备标签库必须独立于原始目录')
+        from catalogue_cache import ensure_catalogue_cache
+        self.catalog_cache=ensure_catalogue_cache(self.catalog)
         self.path.parent.mkdir(parents=True,exist_ok=True)
         with self.connect()as conn:
             conn.executescript('''CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY,value TEXT NOT NULL);
@@ -164,6 +166,7 @@ class EquipmentLibrary:
 
     def equipment_rows(self,conn,slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,preferred_item=0,favorites_only=False,tags=(),favorite_snapshot=None):
         slot='FingerL'if slot=='FingerR'else slot;tags=clean_tags(list(tags));conn.execute('ATTACH DATABASE ? AS notes',(str(self.path),))
+        cache_attached=False
         try:
             prefix='';prefix_args=[];favorite_table='notes.favorites'
             if favorite_snapshot is not None:
@@ -189,13 +192,16 @@ class EquipmentLibrary:
             if grouped:
                 # Select representative before filtering; favorite/search can
                 # match any ONE member, without renaming the model folder.
-                cte=('WITH ranked AS (SELECT '+fields+',ROW_NUMBER() OVER(PARTITION BY (model_main & 65535) ORDER BY dye_count DESC,item_id DESC) AS rank,'
-                    'COUNT(*) OVER(PARTITION BY (model_main & 65535)) AS group_count FROM equipment WHERE slot=?),'
+                # The source-keyed folder index is shared by all pages and
+                # ships with the package; tags/favorites remain live queries.
+                conn.execute('ATTACH DATABASE ? AS cached',(str(self.catalog_cache),))
+                cache_attached=True
+                cte=('WITH ranked AS (SELECT '+fields+',1 AS rank,group_count FROM cached.model_folders WHERE slot=?),'
                     'matched AS (SELECT DISTINCT e.model_main & 65535 AS model_set FROM equipment e WHERE '+where+'),'
                     'favorite_groups AS (SELECT x.model_main & 65535 AS model_set,count(*) AS favorite_count FROM equipment x '
                     'JOIN '+favorite_table+' f ON f.item_id=x.item_id WHERE x.slot=? GROUP BY x.model_main & 65535),'
                     'folders AS (SELECT ranked.*,COALESCE(favorite_groups.favorite_count,0) AS favorite_count '
-                    'FROM ranked JOIN matched USING(model_set) LEFT JOIN favorite_groups USING(model_set) WHERE rank=1) ')
+                    'FROM ranked LEFT JOIN favorite_groups USING(model_set) WHERE rank=1 AND ranked.model_set IN (SELECT model_set FROM matched)) ')
                 if prefix:cte=prefix.rstrip()+','+cte.removeprefix('WITH ')
                 parameters=[*prefix_args,slot,*args,slot]
                 total,item_total=conn.execute(cte+'SELECT count(*),COALESCE(sum(group_count),0) FROM folders',parameters).fetchone()
@@ -214,4 +220,6 @@ class EquipmentLibrary:
                 row['tags']=[r[0]for r in conn.execute('SELECT tag FROM notes.tags WHERE item_id=? ORDER BY origin,tag',(row['item_id'],))]
             if favorite_snapshot is not None:self.refresh_annotations(result,slot)
             return {'items':result,'total':total,'item_total':item_total,'offset':offset,'more':offset+len(result)<total,'grouped':grouped,'model_set':model_set}
-        finally:conn.execute('DETACH DATABASE notes')
+        finally:
+            if cache_attached:conn.execute('DETACH DATABASE cached')
+            conn.execute('DETACH DATABASE notes')

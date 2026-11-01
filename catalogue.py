@@ -16,11 +16,11 @@ def equipment_rows(conn,slot,query='',offset=0,limit=60,*,grouped=False,model_se
     if grouped:
         # Rank over the ENTIRE model group before searching. Searching a
         # one-dye variant must not rename its two-dye representative folder.
-        cte=('WITH ranked AS (SELECT '+FIELDS+', '
+        cte=('WITH ranked AS MATERIALIZED (SELECT '+FIELDS+', '
             'ROW_NUMBER() OVER(PARTITION BY (model_main & 65535) ORDER BY dye_count DESC,item_id DESC) AS rank, '
             'COUNT(*) OVER(PARTITION BY (model_main & 65535)) AS group_count FROM equipment WHERE slot=?), '
             'matching AS (SELECT DISTINCT (model_main & 65535) AS model_set FROM equipment WHERE slot=?'+search+'), '
-            'folders AS (SELECT ranked.* FROM ranked JOIN matching USING(model_set) WHERE rank=1) ')
+            'folders AS (SELECT ranked.* FROM ranked WHERE rank=1 AND model_set IN (SELECT model_set FROM matching)) ')
         params=[slot,slot,*args]
         total,item_total=conn.execute(cte+'SELECT count(*),COALESCE(sum(group_count),0) FROM folders',params).fetchone()
         rows=conn.execute(cte+'SELECT * FROM folders ORDER BY '
