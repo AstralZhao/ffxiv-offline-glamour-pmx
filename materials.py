@@ -115,6 +115,5 @@ class DemoMaterials:
         if vfx:
             effect=self.equipment_effect_source(item['model_set'],item['slot'],vfx)
             result['equipment_effect']=effect.summary()
-            notice=('装备附加特效文件在本机缺失。'if effect.missing else'装备主体已显示，附加粒子特效尚未绘制。')
-            result['preview_notice']=' '.join(filter(None,(result.get('preview_notice'),notice)))
+            result['equipment_effect_source']=effect
         return result

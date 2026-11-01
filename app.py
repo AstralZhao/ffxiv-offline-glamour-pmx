@@ -161,6 +161,13 @@ class DemoEngine:
                     radius=max((high[1]-low[1])/2,np.max(high-low)/2*self.height/self.width)*1.12/self.zoom
                     projection=np.eye(4);projection[0,0]=self.height/self.width/radius;projection[1,1]=1/radius;projection[2,2]=-1/20
                     return camera_payload(view,projection),view
+
+                def draw_scene_extras(self,scene,camera,view):
+                    self.last_effect_draws=[]
+                    if not getattr(scene,'effect_samples',()):return
+                    from effect_renderer import EffectRenderer
+                    if not hasattr(self,'effect_renderer'):self.effect_renderer=EffectRenderer(self,scene.pack)
+                    self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view)
             self.pack=SqPack(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
             self.renderer=PreviewRenderer(640,840,1)
             paths=[self.default_preset]
@@ -215,6 +222,7 @@ class DemoEngine:
             scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
                 head=chosen['Head'],head_visible=state['head_visible'])
             scene=self.accessories.resolve(scene,state,info)
+            self.prepare_effects(scene)
             # Keep the preset framing as a minimum, expanding only for actual
             # referenced geometry such as wings. Dye changes reuse this scene.
             import numpy as np
@@ -232,10 +240,29 @@ class DemoEngine:
         result={'image':url,'state':state,'seconds':round(time.perf_counter()-started,3),
             'visible_meshes':len(scene.meshes),'renderer':'native-d3d11-3d','scene_cache_entries':len(self.scene_cache),
             'shader_families':sorted({mesh['material']['shader']for mesh in scene.meshes}),
-            'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')}),
-            'equipment_effects':list({mesh['equipment_effect']['path']:mesh['equipment_effect']for mesh in scene.meshes if mesh.get('equipment_effect')}.values())}
+            'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')}|set(scene.effect_notices)),
+            'equipment_effects':scene.effect_summaries,'effect_draws':self.renderer.last_effect_draws}
         with self.lock:self.last=result
         return result
+
+    def prepare_effects(self,scene):
+        from effect_sample import prepare
+        outfit=self.character.outfit
+        worlds=scene.skinning@outfit.bind
+        bones={name:worlds[index]for name,index in outfit.names.items()}
+        sources={(mesh['slot'],mesh['equipment_effect_source'].path):mesh['equipment_effect_source']
+            for mesh in scene.meshes if mesh.get('equipment_effect_source')is not None}
+        scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
+        for (slot,path),effect in sources.items():
+            samples,pending=prepare(effect,bones)
+            scene.effect_samples.extend({**s,'effect_path':path}for s in samples)
+            scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':30,
+                'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'frozen-zero-random-offsets-normal-scheduler',
+                'particles_rendered':bool(samples),'effect_complete':False})
+            if effect.missing:scene.effect_notices.append('装备附加特效文件在本机缺失。')
+            elif samples:
+                scene.effect_notices.append('装备特效为固定时刻预览；'+('部分粒子尚未接入。'if pending else'尚未完成完整特效还原。'))
+            else:scene.effect_notices.append('装备主体已显示，附加粒子特效尚未绘制。')
 
     def import_dat(self,raw,name):
         if len(raw)!=212:raise ValueError('请导入游戏保存的原生212字节DAT外观预设')
