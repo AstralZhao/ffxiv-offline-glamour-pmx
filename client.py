@@ -22,9 +22,25 @@ def color_text(color):
     return '#10141b'if sum(a*b for a,b in zip(rgb,(.299,.587,.114)))>155 else'white'
 
 
+def merge_pending_state(result,baseline,current):
+    """Retain edits made during a model operation over its completed result.
+
+    Exposure/resize events alone are not state edits. An equipment choice
+    travels with its dyes so a late tint cannot target a different item.
+    """
+    merged=deepcopy(result)
+    for key in result:
+        if key=='equipment':
+            for slot,choice in current[key].items():
+                if choice!=baseline[key][slot]:merged[key][slot]=deepcopy(choice)
+        elif current[key]!=baseline[key]:merged[key]=deepcopy(current[key])
+    return merged
+
+
 class NativeClient:
     def __init__(self,root,game=GAME,preset=DEFAULT_PRESET,*,preset_directory=None,session_path=None):
         self.root=root;self.closed=False;self.closing=False;self.job=None;self.dirty=False;self.timer=None;self.generation=0
+        self.session_timer=None;self.accept_baseline=None
         self.boot=None;self.ready=False;self.state=parse_state({});self.good=deepcopy(self.state)
         self.items={};self.icons=OrderedDict();self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None
@@ -150,18 +166,20 @@ class NativeClient:
             if not self.closing:self.message.set('请等待当前模型准备完成')
             return False
         generation=self.generation;self.message.set('正在准备…')
-        self.job=(self.engine.pool.submit(fn,*arguments),callback,generation)
+        self.job=(self.engine.pool.submit(fn,*arguments),callback,generation,deepcopy(self.state))
         self.root.after(10,self.poll_job);return True
 
     def poll_job(self):
         if self.job is None:return
-        future,callback,generation=self.job
+        future,callback,generation,baseline=self.job
         if not future.done():self.root.after(10,self.poll_job);return
         self.job=None
+        self.accept_baseline=baseline
         try:callback(future.result())
         except Exception as error:
             if self.generation==generation:self.state=deepcopy(self.good)
             self.message.set('未完成本次操作，保留上次模型。'+str(error));self.refresh_boot();self.update_outfit()
+        finally:self.accept_baseline=None
         if self.closing:return self.close()
         if self.dirty:self.pump_render()
 
@@ -179,15 +197,32 @@ class NativeClient:
         def done(result):
             self.good=deepcopy(result['state'])
             if generation==self.generation:self.state=deepcopy(self.good)
-            self.accept_result(result,replace_state=False)
+            self.accept_result(result,replace_state=False,refresh=False)
         self.submit(draw,done)
 
-    def accept_result(self,result,replace_state=True,*,persist=True):
-        if replace_state:self.state=deepcopy(result['state']);self.good=deepcopy(self.state)
-        self.ready=True;self.refresh_boot();self.update_outfit()
+    def accept_result(self,result,replace_state=True,*,persist=True,refresh=True):
+        was_ready=self.ready
+        if replace_state:
+            self.good=deepcopy(result['state'])
+            self.state=merge_pending_state(self.good,self.accept_baseline,self.state)if self.accept_baseline is not None else deepcopy(self.good)
+            if self.state!=self.good:self.dirty=True
+        self.ready=True
+        if refresh:self.refresh_boot()
+        self.update_outfit()
+        if not was_ready:self.load_catalog()
         self.message.set('D3D11 直接显示 · '+str(result['visible_meshes'])+' 个网格 · '+f"{result['seconds']*1000:.0f} 毫秒 / 帧"+
             (' · '+' '.join(result['notices'])if result.get('notices')else''))
-        if persist:self.persist_session()
+        if persist:self.schedule_session_save()
+
+    def schedule_session_save(self):
+        if self.session_timer is None:self.session_timer=self.root.after(500,self.flush_session)
+
+    def flush_session(self):
+        if self.session_timer is not None:self.root.after_cancel(self.session_timer);self.session_timer=None
+        if self.job is not None:
+            self.session_timer=self.root.after(100,self.flush_session);return
+        try:self.persist_session()
+        except OSError as error:self.message.set('模型已显示，但会话记录未能保存：'+str(error))
 
     def persist_session(self):
         if not self.engine.last:return
@@ -440,7 +475,8 @@ class NativeClient:
             self.close_future=self.engine.pool.submit(self.engine.close_gpu);self.root.after(30,self.close);return
         if not self.close_future.done():self.root.after(30,self.close);return
         try:self.close_future.result()
-        finally:self.engine.pool.shutdown(wait=False);self.closed=True;self.root.destroy()
+        finally:
+            self.flush_session();self.engine.pool.shutdown(wait=False);self.closed=True;self.root.destroy()
 
 
 def main():
