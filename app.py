@@ -70,25 +70,21 @@ def parse_state(raw):
     return {'equipment':result,'head_visible':visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan)}
 
 
-def equipment_rows(slot,query='',offset=0,limit=60):
+def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=None):
     if slot not in SLOTS:raise ValueError('部位尚未接入原型')
     if not 0<=offset<=50000 or not 1<=limit<=100:raise ValueError('分页范围不正确')
-    query=query[:80].strip()
+    if model_set is not None and(type(model_set)is not int or not 0<model_set<=65535):raise ValueError('装备模型目录不正确')
+    from catalogue import equipment_rows as rows
     with closing(database())as conn:
-        where='slot=?';args=['FingerL'if slot=='FingerR'else slot]
-        if query:
-            where+=' AND (name LIKE ? ESCAPE \'\\\' OR CAST(item_id AS TEXT)=?)'
-            args += ['%'+query.replace('\\','\\\\').replace('%','\\%').replace('_','\\_')+'%',query]
-        total=conn.execute('SELECT count(*) FROM equipment WHERE '+where,args).fetchone()[0]
-        rows=conn.execute('SELECT item_id,name,dye_count,level,category_name FROM equipment WHERE '+where+
-            ' ORDER BY (item_id=?) DESC,item_id DESC LIMIT ? OFFSET ?',[*args,EXAMPLE.get(slot,0),limit,offset]).fetchall()
-    return {'items':[dict(r)for r in rows],'total':total,'offset':offset,'more':offset+len(rows)<total}
+        return rows(conn,slot,query,offset,limit,grouped=grouped,model_set=model_set,preferred_item=EXAMPLE.get(slot,0))
 
 
 class DemoEngine:
     """All native GPU and SQLite outfit work stays on one dedicated thread."""
     def __init__(self,game,preset):
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
+        from icons import ItemIcons
+        self.item_icons=ItemIcons(self.game)
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
         self.images=OrderedDict();self.presets={};self.last=None;self.error=None;self.scene_cache=OrderedDict()
@@ -335,7 +331,14 @@ class Handler(BaseHTTPRequestHandler):
             if route.path=='/api/bootstrap':return self.send(200,engine.bootstrap())
             if route.path=='/api/equipment':
                 q=parse_qs(route.query)
-                return self.send(200,equipment_rows(q.get('slot',['Head'])[0],q.get('q',[''])[0],int(q.get('offset',['0'])[0])))
+                return self.send(200,equipment_rows(q.get('slot',['Head'])[0],q.get('q',[''])[0],int(q.get('offset',['0'])[0]),
+                    grouped=q.get('view',['items'])[0]=='groups',model_set=int(q['model'][0])if'model'in q else None))
+            if route.path.startswith('/api/icons/'):
+                name=route.path.rsplit('/',1)[-1]
+                if not name.endswith('.png')or not name[:-4].isdigit():return self.send(404,{'error':'图标不存在'})
+                try:data=engine.item_icons.png(int(name[:-4]))
+                except(FileNotFoundError,NotImplementedError):return self.send(404,{'error':'图标暂不可用'})
+                return self.send(200,data,'image/png')
             if route.path.startswith('/api/image/'):
                 key=route.path.rsplit('/',1)[-1].removesuffix('.png')
                 with engine.lock:data=engine.images.get(key)

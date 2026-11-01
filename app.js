@@ -3,8 +3,10 @@ const $=s=>document.querySelector(s),clone=x=>structuredClone(x),esc=x=>String(x
 const paths={Head:'M4 10 7 5h10l3 5-2 5H6z M4 10h16 M9 15l-3 4h12l-3-4',Body:'m8 4-5 4 3 4 2-1v9h8v-9l2 1 3-4-5-4-4 2z',Gloves:'M8 20 5 14V8q2-1 3 2V4h2v6-7h2v7-6h2v7-5h2v10l-3 4z',Legs:'M6 4h12l-1 16h-5l-1-10-1 10H5z M6 7h12',Feet:'M8 4h7v9l5 3v4H5v-5l3-2z M5 17h15'};
 Object.assign(paths,{Ears:'M12 3v5 M12 8a5 5 0 1 0 .1 0 M10 4h4',Neck:'M4 4q1 13 8 13T20 4 M9 17l3 4 3-4',Wrists:'M5 8a7 5 0 1 0 14 0 7 5 0 1 0-14 0 M5 8v6q7 8 14 0V8',FingerR:'M6 12a6 7 0 1 0 12 0 6 7 0 1 0-12 0 M9 5l3-3 3 3-3 3z',FingerL:'M6 12a6 7 0 1 0 12 0 6 7 0 1 0-12 0 M9 5l3-3 3 3-3 3z'});
 const icon=slot=>`<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.15" stroke-linejoin="round" stroke-linecap="round"><path d="${paths[slot]}"></path></svg>`;
+const gearIcon=(s,item)=>`<span class="gear-icon">${icon(s)}${item?.icon_id?`<img class="gear-image" src="/api/icons/${Number(item.icon_id)}.png" alt="" width="40" height="40" loading="lazy" decoding="async">`:''}</span>`;
 let boot=null,slot='Head',group='防具',items=new Map(),state={equipment:{},head_visible:true,yaw:0,zoom:1,pitch:0,pan:0},good=null,offset=0,more=false,query='',busy=false,pending=false,ready=false,searchSerial=0,dyeTarget=null;
 let toastTimer,renderTimer,searchTimer;
+let currentModel=null,currentFolder='',outerQuery='';
 let frameImage=null;
 function paintFrame(){const canvas=$('#preview'),rect=$('#viewport').getBoundingClientRect();if(!frameImage||rect.width<1||rect.height<1)return;const ratio=devicePixelRatio||1;canvas.width=Math.round(rect.width*ratio);canvas.height=Math.round(rect.height*ratio);const ctx=canvas.getContext('2d');ctx.fillStyle='#0b0d13';ctx.fillRect(0,0,canvas.width,canvas.height);const scale=Math.min(canvas.width/frameImage.width,canvas.height/frameImage.height);ctx.drawImage(frameImage,(canvas.width-frameImage.width*scale)/2,(canvas.height-frameImage.height*scale)/2,frameImage.width*scale,frameImage.height*scale)}
 async function setPreview(url,notices=[]){const response=await fetch(url);if(!response.ok)return;const bitmap=await createImageBitmap(await response.blob());if(frameImage)frameImage.close();frameImage=bitmap;paintFrame();const note=$('#preview-notice');note.textContent=(notices||[]).join(' ');note.hidden=!notices?.length}
@@ -17,14 +19,30 @@ function dye(id){return boot.dyes.find(x=>x.stain_id===id)}
 function swatch(id){const d=dye(id);return id&&d?`<i class="swatch" style="background:#${(d.color>>>0).toString(16).padStart(6,'0').slice(-6)}"></i>`:'<i class="swatch original"></i>'}
 function updatePreset(){const p=boot.presets.find(p=>p.id===boot.preset_id);$('#character-name').textContent=p?.name||'未选择预设';$('#character-info').textContent=p?`敖龙族 · ${p.clan} · 女性`:'请导入原生外观预设';$('#preset-select').innerHTML=boot.presets.map(p=>`<option value="${esc(p.id)}" ${p.id===boot.preset_id?'selected':''}>${esc(p.name)} · ${esc(p.file_name)}</option>`).join('')}
 function updateOutfit(){
- $('#outfit-slots').innerHTML=Object.entries(boot.slots).filter(([s])=>boot.groups[group].includes(s)).map(([s,name])=>{const c=state.equipment[s]||{},item=items.get(c.item_id),count=item?.dye_count||0;return `<div class="outfit-slot ${s===slot?'focused':''}" data-slot="${s}"><div class="slot-line"><span class="gear-icon">${icon(s)}</span><div class="slot-info"><small>${name}</small><strong class="${c.item_id?'':'empty'}">${esc(item?.name||(c.item_id?'装备 #'+c.item_id:'未装备'))}</strong></div>${c.item_id?`<button class="remove-slot" data-remove="${s}" title="脱下">×</button>`:''}</div><div class="slot-dyes">${[1,2].map((channel)=>`<button class="dye-button" data-dye="${s}" data-channel="${channel}" ${count<channel?'disabled':''} title="${count<channel?'该区域不可染色':esc(dye(channel===1?c.first:c.second)?.name||'原色')}">${swatch(channel===1?c.first:c.second)} ${channel===1?'一区':'二区'}</button>`).join('')}</div></div>`}).join('');
+ $('#outfit-slots').innerHTML=Object.entries(boot.slots).filter(([s])=>boot.groups[group].includes(s)).map(([s,name])=>{const c=state.equipment[s]||{},item=items.get(c.item_id),count=item?.dye_count||0;return `<div class="outfit-slot ${s===slot?'focused':''}" data-slot="${s}"><div class="slot-line">${gearIcon(s,item)}<div class="slot-info"><small>${name}</small><strong class="${c.item_id?'':'empty'}">${esc(item?.name||(c.item_id?'装备 #'+c.item_id:'未装备'))}</strong></div>${c.item_id?`<button class="remove-slot" data-remove="${s}" title="脱下">×</button>`:''}</div><div class="slot-dyes">${[1,2].map((channel)=>`<button class="dye-button" data-dye="${s}" data-channel="${channel}" ${count<channel?'disabled':''} title="${count<channel?'该区域不可染色':esc(dye(channel===1?c.first:c.second)?.name||'原色')}">${swatch(channel===1?c.first:c.second)} ${channel===1?'一区':'二区'}</button>`).join('')}</div></div>`}).join('');
  $('#head-visible').checked=state.head_visible;$('#zoom').value=state.zoom;
  document.querySelectorAll('[data-yaw]').forEach(b=>b.classList.toggle('active',Number(b.dataset.yaw)===state.yaw));
  document.querySelectorAll('.slot-tabs button').forEach(b=>b.classList.toggle('active',b.dataset.slot===slot));
- document.querySelectorAll('.equipment-item').forEach(b=>b.classList.toggle('selected',Number(b.dataset.id)===state.equipment[slot]?.item_id));
+ document.querySelectorAll('.equipment-item').forEach(b=>b.classList.toggle('selected',b.dataset.model?Number(b.dataset.model)===items.get(state.equipment[slot]?.item_id)?.model_set:Number(b.dataset.id)===state.equipment[slot]?.item_id));
 }
-async function loadItems(append=false){const serial=++searchSerial;if(!append)offset=0;try{const r=await request(`/api/equipment?slot=${slot}&q=${encodeURIComponent(query)}&offset=${offset}`);if(serial!==searchSerial)return;r.items.forEach(i=>items.set(i.item_id,i));const html=r.items.map(i=>`<button class="equipment-item ${state.equipment[slot]?.item_id===i.item_id?'selected':''}" data-id="${i.item_id}"><span class="gear-icon">${icon(slot)}</span><span class="item-copy"><strong>${esc(i.name)}</strong><small>Lv.${i.level} · ${esc(i.category_name)}</small></span><span class="dye-dots" title="${i.dye_count}个染色区"><i class="${i.dye_count<1?'absent':''}"></i><i class="${i.dye_count<2?'absent':''}"></i></span></button>`).join('');if(append)$('#equipment-list').insertAdjacentHTML('beforeend',html);else $('#equipment-list').innerHTML=html||'<div class="empty-result">没有找到这件装备<br>试试其他名称或编号</div>';offset+=r.items.length;more=r.more;$('#load-more').hidden=!more;$('#result-count').textContent=`${boot.slots[slot]} · ${r.total.toLocaleString()} 件装备`;if(!append)$('#equipment-list').scrollTop=0;}catch(e){showError(e.message)}}
-async function selectSlot(s){slot=s;updateOutfit();await loadItems()}
+async function loadItems(append=false){
+ const serial=++searchSerial;if(!append)offset=0;
+ $('#folder-nav').hidden=currentModel===null;$('#folder-title').textContent=currentFolder;$('#folder-title').title=currentFolder;
+ $('#search').placeholder=currentModel===null?'搜索装备名称或编号':'搜索此目录内的装备';
+ try{
+  const params=new URLSearchParams({slot,q:query,offset});
+  if(currentModel===null)params.set('view','groups');else params.set('model',currentModel);
+  const r=await request('/api/equipment?'+params);if(serial!==searchSerial)return;
+  r.items.forEach(i=>items.set(i.item_id,i));
+  const html=r.items.map(i=>`<button class="equipment-item ${r.grouped?'equipment-group':''}" ${r.grouped?`data-model="${i.model_set}" data-name="${esc(i.name)}" title="打开${esc(i.name)}的同模目录"`:`data-id="${i.item_id}"`}>${gearIcon(slot,i)}<span class="item-copy"><strong>${esc(i.name)}</strong><small>${r.grouped?`<span class="same-model-badge">同模</span> ${i.group_count} 款 · 最多${i.dye_count}个染色区`:`Lv.${i.level} · ${esc(i.category_name)}`}</small></span><span class="dye-dots" title="${i.dye_count}个染色区"><i class="${i.dye_count<1?'absent':''}"></i><i class="${i.dye_count<2?'absent':''}"></i></span>${r.grouped?'<span class="folder-chevron">›</span>':''}</button>`).join('');
+  if(append)$('#equipment-list').insertAdjacentHTML('beforeend',html);else $('#equipment-list').innerHTML=html||'<div class="empty-result">没有找到这件装备<br>试试其他名称或编号</div>';
+  offset+=r.items.length;more=r.more;$('#load-more').hidden=!more;
+  $('#result-count').textContent=r.grouped?`${boot.slots[slot]} · ${r.total.toLocaleString()} 个同模目录`:`${r.total.toLocaleString()} 款同模装备`;
+  if(!append)$('#equipment-list').scrollTop=0;updateOutfit();
+ }catch(e){showError(e.message)}
+}
+function resetFolder(){if(currentModel!==null){query=outerQuery;$('#search').value=query}currentModel=null;currentFolder=''}
+async function selectSlot(s){resetFolder();slot=s;updateOutfit();await loadItems()}
 function scheduleRender(delay=100){if(!ready)return;pending=true;clearTimeout(renderTimer);renderTimer=setTimeout(pumpRender,delay)}
 async function pumpRender(){if(busy||!pending||!ready)return;pending=false;const requested=clone(state);statusBusy(true);try{const result=await request('/api/render',requested);good=clone(result.state);await setPreview(result.image,result.notices);$('#stage-status').textContent=`三维场景 · ${result.seconds.toFixed(2)} 秒 / 帧`;$ ('#error-bar').hidden=true;if(!pending)state=clone(good);}catch(e){if(!pending&&good)state=clone(good);showError(e.message,e.detail||'');}finally{statusBusy(false);updateOutfit();if(pending)pumpRender()}}
 function changed(){updateOutfit();scheduleRender()}
@@ -38,10 +56,12 @@ function installEvents(){
  function groupTabs(){
  $('#group-tabs').innerHTML=Object.keys(boot.groups).map(g=>`<button data-group="${g}" class="${g===group?'active':''}">${g}</button>`).join('');
  $('#slot-tabs').innerHTML=boot.groups[group].map(s=>`<button data-slot="${s}" role="tab" aria-label="${boot.slots[s]}">${icon(s)}<span>${boot.slots[s]}</span></button>`).join('');}
- groupTabs();$('#group-tabs').onclick=e=>{const b=e.target.closest('[data-group]');if(!b)return;group=b.dataset.group;slot=boot.groups[group][0];groupTabs();updateOutfit();loadItems()};
+ groupTabs();$('#group-tabs').onclick=e=>{const b=e.target.closest('[data-group]');if(!b)return;group=b.dataset.group;slot=boot.groups[group][0];resetFolder();groupTabs();updateOutfit();loadItems()};
  $('#slot-tabs').onclick=e=>{const b=e.target.closest('[data-slot]');if(b)selectSlot(b.dataset.slot)};
  $('#search').oninput=()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>{query=$('#search').value;loadItems()},230)};$('#load-more').onclick=()=>loadItems(true);
- $('#equipment-list').onclick=e=>{const b=e.target.closest('[data-id]');if(!b||!ready)return;state.equipment[slot]={item_id:Number(b.dataset.id),first:0,second:0};changed()};
+ $('#equipment-list').onclick=e=>{const folder=e.target.closest('[data-model]');if(folder){outerQuery=query;query='';$('#search').value='';currentModel=Number(folder.dataset.model);currentFolder=folder.dataset.name+' · 同模';loadItems();return}const b=e.target.closest('[data-id]');if(!b||!ready)return;state.equipment[slot]={item_id:Number(b.dataset.id),first:0,second:0};changed()};
+ $('#folder-back').onclick=()=>{resetFolder();loadItems()};
+ document.addEventListener('error',e=>{if(e.target.classList?.contains('gear-image'))e.target.hidden=true},true);
  $('#outfit-slots').onclick=e=>{const remove=e.target.closest('[data-remove]'),color=e.target.closest('[data-dye]');if(remove){state.equipment[remove.dataset.remove]={item_id:null,first:0,second:0};changed();return}if(color){if(!color.disabled)showDyes(color.dataset.dye,Number(color.dataset.channel));return}const s=e.target.closest('[data-slot]');if(s)selectSlot(s.dataset.slot)};
  $('#clear-all').onclick=()=>{Object.keys(boot.slots).forEach(s=>state.equipment[s]={item_id:null,first:0,second:0});changed()};
  $('#head-visible').onchange=()=>{state.head_visible=$('#head-visible').checked;changed()};
