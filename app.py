@@ -86,8 +86,7 @@ class DemoEngine:
         self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
         self.rendered_parameters=None;self.appearance_is_preview=False
         self.native_hwnd=native_hwnd
-        from icons import ItemIcons
-        self.item_icons=ItemIcons(self.game)
+        self.item_icons=None  # Resource indexes are opened on the worker below.
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
         self.images=OrderedDict();self.presets={};self.last=None;self.error=None;self.scene_cache=OrderedDict()
@@ -121,6 +120,8 @@ class DemoEngine:
 
     def initialize(self):
         try:
+            from icons import ItemIcons
+            self.item_icons=ItemIcons(self.game)
             from ff14_readonly import SqPack
             from prepared_preset_store import PreparedPresetStore
             from static_hair_scene import StaticHairScenes
@@ -467,6 +468,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(200,equipment_rows(q.get('slot',['Head'])[0],q.get('q',[''])[0],int(q.get('offset',['0'])[0]),
                     grouped=q.get('view',['items'])[0]=='groups',model_set=int(q['model'][0])if'model'in q else None))
             if route.path.startswith('/api/icons/'):
+                if engine.item_icons is None:return self.send(503,{'error':'装备图标正在准备'})
                 name=route.path.rsplit('/',1)[-1]
                 if not name.endswith('.png')or not name[:-4].isdigit():return self.send(404,{'error':'图标不存在'})
                 try:data=engine.item_icons.png(int(name[:-4]))

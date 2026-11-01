@@ -84,6 +84,30 @@ def horizontal(parent=None,margin=0,spacing=8):
 def polish(widget):widget.style().unpolish(widget);widget.style().polish(widget);widget.update()
 
 
+class LoadingSpinner(W.QWidget):
+    """GUI-only animation: never redraws the native character viewport."""
+    def __init__(self,size=20,parent=None):
+        super().__init__(parent);self.setFixedSize(size,size);self.angle=0
+        policy=self.sizePolicy();policy.setRetainSizeWhenHidden(True);self.setSizePolicy(policy)
+        self.clock=C.QElapsedTimer();self.timer=C.QTimer(self);self.timer.setInterval(33)
+        self.timer.timeout.connect(self.advance);self.setAttribute(C.Qt.WA_TransparentForMouseEvents)
+        self.setAccessibleName('正在加载');self.hide()
+
+    def set_running(self,running):
+        if running and not self.timer.isActive():self.clock.start();self.timer.start()
+        elif not running:self.timer.stop()
+        self.setVisible(running)
+
+    def advance(self):self.angle=(self.clock.elapsed()*.36)%360;self.update()
+
+    def paintEvent(self,event):
+        painter=G.QPainter(self);painter.setRenderHint(G.QPainter.Antialiasing)
+        rect=C.QRectF(3,3,self.width()-6,self.height()-6)
+        painter.setPen(G.QPen(G.QColor('#344552'),2,C.Qt.SolidLine,C.Qt.RoundCap));painter.drawEllipse(rect)
+        painter.setPen(G.QPen(G.QColor(ACCENT),2,C.Qt.SolidLine,C.Qt.RoundCap))
+        painter.drawArc(rect,round(-self.angle*16),100*16)
+
+
 class ComboBox(W.QComboBox):
     def paintEvent(self,event):
         super().paintEvent(event);painter=G.QPainter(self);painter.setRenderHint(G.QPainter.Antialiasing)

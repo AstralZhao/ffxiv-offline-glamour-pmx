@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import base64
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 import json
 import os
@@ -17,7 +18,7 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,ComboBox,slot_icon,swatch_icon
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,ComboBox,slot_icon,swatch_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -55,6 +56,11 @@ class NativeView(W.QWidget):
         self.setSizePolicy(W.QSizePolicy.Expanding,W.QSizePolicy.Expanding)
     def paintEngine(self):return None
     def paintEvent(self,event):
+        # Qt repaint requests (including adjacent spinner ticks) are not
+        # scene edits. DXGI/DWM retains the last native frame independently.
+        pass
+    def showEvent(self,event):
+        super().showEvent(event)
         if self.controller and self.controller.ready:self.controller.queue_render()
     def resizeEvent(self,event):
         super().resizeEvent(event)
@@ -91,6 +97,8 @@ class OutfitCard(W.QFrame):
             b=button(f'● {channel}区',lambda ch=channel:self.controller.open_dyes(self.slot,ch));b.setProperty('dye',True)
             b.setMinimumWidth(62);b.setFixedHeight(20);dyes.addWidget(b);self.dyes.append(b)
         dyes.addStretch();content.addLayout(dyes)
+        self.icon.setPixmap(slot_icon(slot));self.clear.hide()
+        for b in self.dyes:b.setEnabled(False)
     def remove(self):
         self.controller.state['equipment'][self.slot]={'item_id':None,'first':0,'second':0}
         self.controller.update_outfit();self.controller.queue_render()
@@ -143,9 +151,18 @@ class QtClient(NativeClient):
         self.preset_name=Value('');self.folder_name=Value('全部同模目录');self.appearance_note=Value('');self.selected_note=Value('')
         self.dye_by_id={};self.raw_status='';self.dialogs=[];self.build_ui()
         self.message.callback=self.display_status;self.display_status(self.message.get())
-        window.ensurePolished();window.centralWidget().layout().activate()
-        self.engine=DemoEngine(Path(game),Path(preset),preset_directory=preset_directory,native_hwnd=int(self.viewport.winId()))
-        self.root.after(30,self.poll_startup)
+        self.engine=None;self.icon_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeIcons');self.pending_icons={};self.icon_timer=None
+        self.loading_kind='正在加载角色…';self.sync_loading()
+        # Let Qt paint the complete shell before starting asset preparation.
+        self.root.after(50,lambda:self.start_engine(game,preset,preset_directory))
+
+    def start_engine(self,game,preset,preset_directory):
+        if self.closing:return
+        try:
+            self.engine=DemoEngine(Path(game),Path(preset),preset_directory=preset_directory,native_hwnd=int(self.viewport.winId()))
+        except Exception as error:
+            self.message.set('角色未能加载：'+str(error));self.loading_spinner.set_running(False);self.footer_spinner.set_running(False);self.loading_panel.hide();return
+        self.poll_startup()
 
     def build_ui(self):
         central=W.QWidget();self.window.setCentralWidget(central);outer=vertical(central,0,0)
@@ -174,9 +191,15 @@ class QtClient(NativeClient):
         enter=G.QShortcut(G.QKeySequence('Return'),self.catalog);enter.activated.connect(lambda:self.activate_item(self.catalog.currentItem())if self.catalog.currentItem()else None)
         left.addWidget(self.catalog,1)
         self.load_more=button('加载更多',lambda:self.load_catalog(True));left.addWidget(self.load_more)
+        self.load_more.hide();self.back_button.hide()
         self.count_note=label('正在读取装备目录…','Muted');self.count_note.setStyleSheet('font-size:10px');left.addWidget(self.count_note);body_layout.addWidget(self.browser)
         scene=W.QFrame();scene.setObjectName('Panel');middle=vertical(scene,1,0)
-        title=horizontal(margin=16);title.addWidget(label('试衣预览','Section'));title.addStretch();title.addWidget(label('默认站姿','Badge'));middle.addLayout(title)
+        title=horizontal(margin=16);title.addWidget(label('试衣预览','Section'));title.addStretch()
+        self.loading_panel=W.QWidget();loading=horizontal(self.loading_panel,0,6)
+        self.loading_spinner=LoadingSpinner();loading.addWidget(self.loading_spinner)
+        self.loading_label=label('正在加载角色…','Muted');loading.addWidget(self.loading_label)
+        policy=self.loading_panel.sizePolicy();policy.setRetainSizeWhenHidden(True);self.loading_panel.setSizePolicy(policy)
+        title.addWidget(self.loading_panel);title.addWidget(label('默认站姿','Badge'));middle.addLayout(title)
         self.viewport=NativeView();self.viewport.controller=self;middle.addWidget(self.viewport,1)
         tools=W.QWidget();self.camera_grid=W.QGridLayout(tools);self.camera_grid.setContentsMargins(12,10,12,8);self.camera_grid.setSpacing(6)
         directions=W.QWidget();camera=horizontal(directions,0,6);self.camera_buttons=[]
@@ -206,6 +229,8 @@ class QtClient(NativeClient):
         body_layout.addWidget(self.dressing)
         footer=W.QFrame();footer.setObjectName('Footer');f=horizontal(footer,12,8)
         self.status_dot=label('●');self.status_dot.setStyleSheet('color:#89d5c4;font-size:9px');f.addWidget(self.status_dot)
+        policy=self.status_dot.sizePolicy();policy.setRetainSizeWhenHidden(True);self.status_dot.setSizePolicy(policy)
+        self.footer_spinner=LoadingSpinner(16);f.addWidget(self.footer_spinner)
         self.status_label=label('正在准备角色…','Muted');self.status_label.setSizePolicy(W.QSizePolicy.Expanding,W.QSizePolicy.Preferred);f.addWidget(self.status_label,1)
         self.detail_button=button('查看原因',self.show_details,ghost=True);self.detail_button.hide();f.addWidget(self.detail_button)
         f.addWidget(label('本地资源 · 离线试衣','Muted'));outer.addWidget(footer)
@@ -230,12 +255,52 @@ class QtClient(NativeClient):
 
     def show_details(self):W.QMessageBox.information(self.window,'操作说明',self.raw_status)
 
+    def submit(self,fn,callback,*arguments):
+        if self.engine is None or not self.engine.ready.done():
+            self.message.set('正在加载角色，请稍候…');return False
+        accepted=super().submit(fn,callback,*arguments)
+        if accepted:
+            if getattr(fn,'__name__','')=='draw':
+                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible'))
+                self.loading_kind='正在调整视角…'if same_outfit else'正在绘制搭配…'
+            else:
+                operation=arguments[0]if arguments and isinstance(arguments[0],str)else''
+                self.loading_kind={'preset':'正在加载角色…','import':'正在导入预设…','appearance_preview':'正在更新模型…',
+                    'appearance_save':'正在保存预设…'}.get(operation,'正在准备预览…')
+            self.sync_loading()
+        return accepted
+
+    def sync_loading(self):
+        startup=self.engine is None or not self.engine.ready.done();busy=not self.closing and(startup or self.job is not None)
+        text='正在加载角色…'if startup else self.loading_kind
+        prominent=busy and text not in('正在调整视角…','正在保存预设…')
+        self.loading_label.setText(text);self.loading_panel.setVisible(prominent)
+        self.loading_spinner.set_running(prominent);self.footer_spinner.set_running(busy);self.status_dot.setVisible(not busy)
+        if busy:self.status_label.setText(text)
+        if self.editor:self.editor.spinner.set_running(busy)
+
+    def poll_startup(self):
+        if self.engine is None:return
+        super().poll_startup()
+        if not self.closed:self.sync_loading()
+
     def poll_job(self):
         super().poll_job()
+        if self.closed:return
+        self.sync_loading()
         if self.editor and self.job is None:
             self.editor.set_busy(False)
             if '未完成'in self.raw_status:
                 self.editor.status.setText('操作未完成，已保留原模型和预设。');self.editor.status.setToolTip(self.raw_status)
+
+    def close(self):
+        for spinner in(self.loading_spinner,self.footer_spinner):spinner.set_running(False)
+        if self.editor:self.editor.spinner.set_running(False)
+        if self.icon_timer is not None:self.root.after_cancel(self.icon_timer);self.icon_timer=None
+        self.icon_pool.shutdown(wait=False,cancel_futures=True)
+        if self.engine is None:
+            self.closing=True;self.closed=True;self.root.destroy();return
+        super().close()
 
     def show_dialog(self,dialog):
         if self.window.testAttribute(C.Qt.WA_DontShowOnScreen):dialog.setAttribute(C.Qt.WA_DontShowOnScreen)
@@ -300,12 +365,33 @@ class QtClient(NativeClient):
     def icon(self,identifier):
         if not identifier:return G.QIcon()
         if identifier not in self.icons:
-            try:
-                image=G.QPixmap();image.loadFromData(self.engine.item_icons.png(identifier));self.icons[identifier]=G.QIcon(image)
-            except(FileNotFoundError,ValueError,NotImplementedError):return G.QIcon()
+            if self.engine and self.engine.item_icons and identifier not in self.pending_icons and not self.closing:
+                self.pending_icons[identifier]=self.icon_pool.submit(self.engine.item_icons.png,identifier)
+                if self.icon_timer is None:self.icon_timer=self.root.after(30,self.poll_icons)
+            return G.QIcon()
         self.icons.move_to_end(identifier)
         while len(self.icons)>384:self.icons.popitem(last=False)
         return self.icons[identifier]
+
+    def poll_icons(self):
+        self.icon_timer=None
+        if self.closing:return
+        changed=set()
+        for identifier,future in list(self.pending_icons.items()):
+            if not future.done():continue
+            self.pending_icons.pop(identifier)
+            try:
+                image=G.QPixmap();image.loadFromData(future.result());self.icons[identifier]=G.QIcon(image)
+            except Exception:self.icons[identifier]=G.QIcon()
+            changed.add(identifier)
+        if changed:
+            for i in range(self.catalog.count()):
+                item=self.catalog.item(i);identifier=item.data(C.Qt.UserRole).get('icon_id')
+                if identifier in changed:item.setIcon(self.icons[identifier])
+            for card in self.outfit_cards.values():
+                if getattr(card,'display_key',None)and card.display_key[3]in changed:card.display_key=None
+            self.update_outfit()
+        if self.pending_icons:self.icon_timer=self.root.after(30,self.poll_icons)
 
     def populate_catalog(self,rows,append=False):
         if not append:self.catalog.clear()
@@ -350,6 +436,7 @@ class QtClient(NativeClient):
         if index>=0 and self.boot:self.submit(self.engine.run,self.accept_result,'preset',{'id':self.preset_ids[index]})
 
     def import_preset(self):
+        if self.engine is None or not self.engine.ready.done():return self.message.set('正在加载角色，请稍候…')
         if self.job:return self.message.set('请等待当前模型准备完成')
         name,_=W.QFileDialog.getOpenFileName(self.window,'导入角色外观预设','','角色预设 (*.dat)')
         if not name:return
@@ -454,7 +541,8 @@ class AppearanceDialog(W.QDialog):
         self.setMinimumSize(590,600);outer=vertical(self,22,14)
         outer.addWidget(label('角色外观','Title'));outer.addWidget(label(controller.editor_record['file_name']+' · 软件预设库','Muted'))
         self.tabs=W.QTabWidget();outer.addWidget(self.tabs,1);self.build_fields()
-        self.status=label('','Warning');outer.addWidget(self.status)
+        progress=horizontal();self.spinner=LoadingSpinner(18);progress.addWidget(self.spinner)
+        self.status=label('','Warning');progress.addWidget(self.status,1);outer.addLayout(progress)
         actions=horizontal();actions.addWidget(button('关闭',self.reject,ghost=True));actions.addStretch()
         self.save_button=button('保存预设',lambda:controller.submit_editor(False));actions.addWidget(self.save_button)
         self.update_button=button('更新模型',lambda:controller.submit_editor(True),primary=True);actions.addWidget(self.update_button);outer.addLayout(actions)
