@@ -7,3 +7,5 @@
 .gear-icon{position:relative;overflow:hidden}.gear-image{position:absolute;inset:0;width:100%;height:100%;object-fit:contain}.gear-image[hidden]{display:none}.equipment-group .item-copy small{line-height:1.7}.same-model-badge{display:inline-block;color:var(--accent);border:1px solid #a8d5c733;background:#a8d5c710;border-radius:3px;font-size:9px;padding:0 4px;margin-right:4px}.folder-chevron{font-size:22px;color:#83968f;flex:none}.folder-nav{display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--line);padding:12px 0 9px}.folder-nav[hidden]{display:none}.folder-nav button{font-size:11px;color:var(--accent);flex:none;padding:4px 0}.folder-nav strong{font-size:11px;font-weight:500;color:#bdc9c4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 
 .appearance-status{font-size:10px;color:#c7b58b;margin:8px 0 0}.appearance-actions{gap:12px}.appearance-actions .secondary{white-space:nowrap;flex:none}
+
+.import-edit{font-size:10px;overflow-wrap:anywhere;margin-top:8px;text-align:left}.import-edit[hidden]{display:none}

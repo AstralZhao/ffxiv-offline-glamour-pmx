@@ -22,9 +22,9 @@ function appearanceFields(){
  $('#appearance-flags').innerHTML=`<div class="appearance-toggles">${toggles.map(([field,bit,label])=>`<label><input type="checkbox" data-appearance-bit="${field}" data-bit="${bit}" ${appearanceDraft[field]&bit?'checked':''}>${label}</label>`).join('')}</div><strong>面部特征</strong><div class="appearance-toggles">${Array.from({length:7},(_,i)=>`<label><input type="checkbox" data-appearance-bit="facial_features" data-bit="${1<<i}" ${appearanceDraft.facial_features&(1<<i)?'checked':''}>特征 ${i+1}</label>`).join('')}</div>`;
  appearanceChangeStatus();
 }
-async function openAppearance(){
- if(!ready||busy||appearanceSaving)return;const serial=++appearanceSerial;
- try{const record=await request('/api/appearance?id='+encodeURIComponent(boot.preset_id));if(serial!==appearanceSerial)return;
+async function openAppearance(id=boot.preset_id){
+ if(!(ready||boot?.can_select_preset)||busy||appearanceSaving)return;const serial=++appearanceSerial;
+ try{const record=await request('/api/appearance?id='+encodeURIComponent(id));if(serial!==appearanceSerial)return;
   appearanceRecord=record;appearanceDraft=clone(record.appearance?.is_preview?record.appearance.rendered_parameters:record.parameters);$('#appearance-location').textContent=`${record.file_name} · 软件预设库`;
   $('#appearance-location').title=record.directory+'\\'+record.file_name;$('#appearance-error').hidden=true;appearanceFields();$('#appearance-dialog').showModal();
  }catch(e){showError(e.message,e.detail||'')}
@@ -41,7 +41,7 @@ async function submitAppearance(preview){
  finally{appearanceSaving=false;statusBusy(false);$('#appearance-fields').inert=false;$('#appearance-flags').inert=false;$('#appearance-save').disabled=false;$('#appearance-update').disabled=false;$('#appearance-update').textContent='更新模型';if(pending)pumpRender()}
 }
 window.addEventListener('DOMContentLoaded',()=>{
- $('#appearance-open').onclick=openAppearance;$('#appearance-save').onclick=()=>submitAppearance(false);$('#appearance-update').onclick=()=>submitAppearance(true);
+ $('#appearance-open').onclick=()=>openAppearance();$('#appearance-save').onclick=()=>submitAppearance(false);$('#appearance-update').onclick=()=>submitAppearance(true);
  $('[data-appearance-close]').onclick=()=>{if(!appearanceSaving){++appearanceSerial;$('#appearance-dialog').close()}};
  $('#appearance-dialog').oncancel=e=>{if(appearanceSaving)e.preventDefault()};
  $('#appearance-fields').oninput=e=>{const control=e.target.closest('[data-appearance-field]');if(!control||appearanceSaving)return;const option=appearanceRecord.fields.find(x=>x.field===control.dataset.appearanceField);appearanceDraft[option.field]=(appearanceDraft[option.field]&~option.mask)|Number(control.value);if(option.kind==='slider')control.nextElementSibling.textContent=control.value;appearanceChangeStatus()};

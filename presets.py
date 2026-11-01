@@ -1,5 +1,5 @@
 """Application-owned native DAT library. Never writes to imported game files."""
-import hashlib,json,os,re,struct,uuid
+import hashlib,json,os,re,struct,time,uuid
 from pathlib import Path
 from probe_appearance_presets import FIELDS
 
@@ -57,7 +57,15 @@ class PresetLibrary:
         temporary=self.root/('.'+uuid.uuid4().hex+'.tmp')
         try:
             with temporary.open('xb')as file:file.write(raw);file.flush();os.fsync(file.fileno())
-            temporary.replace(path)
+            # Windows readers (including indexing/security software) can hold
+            # a just-created file without FILE_SHARE_DELETE. Retry the same
+            # atomic replacement briefly; never truncate/delete the old DAT.
+            delays=(0,.02,.05,.1,.2,.4)
+            for attempt,delay in enumerate(delays):
+                if delay:time.sleep(delay)
+                try:temporary.replace(path);break
+                except PermissionError as error:
+                    if getattr(error,'winerror',None)not in(5,32,33)or attempt==len(delays)-1:raise
         finally:
             if temporary.exists():temporary.unlink()
 

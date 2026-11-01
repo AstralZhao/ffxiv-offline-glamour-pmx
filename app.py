@@ -279,7 +279,14 @@ class DemoEngine:
 
     def import_dat(self,raw,name):
         path,key=self.library.add(raw,name);self.refresh_presets()
-        return self.load(key)
+        try:return {**self.load(key),'imported':True,'model_loaded':True}
+        except Exception as error:
+            # The DAT copy was successfully committed before model loading.
+            # Preserve that result and the previous model; do not report the
+            # whole import as a failure or silently substitute an appearance.
+            self.write_error(error)
+            return {'imported':True,'model_loaded':False,'preset':self.presets[key][1],
+                'preview_error':str(error),'appearance':self.appearance_state()}
 
     def describe_appearance(self,key,tribe=None):
         from presets import decode
@@ -332,7 +339,7 @@ class DemoEngine:
             'model_matches_file':bool(entry and rendered==entry[1]['parameters'])}
 
     def run(self,operation,payload):
-        if self.status!='ready'and(operation not in('preset','import')or self.renderer is None):
+        if self.status!='ready'and(operation not in('preset','import','appearance_save','appearance_preview')or self.renderer is None):
             raise ValueError('角色还在准备，请稍后再试')
         try:
             if operation=='render':return self.render(payload)
@@ -341,6 +348,7 @@ class DemoEngine:
             elif operation=='appearance_preview':result=self.preview_appearance(payload)
             elif operation=='appearance_save':result=self.save_appearance(payload)
             else:raise ValueError('未知操作')
+            if result.get('model_loaded')is False or self.character is None:return result
             with self.lock:self.status='ready';self.error=None;self.message='可以开始搭配了'
             return result
         except Exception as error:self.write_error(error);raise

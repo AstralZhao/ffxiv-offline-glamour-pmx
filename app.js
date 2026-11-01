@@ -90,7 +90,25 @@ function installEvents(){
  $('#example').onclick=async()=>{Object.keys(boot.slots).forEach(s=>state.equipment[s]={item_id:null,first:0,second:0});for(const [s,id]of Object.entries(boot.example))state.equipment[s]={item_id:id,first:0,second:0};await ensureItems(state.equipment);changed()};
  $('#dye-search').oninput=renderDyes;$('#dye-grid').onclick=e=>{const b=e.target.closest('[data-stain]');if(b)chooseDye(Number(b.dataset.stain))};$('#dye-none').onclick=()=>chooseDye(0);
  $('#preset-select').onchange=()=>applyPreset($('#preset-select').value);
- $('#preset-file').onchange=async()=>{const file=$('#preset-file').files[0];if(!file)return;if(file.size!==212){showError('请导入游戏保存的原生DAT外观预设（212字节）。');return}if(busy){toast('请等待当前预览完成后导入');return}statusBusy(true);try{const bytes=new Uint8Array(await file.arrayBuffer()),data=btoa(String.fromCharCode(...bytes));const r=await request('/api/import',{name:file.name,data});boot=await request('/api/bootstrap');ready=true;pending=false;state=clone(r.state);good=clone(state);$('#preview').hidden=false;$('#loading').hidden=true;$('#view-hint').hidden=false;await setPreview(r.image,r.notices);updatePreset();updateOutfit();toast('外观预设已导入')}catch(e){showError(e.message,e.detail||'')}finally{statusBusy(false);$('#preset-file').value=''}};
+ $('#preset-file').onchange=async()=>{
+  const file=$('#preset-file').files[0];if(!file)return;
+  if(file.size!==212){showError('请导入游戏保存的原生DAT外观预设（212字节）。');return}
+  if(busy){toast('请等待当前预览完成后导入');return}
+  statusBusy(true);
+  try{
+   const bytes=new Uint8Array(await file.arrayBuffer()),data=btoa(String.fromCharCode(...bytes));
+   const r=await request('/api/import',{name:file.name,data});boot=await request('/api/bootstrap');
+   if(r.model_loaded===false){
+    const edit=$('#import-edit');edit.hidden=false;edit.textContent='编辑 '+r.preset.file_name;edit.onclick=()=>openAppearance(r.preset.id);
+    showError(`预设已导入为 ${r.preset.file_name}，模型暂时无法加载；已保留原画面。`,r.preview_error||'');
+    updatePreset();updateOutfit();toast('文件已保存到软件预设库');return;
+   }
+   ready=true;pending=false;state=clone(r.state);good=clone(state);$('#preview').hidden=false;$('#loading').hidden=true;$('#view-hint').hidden=false;$('#import-edit').hidden=true;
+   await setPreview(r.image,r.notices);updatePreset();updateOutfit();toast('外观预设已导入');
+  }catch(e){showError(e.message,e.detail||'')}
+  finally{statusBusy(false);$('#preset-file').value=''}
+ };
+
  $('#save-open').onclick=()=>{$('#save-name').value='';$('#save-dialog').showModal();$('#save-name').focus()};$('#save-confirm').onclick=async()=>{try{boot.saved=await request('/api/save',{name:$('#save-name').value,state:good});savedList();$('#save-dialog').close();toast('已保存到“我的搭配”')}catch(e){toast(e.detail||e.message)}};
  $('#saved-open').onclick=()=>{savedList();$('#saved-dialog').showModal()};$('#saved-list').onclick=async e=>{const b=e.target.closest('[data-saved]');if(!b||busy)return;const r=boot.saved.find(r=>r.id===b.dataset.saved);$('#saved-dialog').close();if(r.preset_id!==boot.preset_id){await applyPreset(r.preset_id);if(r.preset_id!==boot.preset_id)return}state=clone(r.state);await ensureItems(state.equipment);changed()};
  $('#about-open').onclick=()=>$('#about-dialog').showModal();document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#error-dismiss').onclick=()=>$('#error-bar').hidden=true;
