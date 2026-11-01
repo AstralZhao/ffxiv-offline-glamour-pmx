@@ -18,7 +18,7 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,slot_icon,swatch_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,slot_icon,swatch_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -194,7 +194,8 @@ class QtClient(NativeClient):
         self.search.textChanged.connect(self.search_changed);left.addWidget(self.search)
         self.search.returnPressed.connect(self.load_catalog)
         self.query.callback=lambda text:self.search.setText(text)if self.search.text()!=text else None
-        filters=horizontal(spacing=6);self.tag_picker=ComboBox();self.tag_picker.setMinimumWidth(90);self.tag_picker.addItem('按标签筛选',None)
+        filters=horizontal(spacing=6);self.tag_picker=SearchComboBox();self.tag_picker.setMinimumWidth(90);self.tag_picker.addItem('',None)
+        self.tag_picker.setToolTip('输入文字搜索已有标签，选择后加入筛选；下拉列表支持滚轮浏览')
         self.tag_picker.setSizeAdjustPolicy(W.QComboBox.AdjustToMinimumContentsLengthWithIcon);self.tag_picker.setMinimumContentsLength(5)
         self.tag_picker.activated.connect(self.pick_tag);filters.addWidget(self.tag_picker,1)
         self.favorite_filter=button('★ 收藏',self.filters_changed);self.favorite_filter.setCheckable(True);self.favorite_filter.setToolTip('只显示收藏的装备；同模目录匹配任一收藏成员')
@@ -262,7 +263,9 @@ class QtClient(NativeClient):
         self.footer_spinner=LoadingSpinner(16);f.addWidget(self.footer_spinner)
         self.status_label=label('正在准备角色…','Muted');self.status_label.setSizePolicy(W.QSizePolicy.Expanding,W.QSizePolicy.Preferred);f.addWidget(self.status_label,1)
         self.detail_button=button('查看原因',self.show_details,ghost=True);self.detail_button.hide();f.addWidget(self.detail_button)
-        f.addWidget(label('本地资源 · 离线试衣','Muted'));outer.addWidget(footer)
+        f.addWidget(button('操作说明',self.open_guide,ghost=True))
+        self.signature_label=label('泠雨@沃仙曦染','Muted');self.signature_label.setTextInteractionFlags(C.Qt.TextSelectableByMouse)
+        f.addWidget(self.signature_label);outer.addWidget(footer)
         self.compact=None;self.adjust_density()
 
     def adjust_density(self):
@@ -283,6 +286,13 @@ class QtClient(NativeClient):
         self.status_label.setToolTip(self.raw_status)
 
     def show_details(self):W.QMessageBox.information(self.window,'操作说明',self.raw_status)
+
+    def open_guide(self):
+        from user_guide import GUIDE
+        dialog=W.QDialog(self.window);dialog.setWindowTitle('操作说明 · 幻衣间');dialog.resize(680,720)
+        layout=vertical(dialog,20,12);browser=W.QTextBrowser();browser.setOpenExternalLinks(False);browser.setHtml(GUIDE)
+        layout.addWidget(browser);layout.addWidget(button('知道了',dialog.accept,primary=True));self.show_dialog(dialog)
+        return dialog
 
     def submit(self,fn,callback,*arguments):
         if self.engine is None or not self.engine.ready.done():
@@ -468,12 +478,14 @@ class QtClient(NativeClient):
     def toggle_catalog_view(self):self.set_catalog_view(not self.icon_mode)
 
     def refresh_tag_picker(self):
-        self.tag_picker.blockSignals(True);self.tag_picker.clear();self.tag_picker.addItem('按标签筛选',None)
+        self.tag_picker.blockSignals(True);self.tag_picker.clear();self.tag_picker.addItem('',None)
         for row in self.library.tags():self.tag_picker.addItem(row['tag']+f" ({row['count']})",row['tag'])
         self.tag_picker.blockSignals(False)
 
     def pick_tag(self,index):
-        tag=self.tag_picker.itemData(index);self.tag_picker.setCurrentIndex(0)
+        tag=self.tag_picker.itemData(index);self.tag_picker.setCurrentIndex(0);self.tag_picker.clearEditText()
+        # The native completer can finish writing its text after activation.
+        C.QTimer.singleShot(0,lambda:(self.tag_picker.setCurrentIndex(0),self.tag_picker.clearEditText())if not self.closing else None)
         if tag and tag not in self.active_tags:self.active_tags.append(tag);self.filters_changed()
 
     def clear_tag_filters(self):self.active_tags=[];self.filters_changed()

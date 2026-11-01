@@ -118,6 +118,31 @@ class ComboBox(W.QComboBox):
         painter.drawPolyline(G.QPolygonF([C.QPointF(x-4,y-2),C.QPointF(x,y+2),C.QPointF(x+4,y-2)]))
 
 
+class SearchComboBox(ComboBox):
+    """Editable existing-choice search with bounded, scrollable popups."""
+    def __init__(self,parent=None):
+        super().__init__(parent);self.setEditable(True);self.setInsertPolicy(W.QComboBox.NoInsert)
+        self.setMaxVisibleItems(10);self.setStyleSheet('QComboBox { combobox-popup: 0; }')
+        self.lineEdit().setPlaceholderText('输入搜索标签');self.lineEdit().setClearButtonEnabled(True)
+        view=W.QListView(self);view.setUniformItemSizes(True);self.setView(view)
+        completer=self.completer();completer.setCompletionMode(W.QCompleter.PopupCompletion)
+        completer.setFilterMode(C.Qt.MatchContains);completer.setCaseSensitivity(C.Qt.CaseInsensitive);completer.setMaxVisibleItems(10)
+        completer.activated[str].connect(self.complete_text)
+        self.lineEdit().returnPressed.connect(lambda:self.complete_text(self.currentText()))
+        for popup in (view,completer.popup()):
+            popup.setMaximumHeight(300);popup.setMinimumWidth(240)
+            popup.setVerticalScrollBarPolicy(C.Qt.ScrollBarAsNeeded);popup.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
+            popup.setTextElideMode(C.Qt.ElideRight);popup.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel)
+
+    def complete_text(self,text):
+        if not text.strip():return
+        index=self.findText(text,C.Qt.MatchExactly)
+        if index<0:
+            self.completer().setCompletionPrefix(text);model=self.completer().completionModel()
+            if model.rowCount():index=self.findText(model.index(0,0).data(),C.Qt.MatchExactly)
+        if index>0:self.activated.emit(index)
+
+
 def swatch_icon(color):
     image=G.QPixmap(32,32);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)

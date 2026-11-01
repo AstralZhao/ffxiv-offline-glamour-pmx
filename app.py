@@ -87,7 +87,7 @@ class DemoEngine:
     def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None):
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
         self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
-        self.rendered_parameters=None;self.appearance_is_preview=False
+        self.rendered_parameters=None;self.appearance_is_preview=False;self.characters=None
         self.native_hwnd=native_hwnd
         self.item_icons=None  # Resource indexes are opened on the worker below.
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
@@ -265,6 +265,8 @@ class DemoEngine:
                             'g_GlassOffscreenParam':struct.pack('<4f',mode,0,0,0)}}
                         self.draw_mesh(scene,selected,shared,view)
             self.pack=SqPack(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
+            from character_cache import CharacterCache
+            self.characters=CharacterCache(self.pack,self.store,self.hair)
             from gpu_selection import preferred_adapter
             self.renderer=PreviewRenderer(640,840,preferred_adapter())
             from presets import PresetLibrary
@@ -295,25 +297,19 @@ class DemoEngine:
         return self.load_preset_path(key,self.presets[key][0])
 
     def load_preset_path(self,key,path):
-        from preset_static_character import PresetStaticCharacter
-        from accessories import Accessories
-        from equipment import DemoOutfit
         if key not in self.presets:raise ValueError('预设不存在')
-        candidate=PresetStaticCharacter.from_preset(self.pack,path,store=self.store,hair_scenes=self.hair)
-        original=candidate.outfit
-        try:candidate.outfit=DemoOutfit(candidate.base)
-        except Exception:candidate.close();raise
-        original.close()
+        started=time.perf_counter();entry,cache=self.characters.acquire(path);candidate=entry['character']
         previous=self.character;old_accessories=getattr(self,'accessories',None);old_scenes=self.scene_cache
-        self.character=candidate;self.accessories=Accessories(candidate);self.scene_cache=OrderedDict()
+        self.character=candidate;self.accessories=entry['accessories'];self.scene_cache=entry['scenes']
         retained=self.last['state']if self.last else{}
         try:result=self.render(retained)
         except Exception:
-            candidate.close();self.character=previous;self.accessories=old_accessories;self.scene_cache=old_scenes;raise
+            self.character=previous;self.accessories=old_accessories;self.scene_cache=old_scenes;self.characters.trim(previous);raise
         self.active_preset=key
         self.rendered_parameters=dict(candidate.base.pose['preset']['parameters']);self.appearance_is_preview=False
-        if previous is not None:previous.close()
-        return {**result,'preset':self.presets[key][1],'appearance':self.appearance_state()}
+        self.characters.trim(candidate)
+        self.last_character_load={**cache,'seconds':time.perf_counter()-started}
+        return {**result,'preset':self.presets[key][1],'appearance':self.appearance_state(),'character_cache':self.last_character_load}
 
     def render(self,raw):
         from preset_outfit import CHOICES
@@ -472,7 +468,8 @@ class DemoEngine:
         return rows
 
     def close_gpu(self):
-        if self.character:self.character.close()
+        if self.characters:self.characters.close()
+        elif self.character:self.character.close()
         if self.renderer:self.renderer.close()
 
 
