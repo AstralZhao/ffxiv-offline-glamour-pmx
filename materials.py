@@ -74,7 +74,13 @@ class DemoMaterials:
         elif material['shader']=='characterstockings.shpk':roles=('material','gbuffer_color')
         elif material['shader']=='characterglass.shpk':roles=('direct',)
         elif material['shader']=='charactertransparency.shpk'or(material['translucent']and material['shader']!='hair.shpk'):roles=('direct',)
-        else:return super().material_programs(package,material,count)
+        else:
+            try:return super().material_programs(package,material,count)
+            except ValueError as error:
+                if material['shader']!='characterlegacy.shpk'or str(error)!='Static preview color pass is absent or ambiguous':raise
+                from shader_programs import equipment_pass
+                return {'material':equipment_pass(package,material['shader_keys'],count,'material'),
+                    'direct':static_pass(package,material['shader_keys'],count,'direct')}
         return {role:static_pass(package,material['shader_keys'],count,role)for role in roles}
 
     def skin_inputs(self,slot):

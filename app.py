@@ -173,6 +173,24 @@ class DemoEngine:
                     from effect_renderer import EffectRenderer
                     if not hasattr(self,'effect_renderer'):self.effect_renderer=EffectRenderer(self,scene.pack)
                     self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view)
+
+                def render_plan(self,scene,mesh,role):
+                    if role!='material'or not mesh['shader_path'].endswith('/characterlegacy.shpk'):
+                        return super().render_plan(scene,mesh,role)
+                    from shader_programs import equipment_pass
+                    clip=self.native_material_alpha_clip()if self.native_fringe_states else False
+                    keys=mesh['material']['shader_keys'];count=mesh['vertices']['weights'].shape[1]
+                    key=('demo_gear_plan',mesh['shader_path'],tuple(sorted(keys.items())),count,role,clip)
+                    if key not in self.cache:self.cache[key]=equipment_pass(scene.packages[mesh['shader_path']],keys,count,role,alpha_clip=clip)
+                    return self.cache[key]
+
+                def draw_mesh(self,scene,mesh,shared,view):
+                    if any(value['name']=='g_LightDirection'for stage in('vertex','pixel')for value in mesh['plan'][stage]['constants']):
+                        from legacy_lighting import source_direction,camera_direction
+                        key=('demo_null_scene_legacy_direction',str(scene.pack.game_root))
+                        if key not in self.cache:self.cache[key]=source_direction(scene.pack)
+                        shared={**shared,'g_LightDirection':camera_direction(self.cache[key],view)}
+                    return super().draw_mesh(scene,mesh,shared,view)
             self.pack=SqPack(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
             self.renderer=PreviewRenderer(640,840,1)
             from presets import PresetLibrary
