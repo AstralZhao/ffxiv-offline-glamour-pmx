@@ -7,9 +7,17 @@ from preset_customization import sha
 
 class DemoMaterials:
     def variant_supported(self,imc,*,model_set=None,slot=None):
-        if not imc['material_id']or imc['vfx']:return False
+        if not imc['material_id']:return False
+        if imc['vfx']:self.equipment_effect_source(model_set,slot,imc['vfx'])
         if imc['material_animation']:self.material_animation_source(model_set,slot,imc['material_animation'])
         return True
+
+    def equipment_effect_source(self,model_set,slot,identifier):
+        library=getattr(self,'effect_library',None)
+        if library is None:
+            from vfx import EquipmentEffects
+            self.effect_library=EquipmentEffects(self.pack);library=self.effect_library
+        return library.prepare(model_set,slot,identifier)
 
     def material_animation_source(self,model_set,slot,identifier):
         cache=getattr(self,'material_animation_sources',None)
@@ -103,4 +111,10 @@ class DemoMaterials:
             plan=self.material_animation_source(item['model_set'],item['slot'],animation)
             result['preview_notice']=plan['notice']
             result['material_animation_source']=plan
+        vfx=item.get('imc',{}).get('vfx',0)
+        if vfx:
+            effect=self.equipment_effect_source(item['model_set'],item['slot'],vfx)
+            result['equipment_effect']=effect.summary()
+            notice=('装备附加特效文件在本机缺失。'if effect.missing else'装备主体已显示，附加粒子特效尚未绘制。')
+            result['preview_notice']=' '.join(filter(None,(result.get('preview_notice'),notice)))
         return result
