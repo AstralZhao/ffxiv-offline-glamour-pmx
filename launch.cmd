@@ -1,8 +1,12 @@
 @echo off
 setlocal
 cd /d "%~dp0.."
-set "FF14_DEMO_PYTHON=python"
-if exist "G:\Tools\Anaconda3\python.exe" set "FF14_DEMO_PYTHON=G:\Tools\Anaconda3\python.exe"
+set "FF14_DEMO_PYTHON=%~dp0..\artifacts\runtime\python\python.exe"
+if not exist "%FF14_DEMO_PYTHON%" (
+  echo The bundled runtime is missing. Please extract the complete application package.
+  pause
+  exit /b 1
+)
 "%FF14_DEMO_PYTHON%" -X utf8 "%~dp0launch.py" %*
 set "FF14_DEMO_EXIT=%errorlevel%"
 if not "%FF14_DEMO_EXIT%"=="0" (

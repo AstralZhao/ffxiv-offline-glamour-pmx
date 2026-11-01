@@ -140,14 +140,16 @@ class WardrobeWindow(W.QMainWindow):
 
 
 class QtClient(NativeClient):
-    def __init__(self,window,game=GAME,preset=DEFAULT_PRESET,*,preset_directory=None,session_path=None):
+    def __init__(self,window,game=GAME,preset=DEFAULT_PRESET,*,preset_directory=None,session_path=None,settings_handler=None):
         self.window=window;window.controller=self;self.root=TimerHost(window)
+        self.settings_handler=settings_handler;self.game=Path(game).resolve()
         self.closed=False;self.closing=False;self.job=None;self.dirty=False;self.timer=None;self.generation=0
         self.session_timer=None;self.accept_baseline=None;self.boot=None;self.ready=False
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
         self.catalog_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeSearch')
         self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict()
         self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
+        self.page_index=0;self.page_count=1;self.catalog_total=0
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None;self.group=ARMOR
         self.session_path=Path(session_path)if session_path else ROOT/'artifacts/demo/native-session.json'
         self.message=Value('正在准备角色与装备…');self.slot=Value(SLOTS['Head']);self.query=Value('');self.show_head=Value(True)
@@ -178,7 +180,8 @@ class QtClient(NativeClient):
         self.preset_combo=ComboBox();self.preset_combo.setMinimumWidth(190);self.preset_combo.setMaximumWidth(255)
         self.preset_combo.setToolTip('角色外观预设');self.preset_combo.activated.connect(self.select_preset);h.addWidget(self.preset_combo)
         h.addWidget(button('编辑外观',self.open_editor));h.addWidget(button('导入预设',self.import_preset,ghost=True))
-        h.addWidget(button('我的搭配',self.saved_dialog,ghost=True));h.addWidget(button('保存搭配',self.save_outfit,primary=True));outer.addWidget(header)
+        h.addWidget(button('我的搭配',self.saved_dialog,ghost=True));h.addWidget(button('保存搭配',self.save_outfit,primary=True))
+        h.addWidget(button('设置',self.open_settings,ghost=True));outer.addWidget(header)
         body=W.QWidget();body_layout=horizontal(body,18,16);outer.addWidget(body,1)
         self.browser=W.QFrame();self.browser.setObjectName('Panel');self.browser.setFixedWidth(340);left=vertical(self.browser,16,12)
         left.addWidget(label('挑选装备','Title'));left.addWidget(label('寻找属于你的下一套搭配','Muted'))
@@ -206,8 +209,13 @@ class QtClient(NativeClient):
         self.catalog.itemClicked.connect(self.activate_item)
         enter=G.QShortcut(G.QKeySequence('Return'),self.catalog);enter.activated.connect(lambda:self.activate_item(self.catalog.currentItem())if self.catalog.currentItem()else None)
         left.addWidget(self.catalog,1)
-        self.load_more=button('加载更多',lambda:self.load_catalog(True));left.addWidget(self.load_more)
-        self.load_more.hide();self.back_button.hide()
+        pages=horizontal(spacing=5);self.previous_page=button('‹ 上一页',lambda:self.go_page(self.page_index-1),ghost=True)
+        pages.addWidget(self.previous_page);pages.addStretch();self.page_number=W.QSpinBox();self.page_number.setRange(1,1)
+        self.page_number.setPrefix('第 ');self.page_number.setSuffix(' 页');self.page_number.setMaximumWidth(90)
+        self.page_number.setToolTip('输入页码后按回车跳转');self.page_number.editingFinished.connect(lambda:self.go_page(self.page_number.value()-1))
+        pages.addWidget(self.page_number);self.page_total=label('/ 1','Muted');pages.addWidget(self.page_total);pages.addStretch()
+        self.next_page=button('下一页 ›',lambda:self.go_page(self.page_index+1),ghost=True);pages.addWidget(self.next_page);left.addLayout(pages)
+        self.sync_pagination();self.back_button.hide()
         catalog_status=horizontal();self.catalog_spinner=LoadingSpinner(16);catalog_status.addWidget(self.catalog_spinner)
         self.count_note=label('正在读取装备目录…','Muted');self.count_note.setStyleSheet('font-size:10px');catalog_status.addWidget(self.count_note,1)
         left.addLayout(catalog_status);body_layout.addWidget(self.browser)
@@ -340,6 +348,14 @@ class QtClient(NativeClient):
             if self.editor is dialog:self.editor=None
             dialog.deleteLater()
         dialog.finished.connect(finished);dialog.show();return dialog
+
+    def open_settings(self):
+        if self.settings_handler:self.settings_handler();return
+        from settings import SettingsStore
+        from qt_settings import SettingsDialog
+        dialog=SettingsDialog(SettingsStore(),self.game,parent=self.window)
+        dialog.accepted.connect(lambda:self.message.set('配置已保存，下次启动软件时生效'))
+        self.show_dialog(dialog)
 
     def refresh_boot(self):
         self.boot=self.engine.bootstrap();self.dye_by_id={d['stain_id']:d for d in self.boot['dyes']}
@@ -509,21 +525,35 @@ class QtClient(NativeClient):
         if not self.library:return
         dialog=EquipmentDetailsDialog(self,row);self.show_dialog(dialog);return dialog
 
-    def load_catalog(self,append=False,*,restore=None):
+    def sync_pagination(self):
+        self.page_number.blockSignals(True);self.page_number.setRange(1,self.page_count);self.page_number.setValue(self.page_index+1);self.page_number.blockSignals(False)
+        self.page_total.setText('/ '+str(self.page_count));available=not self.catalog_loading
+        self.previous_page.setEnabled(available and self.page_index>0)
+        self.next_page.setEnabled(available and self.page_index+1<self.page_count)
+        self.page_number.setEnabled(available and self.page_count>1)
+
+    def go_page(self,page):
+        if self.catalog_loading or page==self.page_index or not 0<=page<self.page_count:return
+        self.load_catalog(page=page)
+
+    def load_catalog(self,append=False,*,page=None,restore=None):
         self.cancel_search()
-        if not self.boot:return
-        if append and(not self.more or self.catalog_loading):return
+        if not self.boot or self.closing:return
+        new_query=page is None and not append
+        page=(restore.get('page',0)if restore else 0)if new_query else self.page_index+1 if append else page
+        if not new_query and(self.catalog_loading or not 0<=page<self.page_count):return
         self.catalog_serial+=1;self.catalog_loading=True;self.catalog.setEnabled(False);self.catalog_spinner.set_running(True)
+        self.sync_pagination()
         self.count_note.setText('正在检索装备…')
-        request={'serial':self.catalog_serial,'slot':self.slot_key(),'query':self.query.get(),'offset':self.offset if append else 0,
+        request={'serial':self.catalog_serial,'slot':self.slot_key(),'query':self.query.get(),'offset':page*60,'page':page,'new_query':new_query,
             'grouped':self.folder is None,'model_set':self.folder,'library':self.library,'favorites_only':self.favorite_filter.isChecked(),
-            'tags':tuple(self.active_tags),'favorite_snapshot':getattr(self,'favorite_snapshot',None)if append else None,'append':append,'restore':restore}
+            'tags':tuple(self.active_tags),'favorite_snapshot':None if new_query else getattr(self,'favorite_snapshot',None),'restore':restore}
         if self.catalog_job is not None:self.catalog_queued=request
         else:self.start_catalog_request(request)
 
     def fetch_catalog(self,request):
         snapshot=request['favorite_snapshot']
-        if not request['append']and request['library']:snapshot=request['library'].favorite_ids()
+        if request['new_query']and request['library']:snapshot=request['library'].favorite_ids()
         result=equipment_rows(request['slot'],request['query'],request['offset'],grouped=request['grouped'],model_set=request['model_set'],
             library=request['library'],favorites_only=request['favorites_only'],tags=request['tags'],favorite_snapshot=snapshot)
         return result,snapshot
@@ -544,33 +574,35 @@ class QtClient(NativeClient):
         except Exception as error:
             if request['serial']==self.catalog_serial:
                 self.catalog_loading=False;self.catalog_spinner.set_running(False);self.catalog.setEnabled(True)
-                self.catalog.clear();self.rows=[];self.offset=0;self.more=False;self.load_more.hide()
+                self.catalog.clear();self.rows=[];self.offset=0;self.more=False;self.page_index=0;self.page_count=1;self.catalog_total=0;self.sync_pagination()
                 self.count_note.setText('检索未完成，请点击刷新重试');self.message.set('装备检索未能完成：'+str(error))
         if self.catalog_queued is not None:
             latest=self.catalog_queued;self.catalog_queued=None;self.start_catalog_request(latest)
 
     def apply_catalog_result(self,result,snapshot,request):
-        append=request['append']
-        if not append:self.offset=0;self.rows=[];self.favorite_snapshot=snapshot
-        self.items.update({r['item_id']:r for r in result['items']});self.rows.extend(result['items']);self.offset+=len(result['items']);self.more=result['more']
-        self.populate_catalog(result['items'],append);self.load_more.setVisible(self.more);self.back_button.setVisible(self.folder is not None)
+        self.favorite_snapshot=snapshot;self.catalog_total=result['total'];self.page_count=max(1,(self.catalog_total+59)//60)
+        if request['page']>=self.page_count:
+            self.catalog_loading=False;self.load_catalog(page=self.page_count-1,restore=request['restore']);return
+        self.page_index=request['page'];self.rows=list(result['items']);self.offset=request['offset']+len(self.rows);self.more=result['more']
+        self.items.update({r['item_id']:r for r in self.rows})
+        self.populate_catalog(self.rows);self.back_button.setVisible(self.folder is not None)
         text='全部装备'if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
         self.search.setPlaceholderText('名称、编号、标签 · 多词组合'if self.folder is None else'搜索此目录的款式或标签')
         self.count_note.setText(f"{result['total']:,} "+('项 · 收藏优先 · 右键查看详情'if self.folder is None else'款装备 · 收藏优先'))
-        if not append:self.catalog.verticalScrollBar().setValue(0)
+        self.catalog.verticalScrollBar().setValue(0)
         self.catalog_loading=False;self.catalog_spinner.set_running(False);self.catalog.setEnabled(True)
+        self.sync_pagination()
         self.update_outfit()
         restore=request['restore']
         if restore:
-            if self.more and self.offset<restore['offset']:self.load_catalog(True,restore=restore)
-            else:self.catalog.doItemsLayout();self.catalog.verticalScrollBar().setValue(restore['scroll'])
+            self.catalog.doItemsLayout();self.catalog.verticalScrollBar().setValue(restore['scroll'])
 
     def activate_item(self,item):
         if not self.ready:return
         row=item.data(C.Qt.UserRole)
         if row.get('is_group')and row.get('group_count',1)>1:
             self.outer={'query':self.query.get(),'rows':list(self.rows),'offset':self.offset,'more':self.more,'scroll':self.catalog.verticalScrollBar().value(),
-                'name':row['name'],'count':self.count_note.text(),
+                'name':row['name'],'count':self.count_note.text(),'page':self.page_index,'pages':self.page_count,'total':self.catalog_total,
                 'filters':(self.favorite_filter.isChecked(),tuple(self.active_tags)),'favorite_snapshot':self.favorite_snapshot}
             self.folder=row['model_set'];self.query.set('');self.load_catalog();return
         self.state['equipment'][self.slot_key()]={'item_id':row['item_id'],'first':0,'second':0};self.update_outfit();self.queue_render()
@@ -584,8 +616,9 @@ class QtClient(NativeClient):
         else:
             self.catalog_serial+=1;self.catalog_queued=None;self.catalog_loading=False;self.catalog_spinner.set_running(False);self.catalog.setEnabled(True)
             self.rows=record['rows'];self.offset=record['offset'];self.more=record['more'];self.favorite_snapshot=record['favorite_snapshot'];self.populate_catalog(self.rows)
+            self.page_index=record['page'];self.page_count=record['pages'];self.catalog_total=record['total'];self.sync_pagination()
         self.catalog.doItemsLayout();self.catalog.verticalScrollBar().setValue(record['scroll'])
-        self.breadcrumb.setText('全部装备');self.back_button.hide();self.load_more.setVisible(self.more)
+        self.breadcrumb.setText('全部装备');self.back_button.hide()
         if not rebuild:self.count_note.setText(record['count'])
         self.search.setPlaceholderText('名称、编号、标签 · 多词组合');self.update_outfit()
 
@@ -817,10 +850,53 @@ class AppearanceDialog(W.QDialog):
         self.status.setText(('已保存到预设'if saved else'修改尚未保存')+' · '+('模型已更新'if updated else'模型尚未更新'))
 
 
+class DesktopSession(C.QObject):
+    """Apply game-directory changes after the old GPU worker releases HWND."""
+    def __init__(self,application,store,game,preset=None):
+        super().__init__(application);self.application=application;self.store=store;self.next_game=None;self.settings_dialog=None
+        self.preset=preset or ROOT/'presets/test.dat';self.controller=None
+        self.timer=C.QTimer(self);self.timer.setInterval(40);self.timer.timeout.connect(self.poll);self.timer.start()
+        self.start(game)
+
+    def start(self,game):
+        self.window=WardrobeWindow();self.controller=QtClient(self.window,game,self.preset,settings_handler=self.open_settings);self.window.show()
+
+    def open_settings(self):
+        if self.settings_dialog:self.settings_dialog.raise_();return
+        from qt_settings import SettingsDialog
+        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window)
+        self.settings_dialog=dialog
+        def finish(result):
+            self.settings_dialog=None
+            if result==W.QDialog.Accepted:
+                if dialog.saved_game==self.controller.game:self.controller.message.set('游戏目录已保存')
+                else:self.next_game=dialog.saved_game;self.controller.close()
+            dialog.deleteLater()
+        dialog.finished.connect(finish);dialog.show()
+
+    def poll(self):
+        if not self.controller.closed:return
+        self.window.deleteLater()
+        if self.next_game:
+            game=self.next_game;self.next_game=None;self.start(game)
+        else:self.timer.stop();self.application.quit()
+
+
 def main():
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--game',type=Path,default=GAME);parser.add_argument('--preset',type=Path,default=DEFAULT_PRESET)
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--game',type=Path);parser.add_argument('--preset',type=Path)
     args=parser.parse_args();os.chdir(ROOT);application=W.QApplication.instance()or W.QApplication(sys.argv[:1]);application.setStyle('Fusion');application.setStyleSheet(STYLE)
-    application.setFont(G.QFont('Microsoft YaHei UI',10));window=WardrobeWindow();controller=QtClient(window,args.game,args.preset);window.show()
+    application.setFont(G.QFont('Microsoft YaHei UI',10));application.setQuitOnLastWindowClosed(False)
+    from settings import SettingsStore,validate_game
+    from qt_settings import SettingsDialog
+    store=SettingsStore();game,error=store.read()
+    if args.game:
+        try:game=store.save(validate_game(args.game));error=''
+        except Exception as issue:game=None;error=str(issue)
+    if game is None:
+        dialog=SettingsDialog(store,args.game,first=True,error=error)
+        if dialog.exec()!=W.QDialog.Accepted:return 0
+        game=dialog.saved_game
+    session=DesktopSession(application,store,game,args.preset)
     return application.exec()
 
 

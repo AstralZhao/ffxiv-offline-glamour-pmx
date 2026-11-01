@@ -265,7 +265,8 @@ class DemoEngine:
                             'g_GlassOffscreenParam':struct.pack('<4f',mode,0,0,0)}}
                         self.draw_mesh(scene,selected,shared,view)
             self.pack=SqPack(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
-            self.renderer=PreviewRenderer(640,840,1)
+            from gpu_selection import preferred_adapter
+            self.renderer=PreviewRenderer(640,840,preferred_adapter())
             from presets import PresetLibrary
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)

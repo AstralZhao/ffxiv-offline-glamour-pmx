@@ -9,12 +9,17 @@ from io import BytesIO
 import json
 import os
 from pathlib import Path
-import tkinter as tk
-from tkinter import ttk,filedialog,messagebox,simpledialog
-
-from PIL import Image,ImageTk
+from PIL import Image
 
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
+
+
+def enable_legacy_tk():
+    # Shared controller helpers used by Qt do not require the legacy Tk GUI.
+    global tk,ttk,filedialog,messagebox,simpledialog,ImageTk
+    import tkinter as tk
+    from tkinter import ttk,filedialog,messagebox,simpledialog
+    from PIL import ImageTk
 
 
 def color_text(color):
@@ -39,6 +44,7 @@ def merge_pending_state(result,baseline,current):
 
 class NativeClient:
     def __init__(self,root,game=GAME,preset=DEFAULT_PRESET,*,preset_directory=None,session_path=None):
+        enable_legacy_tk()
         self.root=root;self.closed=False;self.closing=False;self.job=None;self.dirty=False;self.timer=None;self.generation=0
         self.session_timer=None;self.accept_baseline=None
         self.boot=None;self.ready=False;self.state=parse_state({});self.good=deepcopy(self.state)
@@ -480,6 +486,7 @@ class NativeClient:
 
 
 def main():
+    enable_legacy_tk()
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--game',type=Path,default=GAME)
     parser.add_argument('--preset',type=Path,default=DEFAULT_PRESET);args=parser.parse_args();os.chdir(ROOT)
     try:
