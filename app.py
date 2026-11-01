@@ -246,13 +246,14 @@ class DemoEngine:
         return result
 
     def prepare_effects(self,scene):
+        scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
+        if not self.character.outfit.equipment_effects_enabled:return
         from effect_sample import prepare
         outfit=self.character.outfit
         worlds=scene.skinning@outfit.bind
         bones={name:worlds[index]for name,index in outfit.names.items()}
         sources={(mesh['slot'],mesh['equipment_effect_source'].path):mesh['equipment_effect_source']
             for mesh in scene.meshes if mesh.get('equipment_effect_source')is not None}
-        scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
         for (slot,path),effect in sources.items():
             samples,pending=prepare(effect,bones)
             scene.effect_samples.extend({**s,'effect_path':path}for s in samples)

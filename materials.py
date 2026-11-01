@@ -6,9 +6,13 @@ from preset_customization import sha
 
 
 class DemoMaterials:
+    # User scope: show original gear meshes now; optional AVFX will get a
+    # user-facing switch after its complete rendering is implemented.
+    equipment_effects_enabled=False
+
     def variant_supported(self,imc,*,model_set=None,slot=None):
         if not imc['material_id']:return False
-        if imc['vfx']:self.equipment_effect_source(model_set,slot,imc['vfx'])
+        if imc['vfx']and self.equipment_effects_enabled:self.equipment_effect_source(model_set,slot,imc['vfx'])
         if imc['material_animation']:self.material_animation_source(model_set,slot,imc['material_animation'])
         return True
 
@@ -112,7 +116,7 @@ class DemoMaterials:
             result['preview_notice']=plan['notice']
             result['material_animation_source']=plan
         vfx=item.get('imc',{}).get('vfx',0)
-        if vfx:
+        if vfx and self.equipment_effects_enabled:
             effect=self.equipment_effect_source(item['model_set'],item['slot'],vfx)
             result['equipment_effect']=effect.summary()
             result['equipment_effect_source']=effect
