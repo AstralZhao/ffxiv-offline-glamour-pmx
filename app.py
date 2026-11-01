@@ -84,6 +84,7 @@ class DemoEngine:
     def __init__(self,game,preset,*,preset_directory=None):
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
         self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
+        self.rendered_parameters=None;self.appearance_is_preview=False
         from icons import ItemIcons
         self.item_icons=ItemIcons(self.game)
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
@@ -198,11 +199,15 @@ class DemoEngine:
             log.write(time.strftime('%Y-%m-%d %H:%M:%S')+' '+repr(error)+'\n'+traceback.format_exc()+'\n')
 
     def load(self,key):
+        if key not in self.presets:raise ValueError('预设不存在')
+        return self.load_preset_path(key,self.presets[key][0])
+
+    def load_preset_path(self,key,path):
         from preset_static_character import PresetStaticCharacter
         from accessories import Accessories
         from equipment import DemoOutfit
         if key not in self.presets:raise ValueError('预设不存在')
-        candidate=PresetStaticCharacter.from_preset(self.pack,self.presets[key][0],store=self.store,hair_scenes=self.hair)
+        candidate=PresetStaticCharacter.from_preset(self.pack,path,store=self.store,hair_scenes=self.hair)
         original=candidate.outfit
         try:candidate.outfit=DemoOutfit(candidate.base)
         except Exception:candidate.close();raise
@@ -214,8 +219,9 @@ class DemoEngine:
         except Exception:
             candidate.close();self.character=previous;self.accessories=old_accessories;self.scene_cache=old_scenes;raise
         self.active_preset=key
+        self.rendered_parameters=dict(candidate.base.pose['preset']['parameters']);self.appearance_is_preview=False
         if previous is not None:previous.close()
-        return {**result,'preset':self.presets[key][1]}
+        return {**result,'preset':self.presets[key][1],'appearance':self.appearance_state()}
 
     def render(self,raw):
         from preset_outfit import CHOICES
@@ -282,24 +288,48 @@ class DemoEngine:
         tribe=p['tribe']if tribe is None else tribe
         if tribe not in(11,12):raise ValueError('当前支持敖龙族女性的两个部族')
         return {**record,'id':key,'file_name':path.name,'directory':str(self.library.root),
-            'fields':self.appearance_options.fields(tribe),'scope':'国服敖龙族女性；发型列表来自当前创建菜单'}
+            'fields':self.appearance_options.fields(tribe),'appearance':self.appearance_state(key),
+            'scope':'国服敖龙族女性；发型列表来自当前创建菜单'}
 
-    def edit_appearance(self,payload):
-        from presets import decode,change_bytes
+    def appearance_changes(self,payload):
+        from presets import decode,change_bytes,digest
         key=payload['id']
         if key not in self.presets:raise ValueError('本地预设不存在')
         path,_=self.presets[key];old=path.read_bytes();changes=payload['changes']
-        from presets import digest
         if digest(old)!=payload['sha256']:raise ValueError('这份预设已被其他窗口或程序修改，请重新打开编辑')
         proposed=change_bytes(old,changes)
         self.appearance_options.validate(decode(old)['parameters'],decode(proposed)['parameters'])
-        original,edited=self.library.replace(path,changes,payload['sha256'])
-        self.refresh_presets()
-        try:return self.load(key)
-        except Exception:
-            try:self.library.rollback(path,original,edited)
-            finally:self.refresh_presets()
-            raise
+        return key,path,proposed
+
+    def preview_appearance(self,payload):
+        from ff14_readonly import safe_output
+        from presets import digest
+        key,_,proposed=self.appearance_changes(payload)
+        # This is a content-addressed preparation input, outside the user's
+        # selectable preset library. The selected DAT is never written.
+        path=safe_output(self.data/'appearance-previews'/(digest(proposed)+'.dat'),self.game)
+        if path.exists():
+            if path.read_bytes()!=proposed:raise ValueError('外观预览缓存文件已改变')
+        else:
+            temporary=path.with_name('.'+secrets.token_hex(16)+'.tmp')
+            try:temporary.write_bytes(proposed);temporary.replace(path)
+            finally:
+                if temporary.exists():temporary.unlink()
+        result=self.load_preset_path(key,path)
+        self.appearance_is_preview=self.rendered_parameters!=self.presets[key][1]['parameters']
+        return {**result,'appearance':self.appearance_state()}
+
+    def save_appearance(self,payload):
+        key,path,_=self.appearance_changes(payload)
+        self.library.replace(path,payload['changes'],payload['sha256']);self.refresh_presets()
+        if key==getattr(self,'active_preset',None):self.appearance_is_preview=False
+        return {'preset':self.presets[key][1],'appearance':self.appearance_state(key),'model_updated':False}
+
+    def appearance_state(self,key=None):
+        active=getattr(self,'active_preset',None);key=active if key is None else key
+        entry=self.presets.get(key);rendered=self.rendered_parameters if key==active else None
+        return {'rendered_parameters':rendered,'is_preview':self.appearance_is_preview if key==active else False,
+            'model_matches_file':bool(entry and rendered==entry[1]['parameters'])}
 
     def run(self,operation,payload):
         if self.status!='ready'and(operation not in('preset','import')or self.renderer is None):
@@ -308,7 +338,8 @@ class DemoEngine:
             if operation=='render':return self.render(payload)
             if operation=='preset':result=self.load(payload['id'])
             elif operation=='import':result=self.import_dat(base64.b64decode(payload['data'],validate=True),payload.get('name',''))
-            elif operation=='appearance':result=self.edit_appearance(payload)
+            elif operation=='appearance_preview':result=self.preview_appearance(payload)
+            elif operation=='appearance_save':result=self.save_appearance(payload)
             else:raise ValueError('未知操作')
             with self.lock:self.status='ready';self.error=None;self.message='可以开始搭配了'
             return result
@@ -323,7 +354,8 @@ class DemoEngine:
                 'presets':[r[1]for r in self.presets.values()],'preset_id':getattr(self,'active_preset',None),
                 'last':self.last,'slots':SLOTS,'groups':GROUPS,'counts':counts,'dyes':dyes,'example':EXAMPLE,
                 'scope':'敖龙族女性 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
-                'version':'0.1 Demo','saved':self.saved(),'preset_directory':str(self.preset_directory.resolve())}
+                'version':'0.1 Demo','saved':self.saved(),'preset_directory':str(self.preset_directory.resolve()),
+                'appearance':self.appearance_state(),'can_select_preset':self.renderer is not None and bool(self.presets)}
 
     def saved(self):
         path=self.data/'outfits.json'
@@ -399,7 +431,8 @@ class Handler(BaseHTTPRequestHandler):
             if route=='/api/save':return self.send(200,engine.pool.submit(engine.save,payload).result(timeout=180))
             if route=='/api/shutdown':
                 self.send(200,{'closed':True});threading.Thread(target=self.server.shutdown,daemon=True).start();return
-            operation={'/api/render':'render','/api/preset':'preset','/api/import':'import','/api/appearance':'appearance'}.get(route)
+            operation={'/api/render':'render','/api/preset':'preset','/api/import':'import',
+                '/api/appearance/preview':'appearance_preview','/api/appearance/save':'appearance_save'}.get(route)
             if operation is None:return self.send(404,{'error':'操作不存在'})
             result=engine.pool.submit(engine.run,operation,payload).result(timeout=180);self.send(200,result)
         except NotImplementedError as error:
