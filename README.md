@@ -53,4 +53,4 @@ D3D11在客户端原生窗口里直接显示，模型帧不经过GPU读回、PNG
 & 'G:/Tools/Anaconda3/python.exe' -X utf8 demo/client.py --game '游戏安装目录' --preset '外观预设.dat'
 ```
 
-关闭客户端会先结束当前GPU操作再释放窗口资源。日志在`artifacts/demo/demo.log`；所有导入副本和搭配都留在项目内。旧网页原型仍可手动运行`demo/app.py`，保留作兼容入口；客户端本身不启动或依赖该服务。文件保存保留SHA冲突检查。
+关闭客户端会先结束当前GPU操作再释放窗口资源。启动错误记录在`artifacts/demo/client-startup.log`，启动失败时命令行会暂停；模型准备日志在`artifacts/demo/demo.log`。所有导入副本和搭配都留在项目内。旧网页原型仍可手动运行`demo/app.py`，保留作兼容入口；客户端本身不启动或依赖该服务。文件保存保留SHA冲突检查。
