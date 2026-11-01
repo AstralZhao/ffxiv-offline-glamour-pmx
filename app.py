@@ -14,6 +14,7 @@ import math
 from pathlib import Path
 import secrets
 import sqlite3
+import struct
 import subprocess
 import sys
 import threading
@@ -132,21 +133,29 @@ class DemoEngine:
                 zoom=1.;pitch=0.;pan=0.
                 def __init__(self,*args,**kwargs):
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
-                    self.native_surface=None
+                    self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True
                     super().__init__(*args,**kwargs)
                     if native_hwnd:
                         from native_surface import NativeSurface
                         self.native_surface=NativeSurface(self,native_hwnd)
 
                 def texture(self,format_,bind,usage=0,cpu=0):
-                    if native_hwnd and format_==10 and bind==32:bind=40
+                    if format_==10 and bind==32:bind=40
                     return super().texture(format_,bind,usage,cpu)
 
                 def finish_scene_frame(self):
+                    output=self.color
+                    if self.material_glow_enabled:
+                        if self.material_glow is None:
+                            from material_glow import MaterialGlow
+                            self.material_glow=MaterialGlow(self)
+                        output=self.material_glow.apply(self.color)
                     if self.native_surface:
-                        self.native_surface.present(self.color)
+                        self.native_surface.present(output)
                         return None,None
-                    return super().finish_scene_frame()
+                    original=self.color
+                    try:self.color=output;return super().finish_scene_frame()
+                    finally:self.color=original
 
                 def resize_native(self,width,height):
                     from d3d11_debug import P
@@ -167,6 +176,7 @@ class DemoEngine:
 
                 def close(self):
                     if self.native_surface:self.native_surface.close()
+                    if self.material_glow:self.material_glow.close()
                     return super().close()
 
                 def context(self,index,types,*arguments,result=None):
@@ -224,12 +234,34 @@ class DemoEngine:
                     return self.cache[key]
 
                 def draw_mesh(self,scene,mesh,shared,view):
+                    if self.material_glow_enabled and mesh['plan'].get('role')=='gbuffer_color':
+                        import numpy as np
+                        instance=np.frombuffer(shared['g_InstanceParameter'],dtype='<f4').copy().reshape(11,4)
+                        # Native PS already adds authored emission to RGB.
+                        # EnvParameter.w selects its emission/color ratio for
+                        # the offscreen alpha channel consumed by preview bloom.
+                        instance[1,3]=1
+                        shared={**shared,'g_InstanceParameter':instance.tobytes()}
                     if any(value['name']=='g_LightDirection'for stage in('vertex','pixel')for value in mesh['plan'][stage]['constants']):
                         from legacy_lighting import source_direction,camera_direction
                         key=('demo_null_scene_legacy_direction',str(scene.pack.game_root))
                         if key not in self.cache:self.cache[key]=source_direction(scene.pack)
                         shared={**shared,'g_LightDirection':camera_direction(self.cache[key],view)}
                     return super().draw_mesh(scene,mesh,shared,view)
+
+                def draw_forward_transparent(self,scene,mesh,shared,view):
+                    if not self.material_glow_enabled or not mesh['shader_path'].endswith('/characterglass.shpk'):
+                        return super().draw_forward_transparent(scene,mesh,shared,view)
+                    from d3d11_debug import P,U
+                    if not hasattr(self,'glass_glow_blends'):
+                        # Preserve the opaque emission mask beneath glass.
+                        self.glass_glow_blends=[self.create(20,[P],(U*66)(0,0,*([*values,7]+[0,1,0,1,1,0,1,15]*7)))
+                            for values in([1,1,3,1,1,2,1],[1,5,6,1,2,6,1])]
+                    for mode,blend in enumerate(self.glass_glow_blends):
+                        self.context(35,[P,P,U],blend,None,0xffffffff)
+                        selected={**mesh,'extra_constants':{**mesh.get('extra_constants',{}),
+                            'g_GlassOffscreenParam':struct.pack('<4f',mode,0,0,0)}}
+                        self.draw_mesh(scene,selected,shared,view)
             self.pack=SqPack(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
             self.renderer=PreviewRenderer(640,840,1)
             from presets import PresetLibrary
