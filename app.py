@@ -221,7 +221,8 @@ class DemoEngine:
         image,_=self.renderer.draw_scene(scene,state['yaw'])
         url=self.image_record(image)
         result={'image':url,'state':state,'seconds':round(time.perf_counter()-started,3),
-            'visible_meshes':len(scene.meshes),'renderer':'native-d3d11-3d','scene_cache_entries':len(self.scene_cache)}
+            'visible_meshes':len(scene.meshes),'renderer':'native-d3d11-3d','scene_cache_entries':len(self.scene_cache),
+            'shader_families':sorted({mesh['material']['shader']for mesh in scene.meshes})}
         with self.lock:self.last=result
         return result
 

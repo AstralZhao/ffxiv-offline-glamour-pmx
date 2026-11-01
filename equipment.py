@@ -16,9 +16,10 @@ from havok_probe import read_skeleton
 from prepare_preset_customization import bundle_arrays
 from preset_customization import sha
 from preset_outfit import PresetOutfit
+from materials import DemoMaterials
 
 
-class DemoOutfit(PresetOutfit):
+class DemoOutfit(DemoMaterials,PresetOutfit):
     mesh_owned_joints=True
 
     def __init__(self,base):

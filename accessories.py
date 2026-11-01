@@ -18,7 +18,7 @@ from preset_customization import sha
 from preset_outfit import GearChoice,validate_dyes
 from racial_deformation import Eqdp,deform_mesh
 from shader_feasibility import inspect_shpk
-from static_material_inputs import SHADERS,static_pass,vertex_stream
+from static_material_inputs import vertex_stream
 
 PARTS={'Ears':(0,'ear'),'Neck':(1,'nek'),'Wrists':(2,'wrs'),'FingerR':(3,'rir'),'FingerL':(4,'ril')}
 
@@ -67,22 +67,23 @@ class Accessories:
             mpath=(f'chara/accessory/a{match[1]}/material/v{material_id:04}/{filename}'if match else material_path(self.pack,source.material_name,material_id))
             mraw=self.pack.read(mpath);material=material_info(mraw);shader='shader/sm5/shpk/'+material['shader']
             sraw=self.pack.read(shader)
-            if shader not in SHADERS or sha(sraw)!=SHADERS[shader]or material['translucent']:
+            if not self.core.material_supported(shader,sraw,material):
                 raise NotImplementedError('这件饰品的材质尚未接入当前独立渲染器')
             packages=self.character.base.packages
             if shader not in packages:packages[shader]=inspect_shpk(sraw,True)[1]['_package']
-            package=packages[shader];plans={role:static_pass(package,material['shader_keys'],source.weights.shape[1],role)for role in('material','direct')}
+            package=packages[shader];plans=self.core.material_programs(package,material,source.weights.shape[1])
             constants,_,_=material_buffer(package,material);table=None
             if material['dataset_bytes']:
                 start,size=dataset_location(mraw)
                 if material['color_table_dimensions']!='53'or size<2048:raise NotImplementedError('饰品使用尚未接入的颜色表格式')
                 table=mraw[start:start+2048]
-            meshes.append({'slot':slot,'source_mesh':source.source_mesh,'vertices':vertices,'indices':shown.indices,
+            prepared={'slot':slot,'source_mesh':source.source_mesh,'vertices':vertices,'indices':shown.indices,
                 'palette':palette,'posed_positions':positions,'material_path':mpath,'material':material,'constants':constants,
-                'table':table,'shader_path':shader,'plan':plans['direct'],'plans':plans,'transparent':False,'overlay':None,
+                'table':table,'shader_path':shader,'plan':plans.get('direct',plans.get('gbuffer_color')),'plans':plans,'transparent':False,'overlay':None,
                 'source_sha256':sha(raw),'pose_position_error':None,'item_id':item_id,'dyes':[0,0],
                 'original_color_table_sha256':sha(table)if table else None,'color_table_sha256':sha(table)if table else None,
-                '_source_material':mraw})
+                '_source_material':mraw}
+            meshes.append(self.core.finalize_equipment_mesh(prepared,source,{'slot':slot},package))
         value=(meshes,row['dye_count'])
         if len(self.prepared)>=40:self.prepared.pop(next(iter(self.prepared)))
         self.prepared[key]=value;return value
