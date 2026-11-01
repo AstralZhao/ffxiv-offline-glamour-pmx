@@ -37,12 +37,16 @@ class Accessories:
             race=self.core.pbd.parent(race)
         raise NotImplementedError('本机饰品EQDP/PBD未选出可用模型')
 
-    def prepare(self,slot,item_id):
-        key=(slot,item_id)
-        if key in self.prepared:return self.prepared[key]
+    def item_row(self,slot,item_id):
         row=self.core.database.execute('SELECT * FROM equipment WHERE item_id=?',(item_id,)).fetchone()
         expected='FingerL'if slot=='FingerR'else slot
         if row is None or row['slot']!=expected:raise ValueError('装备不属于这个饰品部位')
+        return row
+
+    def prepare(self,slot,item_id):
+        key=(slot,item_id)
+        if key in self.prepared:return self.prepared[key]
+        row=self.item_row(slot,item_id)
         model=row['model_main']&65535;variant=(row['model_main']>>16)&65535;race=self.source(model,slot)
         suffix=PARTS[slot][1];path=f'chara/accessory/a{model:04}/model/c{race:04}a{model:04}_{suffix}.mdl'
         imc=self.pack.read(f'chara/accessory/a{model:04}/a{model:04}.imc');count,mask=struct.unpack_from('<HH',imc)
@@ -98,6 +102,11 @@ class Accessories:
             'Wrists':bool(flags&(1<<12)and flags&(1<<28)),'FingerL':bool(flags&(1<<29)),'FingerR':bool(flags&(1<<30))}
         result=copy.copy(scene);result.meshes=list(scene.meshes)
         for slot,c in selected.items():
-            meshes,count=self.prepare(slot,c['item_id']);choice=GearChoice(**c);validate_dyes(choice,count,self.core.stains)
-            if show[slot]:result.meshes.extend(self.core.dye_mesh(m,choice)for m in meshes)
+            # Hidden accessories retain valid choices/dyes, but their model,
+            # material and shader are not inputs to this visible outfit.
+            row=self.item_row(slot,c['item_id']);choice=GearChoice(**c)
+            validate_dyes(choice,row['dye_count'],self.core.stains)
+            if not show[slot]:continue
+            meshes,_=self.prepare(slot,c['item_id'])
+            result.meshes.extend(self.core.dye_mesh(m,choice)for m in meshes)
         return result
