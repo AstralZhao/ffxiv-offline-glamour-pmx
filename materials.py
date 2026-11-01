@@ -1,5 +1,7 @@
 """Original CN special equipment materials in the fixed Demo preview."""
 import struct
+import copy
+from collections import OrderedDict
 
 from static_material_inputs import SHADERS,shader_crc,static_pass
 from preset_customization import sha
@@ -46,6 +48,27 @@ class DemoMaterials:
         return path in SHADERS and sha(shader)==SHADERS[path]
 
     def material_programs(self,package,material,count):
+        # Parsing original shader instructions is source preparation, not an
+        # item-specific operation. Share its result across gear and dye states.
+        # Keep the actual package object with the entry: an id can be reused
+        # only after its previous object dies, which this reference prevents.
+        cache=getattr(self,'material_program_cache',None)
+        if cache is None:
+            self.material_program_cache=OrderedDict();cache=self.material_program_cache
+            self.material_program_cache_hits=0;self.material_program_cache_misses=0
+        key=(id(package),material['shader'],bool(material['translucent']),count,
+            tuple(sorted(material['shader_keys'].items())))
+        if key in cache:
+            cache.move_to_end(key);self.material_program_cache_hits+=1
+            return copy.deepcopy(cache[key][1])
+        plans=self.uncached_material_programs(package,material,count)
+        self.material_program_cache_misses+=1
+        # Never share nested mutable binding lists with a mesh or renderer.
+        cache[key]=(package,copy.deepcopy(plans))
+        while len(cache)>128:cache.popitem(last=False)
+        return plans
+
+    def uncached_material_programs(self,package,material,count):
         overlay={'charactertattoo.shpk':'overlay_tattoo','characterocclusion.shpk':'overlay_occlusion'}.get(material['shader'])
         if overlay:roles=(overlay,)
         elif material['shader']=='characterstockings.shpk':roles=('material','gbuffer_color')
