@@ -51,7 +51,7 @@ class Accessories:
         at=4+(variant*len(parts)+parts.index(index))*6
         material_id,decal,attributes,vfx,animation=struct.unpack_from('<BBHBB',imc,at)
         imc_entry={'material_id':material_id,'decal':decal,'vfx':vfx,'material_animation':animation}
-        if not self.core.variant_supported(imc_entry):raise NotImplementedError('饰品需要尚未接入的特效或材质动画')
+        if not self.core.variant_supported(imc_entry,model_set=model,slot=slot):raise NotImplementedError('饰品需要尚未接入的特效或材质动画')
         raw=self.pack.read(path);original=decode_model(raw);visible,_=apply_visibility(original,slot,0,attributes&1023)
         meshes=[]
         for source,shown in zip(original,visible):
@@ -84,7 +84,7 @@ class Accessories:
                 'source_sha256':sha(raw),'pose_position_error':None,'item_id':item_id,'dyes':[0,0],
                 'original_color_table_sha256':sha(table)if table else None,'color_table_sha256':sha(table)if table else None,
                 '_source_material':mraw}
-            meshes.append(self.core.finalize_equipment_mesh(prepared,source,{'slot':slot,'imc':imc_entry},package))
+            meshes.append(self.core.finalize_equipment_mesh(prepared,source,{'slot':slot,'model_set':model,'imc':imc_entry},package))
         value=(meshes,row['dye_count'])
         if len(self.prepared)>=40:self.prepared.pop(next(iter(self.prepared)))
         self.prepared[key]=value;return value

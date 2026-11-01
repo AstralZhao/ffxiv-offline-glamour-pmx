@@ -231,7 +231,8 @@ class DemoEngine:
         url=self.image_record(image)
         result={'image':url,'state':state,'seconds':round(time.perf_counter()-started,3),
             'visible_meshes':len(scene.meshes),'renderer':'native-d3d11-3d','scene_cache_entries':len(self.scene_cache),
-            'shader_families':sorted({mesh['material']['shader']for mesh in scene.meshes})}
+            'shader_families':sorted({mesh['material']['shader']for mesh in scene.meshes}),
+            'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')})}
         with self.lock:self.last=result
         return result
 

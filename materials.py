@@ -6,8 +6,29 @@ from preset_customization import sha
 
 
 class DemoMaterials:
-    def variant_supported(self,imc):
-        return bool(imc['material_id'])and not(imc['vfx']or imc['material_animation'])
+    def variant_supported(self,imc,*,model_set=None,slot=None):
+        if not imc['material_id']or imc['vfx']:return False
+        if imc['material_animation']:self.material_animation_source(model_set,slot,imc['material_animation'])
+        return True
+
+    def material_animation_source(self,model_set,slot,identifier):
+        cache=getattr(self,'material_animation_sources',None)
+        if cache is None:self.material_animation_sources={};cache=self.material_animation_sources
+        if slot not in('Head','Body','Gloves','Legs','Feet')or not 1<=identifier<=255:
+            raise NotImplementedError('当前部位的材质动画尚未接入')
+        # Original CN444f30..444fb8: IDs >=10 select common equipment;
+        # smaller IDs select the equipment model set, not the material variant.
+        path=(f'chara/common/animation/equipment/s{identifier:04}/material.pap'if identifier>=10 else
+            f'chara/equipment/e{model_set:04}/animation/s{identifier:04}/material.pap')
+        if path not in cache:
+            try:raw=self.pack.read(path)
+            except FileNotFoundError as error:
+                if str(error)!=path:raise
+                cache[path]={'path':path,'status':'absent_optional_source','overrides_applied':False,
+                    'notice':'装备引用的材质动画资源在本机缺失，当前显示原始静态材质。'}
+            else:
+                raise NotImplementedError('已找到材质动画文件，尚未接入其初始材质参数：'+path)
+        return cache[path]
 
     def material_supported(self,path,shader,material):
         return path in SHADERS and sha(shader)==SHADERS[path]
@@ -77,4 +98,9 @@ class DemoMaterials:
             # tint belongs to the Face slot and must not recolor outfit decals.
             result['extra_constants']={**result.get('extra_constants',{}),
                 'g_DecalColor':struct.pack('<4f',1,1,1,1)}
+        animation=item.get('imc',{}).get('material_animation',0)
+        if animation:
+            plan=self.material_animation_source(item['model_set'],item['slot'],animation)
+            result['preview_notice']=plan['notice']
+            result['material_animation_source']=plan
         return result
