@@ -188,9 +188,13 @@ class DemoEngine:
     def load(self,key):
         from preset_static_character import PresetStaticCharacter
         from accessories import Accessories
+        from equipment import DemoOutfit
         if key not in self.presets:raise ValueError('预设不存在')
         candidate=PresetStaticCharacter.from_preset(self.pack,self.presets[key][0],store=self.store,hair_scenes=self.hair)
-        candidate.outfit.preview_restricted_items=True
+        original=candidate.outfit
+        try:candidate.outfit=DemoOutfit(candidate.base)
+        except Exception:candidate.close();raise
+        original.close()
         previous=self.character;old_accessories=getattr(self,'accessories',None);old_scenes=self.scene_cache
         self.character=candidate;self.accessories=Accessories(candidate);self.scene_cache=OrderedDict()
         try:result=self.render(parse_state({}))
