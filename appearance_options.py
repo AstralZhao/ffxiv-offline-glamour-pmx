@@ -1,0 +1,72 @@
+"""CN source menus and palette choices for the application preset editor."""
+import json
+from pathlib import Path
+from build_cn_catalog import VerifiedData
+from audit_preset_hair_sources import hair_menu
+from probe_appearance_presets import FIELDS
+
+LABELS={'tribe':'部族','hair':'发型','face':'脸型与龙角','height':'身高','bust':'胸围','ear_muscle_tail_size':'尾巴长度',
+    'tail_or_ear_type':'尾巴形状','eyebrows':'眉型','eyes':'眼型','nose':'鼻型','jaw':'轮廓','mouth':'嘴型',
+    'skin_color':'肤色','hair_color':'发色','highlight_color':'挑染颜色','left_eye_color':'左眼颜色',
+    'right_eye_color':'右眼颜色','facial_feature_color':'面部特征颜色','lip_color_or_fur_pattern':'唇色',
+    'face_paint_color':'面部彩绘颜色','face_paint':'面部彩绘'}
+
+
+class AppearanceOptions:
+    def __init__(self,pack,store,root):
+        self.pack,self.store=pack,store;self.cache={}
+        self.data=VerifiedData(pack,json.loads((Path(root)/'artifacts/cn-data/schema-mapping.json').read_bytes()))
+        profile=json.loads((Path(root)/'docs/cn-customization-profile.json').read_bytes())
+        self.cmp=pack.read(profile['cmp_path'])
+
+    def fields(self,tribe):
+        if tribe in self.cache:return self.cache[tribe]
+        menu,_=self.store.geometry_menu(tribe)
+        result=[{'field':'tribe','label':'部族','kind':'select','mask':255,
+            'choices':[{'value':11,'label':'晨曦之民'},{'value':12,'label':'暮晖之民'}]}]
+        for option in menu.options:
+            result.append({'field':option.field,'label':LABELS[option.field],'kind':'slider'if option.menu_type==5 else'select',
+                'mask':option.mask,'choices':[{'value':v,'label':str(v)if option.menu_type==5 else f'样式 {i}'}
+                    for i,v in enumerate(option.values,1)]})
+        p={'race':6,'gender':1,'body_type':1,'tribe':tribe}
+        hair=hair_menu(self.data,p)
+        result.append({'field':'hair','label':'发型','kind':'select','mask':255,
+            'choices':[{'value':c['hair_id'],'label':f"发型 {c['hair_id']}",'icon_id':c['icon_id']}for c in hair['choices']]})
+        row=next(r for _,r in self.data.rows('CharaMakeType')if(r['Race'],r['Gender'],r['Tribe'])==(6,1,tribe))
+        palettes={}
+        for i in range(28):
+            pre=f'CharaMakeStruct[{i}].'
+            if row[pre+'Menu']and row[pre+'SubMenuType']in(2,3):palettes[row[pre+'Customize']]=row[pre+'SubMenuNum']
+        base=18432+((tribe-1)*2+1)*5120
+        colors={'skin_color':(base,4,palettes[8]),'hair_color':(base+1024,8,palettes[10]),
+            'highlight_color':(1024,4,palettes[10]),'left_eye_color':(0,4,palettes[9]),'right_eye_color':(0,4,palettes[9]),
+            'facial_feature_color':(3072,4,palettes[13]),'lip_color_or_fur_pattern':(2048,4,palettes[20]),'face_paint_color':(4096,4,palettes[25])}
+        for field,(offset,stride,count)in colors.items():
+            ids=list(range(count))
+            if field in('lip_color_or_fur_pattern','face_paint_color'):ids+=list(range(128,128+count))
+            choices=[]
+            for value in ids:
+                rgb=self.cmp[offset+value*stride:offset+value*stride+3]
+                if len(rgb)!=3:raise ValueError('本机颜色表范围不正确')
+                choices.append({'value':value,'label':str(value),'color':'#'+rgb.hex()})
+            result.append({'field':field,'label':LABELS[field],'kind':'color','mask':255,'choices':choices})
+        customs=dict(self.data.rows('CharaMakeCustomize'))
+        paints=[]
+        for i in range(28):
+            pre=f'CharaMakeStruct[{i}].'
+            if row[pre+'Customize']!=24 or not row[pre+'Menu']:continue
+            for j in range(row[pre+'SubMenuNum']):
+                linked=customs[row[pre+f'SubMenuParam[{j}]']]
+                paints.append({'value':linked['FeatureID'],'label':'无'if linked['FeatureID']==0 else f'彩绘 {j}', 'icon_id':linked['Icon']})
+        result.append({'field':'face_paint','label':LABELS['face_paint'],'kind':'select','mask':127,'choices':paints})
+        self.cache[tribe]=result;return result
+
+    def validate(self,original,updated):
+        for option in self.fields(updated['tribe']):
+            field=option['field'];value=updated[field]
+            # Keep a valid imported non-menu/unlocked selection when unchanged.
+            if value==original[field]and original['tribe']==updated['tribe']:continue
+            if value&option['mask']not in{c['value']for c in option['choices']}:
+                raise ValueError(option['label']+'不在当前国服选项中')
+        if(updated['highlight_flags']^original['highlight_flags'])&127:raise ValueError('挑染标记只支持修改启用选项')
+        if(updated['facial_features']^original['facial_features'])&128:raise ValueError('面部特征标记范围不正确')

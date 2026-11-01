@@ -81,8 +81,9 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 class DemoEngine:
     """All native GPU and SQLite outfit work stays on one dedicated thread."""
-    def __init__(self,game,preset):
+    def __init__(self,game,preset,*,preset_directory=None):
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
+        self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
         from icons import ItemIcons
         self.item_icons=ItemIcons(self.game)
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
@@ -98,15 +99,22 @@ class DemoEngine:
             while len(self.images)>20:self.images.popitem(last=False)
         return '/api/image/'+key+'.png'
 
-    def register_preset(self,path):
+    def register_preset(self,path,identifier=None):
         from preset_character import import_preset
+        path=self.library.path(Path(path).name)
         record=import_preset(path);p=record['parameters'];key=hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:24]
+        if identifier is not None:key=identifier
         if (p['race'],p['gender'],p['body_type'])!=(6,1,1)or p['tribe']not in(11,12):
             raise ValueError('原型当前支持敖龙族女性的两个部族')
         entry={'id':key,'name':record.get('comment')or path.stem,'file_name':path.name,
-            'clan':'晨曦之民'if p['tribe']==11 else'暮晖之民','face':p['face'],'hair':p['hair']}
+            'clan':'晨曦之民'if p['tribe']==11 else'暮晖之民','face':p['face'],'hair':p['hair'],
+            'parameters':p,'sha256':record['source_sha256'],'app_owned':True}
         with self.lock:self.presets[key]=(path,entry)
         return entry
+
+    def refresh_presets(self):
+        entries={key:(path,entry)for key,path,entry in self.library.scan()}
+        with self.lock:self.presets=entries
 
     def initialize(self):
         try:
@@ -166,16 +174,17 @@ class DemoEngine:
                     self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view)
             self.pack=SqPack(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
             self.renderer=PreviewRenderer(640,840,1)
-            paths=[self.default_preset]
-            paths+=sorted(self.default_preset.parent.glob('FFXIV_CHARA_*.dat'))
-            paths+=sorted((self.data/'presets').glob('*.dat'))
-            seen=set()
-            for path in paths:
-                if not path.is_file()or path.resolve()in seen:continue
-                seen.add(path.resolve())
-                try:self.register_preset(path)
-                except ValueError:
-                    if path==self.default_preset:raise
+            from presets import PresetLibrary
+            from appearance_options import AppearanceOptions
+            self.library=PresetLibrary(self.preset_directory,self.game)
+            self.library.seed(self.default_preset,default=True)
+            if not self.library.metadata.get('legacy_migration_complete'):
+                paths=sorted(self.default_preset.parent.glob('FFXIV_CHARA_*.dat'))+sorted((self.data/'presets').glob('*.dat'))
+                for path in paths:
+                    try:self.library.seed(path)
+                    except ValueError:continue
+                self.library.metadata['legacy_migration_complete']=True;self.library.save_index()
+            self.refresh_presets();self.appearance_options=AppearanceOptions(self.pack,self.store,ROOT)
             if not self.presets:raise ValueError('没有找到可用的敖龙族女性预设，请导入原生DAT预设')
             self.active_preset=next(iter(self.presets));self.load(self.active_preset)
             with self.lock:self.status='ready';self.message='可以开始搭配了'
@@ -200,7 +209,8 @@ class DemoEngine:
         original.close()
         previous=self.character;old_accessories=getattr(self,'accessories',None);old_scenes=self.scene_cache
         self.character=candidate;self.accessories=Accessories(candidate);self.scene_cache=OrderedDict()
-        try:result=self.render(parse_state({}))
+        retained=self.last['state']if self.last else{}
+        try:result=self.render(retained)
         except Exception:
             candidate.close();self.character=previous;self.accessories=old_accessories;self.scene_cache=old_scenes;raise
         self.active_preset=key
@@ -262,12 +272,34 @@ class DemoEngine:
             else:scene.effect_notices.append('装备主体已显示，附加粒子特效尚未绘制。')
 
     def import_dat(self,raw,name):
-        if len(raw)!=212:raise ValueError('请导入游戏保存的原生212字节DAT外观预设')
-        directory=self.data/'presets';directory.mkdir(exist_ok=True)
-        key=hashlib.sha256(raw).hexdigest();path=directory/(key+'.dat')
-        if not path.exists():path.write_bytes(raw)
-        entry=self.register_preset(path)
-        return self.load(entry['id'])
+        path,key=self.library.add(raw,name);self.refresh_presets()
+        return self.load(key)
+
+    def describe_appearance(self,key,tribe=None):
+        from presets import decode
+        if key not in self.presets:raise ValueError('本地预设不存在')
+        path,_=self.presets[key];record=decode(path.read_bytes());p=record['parameters']
+        tribe=p['tribe']if tribe is None else tribe
+        if tribe not in(11,12):raise ValueError('当前支持敖龙族女性的两个部族')
+        return {**record,'id':key,'file_name':path.name,'directory':str(self.library.root),
+            'fields':self.appearance_options.fields(tribe),'scope':'国服敖龙族女性；发型列表来自当前创建菜单'}
+
+    def edit_appearance(self,payload):
+        from presets import decode,change_bytes
+        key=payload['id']
+        if key not in self.presets:raise ValueError('本地预设不存在')
+        path,_=self.presets[key];old=path.read_bytes();changes=payload['changes']
+        from presets import digest
+        if digest(old)!=payload['sha256']:raise ValueError('这份预设已被其他窗口或程序修改，请重新打开编辑')
+        proposed=change_bytes(old,changes)
+        self.appearance_options.validate(decode(old)['parameters'],decode(proposed)['parameters'])
+        original,edited=self.library.replace(path,changes,payload['sha256'])
+        self.refresh_presets()
+        try:return self.load(key)
+        except Exception:
+            try:self.library.rollback(path,original,edited)
+            finally:self.refresh_presets()
+            raise
 
     def run(self,operation,payload):
         if self.status!='ready'and(operation not in('preset','import')or self.renderer is None):
@@ -276,6 +308,7 @@ class DemoEngine:
             if operation=='render':return self.render(payload)
             if operation=='preset':result=self.load(payload['id'])
             elif operation=='import':result=self.import_dat(base64.b64decode(payload['data'],validate=True),payload.get('name',''))
+            elif operation=='appearance':result=self.edit_appearance(payload)
             else:raise ValueError('未知操作')
             with self.lock:self.status='ready';self.error=None;self.message='可以开始搭配了'
             return result
@@ -290,7 +323,7 @@ class DemoEngine:
                 'presets':[r[1]for r in self.presets.values()],'preset_id':getattr(self,'active_preset',None),
                 'last':self.last,'slots':SLOTS,'groups':GROUPS,'counts':counts,'dyes':dyes,'example':EXAMPLE,
                 'scope':'敖龙族女性 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
-                'version':'0.1 Demo','saved':self.saved()}
+                'version':'0.1 Demo','saved':self.saved(),'preset_directory':str(self.preset_directory.resolve())}
 
     def saved(self):
         path=self.data/'outfits.json'
@@ -329,6 +362,10 @@ class Handler(BaseHTTPRequestHandler):
         route=urlparse(self.path);engine=self.server.engine
         try:
             if route.path=='/api/bootstrap':return self.send(200,engine.bootstrap())
+            if route.path=='/api/appearance':
+                q=parse_qs(route.query);key=q.get('id',[getattr(engine,'active_preset',None)])[0]
+                tribe=int(q['tribe'][0])if'tribe'in q else None
+                return self.send(200,engine.pool.submit(engine.describe_appearance,key,tribe).result(timeout=180))
             if route.path=='/api/equipment':
                 q=parse_qs(route.query)
                 return self.send(200,equipment_rows(q.get('slot',['Head'])[0],q.get('q',[''])[0],int(q.get('offset',['0'])[0]),
@@ -343,7 +380,7 @@ class Handler(BaseHTTPRequestHandler):
                 key=route.path.rsplit('/',1)[-1].removesuffix('.png')
                 with engine.lock:data=engine.images.get(key)
                 return self.send(200,data,'image/png')if data else self.send(404,{'error':'预览已更新'})
-            files={'/':('index.html','text/html; charset=utf-8'),'/app.js':('app.js','text/javascript; charset=utf-8'),'/style.css':('style.css','text/css; charset=utf-8')}
+            files={'/':('index.html','text/html; charset=utf-8'),'/app.js':('app.js','text/javascript; charset=utf-8'),'/appearance.js':('appearance.js','text/javascript; charset=utf-8'),'/style.css':('style.css','text/css; charset=utf-8')}
             if route.path in files:
                 name,mime=files[route.path];return self.send(200,(Path(__file__).parent/name).read_bytes(),mime)
             self.send(404,{'error':'页面不存在'})
@@ -362,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
             if route=='/api/save':return self.send(200,engine.pool.submit(engine.save,payload).result(timeout=180))
             if route=='/api/shutdown':
                 self.send(200,{'closed':True});threading.Thread(target=self.server.shutdown,daemon=True).start();return
-            operation={'/api/render':'render','/api/preset':'preset','/api/import':'import'}.get(route)
+            operation={'/api/render':'render','/api/preset':'preset','/api/import':'import','/api/appearance':'appearance'}.get(route)
             if operation is None:return self.send(404,{'error':'操作不存在'})
             result=engine.pool.submit(engine.run,operation,payload).result(timeout=180);self.send(200,result)
         except NotImplementedError as error:
