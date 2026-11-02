@@ -1,4 +1,4 @@
-"""Portable application settings; game resources are always read-only."""
+"""Portable game-directory or imported-resource settings; sources stay read-only."""
 import hashlib,json,os,uuid
 from pathlib import Path
 
@@ -23,6 +23,9 @@ def validate_game(value,root=ROOT,*,verify_executable=True):
     if version!=profile['client_version']:
         raise ValueError(f"当前游戏版本 {version} 与软件支持的国服版本 {profile['client_version']} 不一致，请使用对应版本的软件包")
     if root.is_relative_to(path):raise ValueError('请将试衣软件放在游戏安装目录之外，避免写入游戏文件夹')
+    if (path/'resource-pack.json').is_file():
+        from resource_pack import validate_directory
+        validate_directory(path,profile)
     if verify_executable:
         digest=hashlib.file_digest if hasattr(hashlib,'file_digest')else None
         with(path/'game/ffxiv_dx11.exe').open('rb')as source:
@@ -39,6 +42,12 @@ class SettingsStore:
         if not self.path.is_file():return None,''
         try:
             data=json.loads(self.path.read_bytes())
+            if data.get('version')==2 and data.get('source')=='resource_pack':
+                relative=data.get('resource_directory')
+                if not isinstance(relative,str):raise ValueError('资源包配置格式不正确')
+                path=(self.root/relative).resolve()
+                if not path.is_relative_to(self.root/'resources'):raise ValueError('资源包必须位于软件 resources 目录内')
+                return validate_game(path,self.root,verify_executable=False),''
             if data.get('version')!=1 or not isinstance(data.get('game_directory'),str):raise ValueError('配置格式不正确')
             return validate_game(data['game_directory'],self.root,verify_executable=False),''
         except(OSError,ValueError,TypeError,AttributeError)as error:return None,str(error)
@@ -47,10 +56,14 @@ class SettingsStore:
         # Caller validates fully off the GUI thread immediately before saving.
         path=game_root(game)
         if self.root.is_relative_to(path):raise ValueError('软件不能放在游戏安装目录内')
+        if (path/'resource-pack.json').is_file():
+            if not path.is_relative_to(self.root/'resources'):raise ValueError('请先通过“导入资源包”将资源包导入软件目录')
+            data={'version':2,'source':'resource_pack','resource_directory':path.relative_to(self.root).as_posix()}
+        else:data={'version':1,'game_directory':str(path)}
         temporary=self.root/('.config-'+uuid.uuid4().hex+'.tmp')
         try:
             with temporary.open('x',encoding='utf8')as file:
-                json.dump({'version':1,'game_directory':str(path)},file,ensure_ascii=False,indent=2)
+                json.dump(data,file,ensure_ascii=False,indent=2)
                 file.write('\n');file.flush();os.fsync(file.fileno())
             temporary.replace(self.path)
         finally:

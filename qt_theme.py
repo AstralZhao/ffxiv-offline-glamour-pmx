@@ -51,6 +51,8 @@ QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background:transp
 QCheckBox { spacing:8px; color:#abb8ca; }
 QCheckBox::indicator { width:15px; height:15px; border:1px solid #526074; border-radius:4px; background:#141b24; }
 QCheckBox::indicator:checked { background:#89d5c4; border-color:#89d5c4; image:none; }
+QRadioButton { spacing:8px; } QRadioButton::indicator { width:14px; height:14px; border:1px solid #607082; border-radius:8px; background:#141b24; }
+QRadioButton::indicator:checked { background:#89d5c4; border:2px solid #345751; }
 QToolTip { color:#edf1f7; background:#283344; border:1px solid #56667b; padding:6px; }
 QMenu { background:#202733; border:1px solid #45556b; padding:5px; }
 QMenu::item { padding:8px 16px; border-radius:4px; }

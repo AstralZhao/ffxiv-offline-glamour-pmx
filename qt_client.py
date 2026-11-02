@@ -883,7 +883,7 @@ class DesktopSession(C.QObject):
         def finish(result):
             self.settings_dialog=None
             if result==W.QDialog.Accepted:
-                if dialog.saved_game==self.controller.game:self.controller.message.set('游戏目录已保存')
+                if dialog.saved_game==self.controller.game:self.controller.message.set('资源来源已保存')
                 else:self.next_game=dialog.saved_game;self.controller.close()
             dialog.deleteLater()
         dialog.finished.connect(finish);dialog.show()
