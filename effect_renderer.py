@@ -6,6 +6,7 @@ postprocess inputs are defined explicitly; no game buffers/hooks are used.
 import ctypes as c
 import hashlib
 import struct
+from collections import OrderedDict
 
 import numpy as np
 
@@ -156,12 +157,22 @@ def simple_world_positions(sample,matrix):
     return (world[:,None,:]+offsets).reshape(-1,3)
 
 
+def resolved_world_positions(sample,matrix):
+    positions=sample['positions']
+    if sample.get('disc_parameters',{}).get('scaling',1)<1:
+        from effect_disc import geometry as disc_geometry
+        positions=disc_geometry(sample['disc_parameters'],np.linalg.norm(matrix[:3,:3],axis=0))['positions']
+    if 'simple_centers'in sample:return simple_world_positions(sample,matrix)
+    return (matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3]
+
+
 class EffectRenderer:
     def __init__(self,renderer,pack):
         self.renderer=renderer;self.pack=pack;self.packages={};self.plans={};self.samplers={};self.depth_copy=None;self.depth_size=None
         self.color_copy=None;self.color_size=None
         self.uploads=[];self.upload_cursor=0;self.frame_constants={};self.reuse_uploads=True;self.batch_draws=True
         self.upload_bytes=0;self.upload_budget=64*1024*1024
+        self.geometry_cache=OrderedDict();self.geometry_bytes=0;self.reuse_geometry=True
 
     def upload(self,array,bind):
         """Reuse owned default buffers; D3D orders updates before each draw."""
@@ -172,6 +183,7 @@ class EffectRenderer:
         if bind==4:
             key=array.tobytes()
             if key in self.frame_constants:return self.frame_constants[key]
+        payload=array.tobytes()
         index=self.upload_cursor;self.upload_cursor+=1
         if index==len(self.uploads):self.uploads.append(None)
         entry=self.uploads[index]
@@ -187,11 +199,13 @@ class EffectRenderer:
                 self.upload_bytes-=previous;self.uploads[index]=None
             desc=BufferDesc(array.nbytes,0,bind,0,0,0);initial=InitialData(array.ctypes.data,0,0)
             pointer=r.create(3,[P,P],c.byref(desc),c.byref(initial))
-            self.uploads[index]=(bind,array.nbytes,pointer)
+            self.uploads[index]=(bind,array.nbytes,pointer,payload)
             self.upload_bytes+=array.nbytes
         else:
             pointer=entry[2]
-            r.context(48,[P,U,P,P,U,U],pointer,0,None,array.ctypes.data,0,0)
+            if entry[3]!=payload:
+                r.context(48,[P,U,P,P,U,U],pointer,0,None,array.ctypes.data,0,0)
+                self.uploads[index]=(bind,array.nbytes,pointer,payload)
         if bind==4:self.frame_constants[key]=pointer
         return pointer
 
@@ -246,7 +260,11 @@ class EffectRenderer:
             mode,address=key
             if mode not in(0,1,2,3,4)or any(a not in(0,1,2)for a in address):raise ValueError('Invalid AVFX sampler')
             native_address=tuple({0:1,1:3,2:2}[v]for v in address)
-            descriptor=SamplerDesc(0 if mode==0 else 21 if mode==1 else 85,*native_address,3,0.,(1,1,2,4,8)[mode],1,(F*4)(0,0,0,0),0,15)
+            # CN37fa73..37fb31 source tables2161330/1348/1360.
+            # Even "Disable" keeps mip-linear filtering. The authored filter
+            # levels also select negative LOD bias, absent in the old preview.
+            descriptor=SamplerDesc(1 if mode==0 else 21 if mode==1 else 85,*native_address,3,
+                (0.,-.5,-1.,-1.5,-2.)[mode],(1,1,4,8,16)[mode],1,(F*4)(0,0,0,0),0,15)
             self.samplers[key]=self.renderer.create(23,[P],c.byref(descriptor))
         return self.samplers[key]
 
@@ -339,32 +357,50 @@ class EffectRenderer:
         ordered=sorted(samples,key=lambda s:(s['priority'],float((view@s['parent']@np.r_[s['local'][:3,3],1])[2])))
         for sample in ordered:
             plan=self.plan(sample);matrix=world_matrix(sample,view,camera_world);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
-            if sample.get('disc_parameters',{}).get('scaling',1)<1:
-                from effect_disc import geometry as disc_geometry
-                positions=disc_geometry(sample['disc_parameters'],np.linalg.norm(matrix[:3,:3],axis=0))['positions']
-            dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
-            world_positions=(simple_world_positions(sample,matrix)if 'simple_centers'in sample else
-                (matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3])
-            if is_powder:
-                # The original VS adds center after rotating the local corner.
-                # Supplying the fully resolved corner as center, with zero
-                # local xy/angles, is algebraically identical for this path.
-                vertices['center']=world_positions;vertices['position'][:,2]=sample['depth_offset']
-            else:
-                vertices['position'][:,:3]=positions if is_model else world_positions
-                vertices['position'][:,3]=1 if is_model else sample['depth_offset']
-            uv=sample['base_uv'].copy()
-            if not is_model:
-                for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=shape_uv_coordinates(uv[:,i],uv_matrix)
-            values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,0]if is_powder else uv[:,:2].reshape(-1,4)}
-            if not is_powder:values['uv2']=uv[:,2:].reshape(-1,4)
-            for name,value in values.items():
-                if is_model or(is_powder and name=='uv'):vertices[name]=value;continue
-                vertices[name]=quantize_vertex(value,color=name=='color')
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
-            if is_model:
-                vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
-            elif not is_powder:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
+            cacheable=self.reuse_geometry
+            view_dependent=not(is_model or sample['frame']in(0,1,2,10))
+            key=id(sample);cached=self.geometry_cache.get(key)if cacheable else None
+            if cached is not None and cached[0]is sample:
+                vertices=cached[1];self.geometry_cache.move_to_end(key)
+                if view_dependent:
+                    # UV/color/distortion packing is independent of the camera.
+                    # Recompute every billboard position, keeping its original
+                    # VS inputs and triangle order exactly as the uncached path.
+                    vertices=vertices.copy();world_positions=resolved_world_positions(sample,matrix)
+                    if is_powder:vertices['center']=world_positions
+                    else:vertices['position'][:,:3]=world_positions
+            else:
+                dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
+                world_positions=resolved_world_positions(sample,matrix)
+                if is_powder:
+                    # The original VS adds center after rotating the local corner.
+                    # Supplying the fully resolved corner as center, with zero
+                    # local xy/angles, is algebraically identical for this path.
+                    vertices['center']=world_positions;vertices['position'][:,2]=sample['depth_offset']
+                else:
+                    vertices['position'][:,:3]=positions if is_model else world_positions
+                    vertices['position'][:,3]=1 if is_model else sample['depth_offset']
+                # UV curves and per-birth offsets are fractional. A template's
+                # integer corner literals must never truncate these results
+                # before the native signed-short packing step below.
+                uv=np.array(sample['base_uv'],dtype='<f4',copy=True)
+                if not is_model:
+                    for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=shape_uv_coordinates(uv[:,i],uv_matrix)
+                values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,0]if is_powder else uv[:,:2].reshape(-1,4)}
+                if not is_powder:values['uv2']=uv[:,2:].reshape(-1,4)
+                for name,value in values.items():
+                    if is_model or(is_powder and name=='uv'):vertices[name]=value;continue
+                    vertices[name]=quantize_vertex(value,color=name=='color')
+                if is_model:
+                    vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
+                elif not is_powder:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
+                if cacheable and vertices.nbytes<=8*1024*1024:
+                    vertices.flags.writeable=False
+                    if key in self.geometry_cache:self.geometry_bytes-=self.geometry_cache.pop(key)[1].nbytes
+                    self.geometry_cache[key]=(sample,vertices);self.geometry_bytes+=vertices.nbytes
+                    while len(self.geometry_cache)>128 or self.geometry_bytes>8*1024*1024:
+                        _,entry=self.geometry_cache.popitem(last=False);self.geometry_bytes-=entry[1].nbytes
             indices=sample['indices']
             doc=document_parameters(sample,r.width,r.height)
             uv_transform=np.tile(np.array(((1,0,0,0),(0,1,0,0)),dtype='<f4'),(4,1))

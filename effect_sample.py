@@ -1,7 +1,8 @@
 """Source-driven, frozen AVFX preview, separate from a native VFX simulation.
 
-The wardrobe uses a fixed frame and the centre of authored random ranges. It
-does not animate the character. Unsupported branches are reported, not replaced
+The wardrobe uses a fixed frame. UV and Simple size random bytes follow reviewed
+native math with stable independent birth seeds; other random ranges still use
+their centres. It does not animate the character. Unsupported branches are reported, not replaced
 with invented particles. Schema/curve conventions follow pinned VFXEditor.
 """
 import math
@@ -56,15 +57,23 @@ def soft_particle_range(effect):
     return value
 
 
-def curve(node,time,default=0,*,rgb=False):
-    if node is None:return np.full(3,default)if rgb else default
+@lru_cache(maxsize=4096)
+def curve_source(node):
+    """Validate immutable source keys once, independent of playback time."""
     source=nested(node);raw=source.get('Keys')
-    if raw is None:return np.full(3,default)if rgb else default
+    if raw is None:return source,None
     if len(raw.data)%16:raise ValueError('Truncated AVFX key array')
-    keys=[struct.unpack_from('<hhfff',raw.data,i)for i in range(0,len(raw.data),16)]
+    keys=tuple(struct.unpack_from('<hhfff',raw.data,i)for i in range(0,len(raw.data),16))
     if len(keys)!=number(source,'KeyC',len(keys))or not keys:raise ValueError('AVFX key count differs')
     if not all(np.isfinite(k[2:]).all()for k in keys):raise ValueError('Non-finite AVFX curve')
     if any(a[0]>=b[0]for a,b in zip(keys,keys[1:])):raise UnsupportedEffect('重叠曲线关键帧')
+    return source,keys
+
+
+def curve(node,time,default=0,*,rgb=False):
+    if node is None:return np.full(3,default)if rgb else default
+    source,keys=curve_source(node)
+    if keys is None:return np.full(3,default)if rgb else default
     value=lambda key:np.array(key[2:])if rgb else key[4]
     start,end=keys[0][0],keys[-1][0];offset=0
     if len(keys)>1 and(time<start or time>end):
@@ -367,6 +376,14 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         if sample_key not in sampled:sampled[sample_key]=sample(effect,particle,age,np.eye(4),np.ones(4))
                         prototype=sampled[sample_key]
                         value={**prototype,'parent':matrix,'color':prototype['color']*tint}
+                        from effect_uv import has_random,initialize,uv_nodes
+                        if 'simple_centers'not in prototype and has_random(particle):
+                            from effect_geometry import uv_matrix
+                            seed=(effect.sha256+repr((stack,index,container,ordinal,birth,occurrence))).encode()
+                            states=initialize(particle,seed)
+                            value['uv_matrices']=[uv_matrix(uv,age,model=value['kind']=='model',random_state=state)
+                                for uv,state in zip(uv_nodes(particle),states)]
+                            value['uv_random_bytes']=states
                         if not len(value['indices']):continue
                         value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth)
                         if len(result)>=512:raise UnsupportedEffect('粒子预算')

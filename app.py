@@ -135,8 +135,11 @@ class DemoEngine:
             native_hwnd=self.native_hwnd
             class PreviewRenderer(PresetMaterialRenderer):
                 zoom=1.;pitch=0.;pan=0.
+                reuse_joint_palette=True
+                reuse_frame_constants=True
                 def __init__(self,*args,**kwargs):
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
+                    self.frame_constant_buffers=None;self.frame_constant_pointers=set()
                     self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True
                     super().__init__(*args,**kwargs)
                     if native_hwnd:
@@ -150,10 +153,8 @@ class DemoEngine:
                 def finish_scene_frame(self):
                     output=self.color
                     if self.material_glow_enabled:
-                        if self.material_glow is None:
-                            from material_glow import MaterialGlow
-                            self.material_glow=MaterialGlow(self)
-                        output=self.material_glow.apply(self.color)
+                        if self.material_glow is None:raise ValueError('Original postprocess inputs were not prepared')
+                        output=self.material_glow.apply(self.color,*self.post_camera)
                     if self.native_surface:
                         self.native_surface.present(output)
                         return None,None
@@ -183,6 +184,22 @@ class DemoEngine:
                     if self.material_glow:self.material_glow.close()
                     return super().close()
 
+                def draw_scene(self,scene,yaw):
+                    self.frame_joints={};self.frame_constant_buffers={};self.frame_constant_pointers=set()
+                    try:return super().draw_scene(scene,yaw)
+                    finally:
+                        self.frame_joints={};self.frame_constant_buffers=None;self.frame_constant_pointers=set()
+
+                def joint_resource(self,scene,mesh,view):
+                    import numpy as np
+                    if not self.reuse_joint_palette:return super().joint_resource(scene,mesh,view)
+                    # One immutable palette/view payload per submitted frame.
+                    # Current/previous stance are identical in this static app.
+                    key=(id(scene),('explicit',id(mesh['joint_matrices']))if 'joint_matrices'in mesh else
+                        ('palette',tuple(mesh['palette'])),np.asarray(view).tobytes())
+                    if key not in self.frame_joints:self.frame_joints[key]=super().joint_resource(scene,mesh,view)
+                    return self.frame_joints[key]
+
                 def context(self,index,types,*arguments,result=None):
                     key=(index,tuple(types),result)
                     if key not in self.context_functions:
@@ -190,6 +207,15 @@ class DemoEngine:
                     return self.context_functions[key](self.probe.context,*arguments)
 
                 def buffer(self,array,bind):
+                    if bind==4 and self.reuse_frame_constants and self.frame_constant_buffers is not None:
+                        payload=array.tobytes()
+                        if payload not in self.frame_constant_buffers:
+                            pointer=super().buffer(array,bind)
+                            self.frame_constant_buffers[payload]=pointer;self.frame_constant_pointers.add(pointer.value)
+                            # Exactly one frame-owned reference; callers may
+                            # request the same payload as temporary many times.
+                            super().temporary(pointer)
+                        return self.frame_constant_buffers[payload]
                     if bind not in(1,2):return super().buffer(array,bind)
                     key=(bind,array.dtype.str,array.shape,hashlib.sha256(array.tobytes()).digest())
                     if key in self.geometry_buffers:
@@ -202,6 +228,7 @@ class DemoEngine:
                     return pointer
 
                 def temporary(self,resource):
+                    if resource.value in self.frame_constant_pointers:return resource
                     if resource.value in self.geometry_pointers:return resource
                     return super().temporary(resource)
 
@@ -211,9 +238,9 @@ class DemoEngine:
                     return super().buffer(array,bind)
 
                 def camera_inputs(self,scene,yaw):
-                    if (self.zoom,self.pitch,self.pan)==(1,0,0):return super().camera_inputs(scene,yaw)
-                    # A real orbit camera over the same source scene. Only
-                    # presentation changes; native materials/rig stay intact.
+                    # Native try-on readback uses reverse orthographic depth,
+                    # near .01/far 10. Keep its depth convention and the orbit
+                    # framing, rather than the research renderer's forward Z.
                     import numpy as np
                     low,high=scene.bounds.min(axis=0),scene.bounds.max(axis=0)
                     center=(low+high)/2;focus=center.copy()
@@ -222,10 +249,13 @@ class DemoEngine:
                     ry=np.array(((c,0,s),(0,1,0),(-s,0,c)));rx=np.array(((1,0,0),(0,cp,-sp),(0,sp,cp)))
                     view=np.eye(4);view[:3,:3]=rx@ry;view[:3,3]=-view[:3,:3]@focus+(0,0,-3)
                     radius=max((high[1]-low[1])/2,np.max(high-low)/2*self.height/self.width)*1.12/self.zoom
-                    projection=np.eye(4);projection[0,0]=self.height/self.width/radius;projection[1,1]=1/radius;projection[2,2]=-1/20
+                    projection=np.eye(4);projection[0,0]=self.height/self.width/radius;projection[1,1]=1/radius
+                    projection[2,2]=1/(10-.01);projection[2,3]=10/(10-.01)
                     return camera_payload(view,projection),view
 
                 def draw_scene_extras(self,scene,camera,view):
+                    self.post_camera=(camera,view)
+                    if self.material_glow_enabled:self.prepare_material_glow(scene)
                     self.last_effect_draws=[]
                     if not getattr(scene,'effect_samples',()):return
                     from effect_renderer import EffectRenderer
@@ -242,14 +272,19 @@ class DemoEngine:
                     if key not in self.cache:self.cache[key]=equipment_pass(scene.packages[mesh['shader_path']],keys,count,role,alpha_clip=clip)
                     return self.cache[key]
 
+                def prepare_material_glow(self,scene):
+                    if self.material_glow is None:
+                        from material_glow import MaterialGlow
+                        self.material_glow=MaterialGlow(self,scene.pack)
+                    return self.material_glow
+
                 def draw_mesh(self,scene,mesh,shared,view):
                     if self.material_glow_enabled and mesh['plan'].get('role')=='gbuffer_color':
                         import numpy as np
                         instance=np.frombuffer(shared['g_InstanceParameter'],dtype='<f4').copy().reshape(11,4)
-                        # Native PS already adds authored emission to RGB.
-                        # EnvParameter.w selects its emission/color ratio for
-                        # the offscreen alpha channel consumed by preview bloom.
-                        instance[1,3]=1
+                        # CN43eb93 -> 43ebb2 -> 43f1e4: native UI emission
+                        # input, not an output brightness calibration.
+                        instance[1,3]=self.prepare_material_glow(scene).emission_gain
                         shared={**shared,'g_InstanceParameter':instance.tobytes()}
                     if any(value['name']=='g_LightDirection'for stage in('vertex','pixel')for value in mesh['plan'][stage]['constants']):
                         from legacy_lighting import source_direction,camera_direction
@@ -275,7 +310,7 @@ class DemoEngine:
             from character_cache import CharacterCache
             self.characters=CharacterCache(self.pack,self.store,self.hair)
             from gpu_selection import preferred_adapter
-            self.renderer=PreviewRenderer(640,840,preferred_adapter())
+            self.renderer=PreviewRenderer(640,840,preferred_adapter(),reverse_depth=True)
             from presets import PresetLibrary
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
@@ -382,7 +417,7 @@ class DemoEngine:
                 samples=accepted;pending=tuple(sorted(set(pending)))
             scene.effect_samples.extend({**s,'effect_path':path}for s in samples)
             scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':frame,
-                'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'sampled-normal-scheduler-stable-probability-zero-random-offsets',
+                  'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'sampled-normal-scheduler-stable-probability-source-packed-UV-random',
                 'particles_rendered':bool(samples),'effect_complete':False})
             if outfit.effect_bind_points.sha256:
                 scene.effect_summaries[-1]['attachment_source']={'path':outfit.effect_bind_points.path,'sha256':outfit.effect_bind_points.sha256}

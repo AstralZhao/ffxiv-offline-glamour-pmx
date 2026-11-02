@@ -30,10 +30,13 @@ def disc_geometry(data,time):
     return geometry(source_parameters(data,time))
 
 
-def uv_matrix(node,time,*,model=False):
+def uv_matrix(node,time,*,model=False,random_state=None):
     d=nested(node)
     if number(d,'CUvT')not in(0,1):raise UnsupportedEffect('UV计算类型')
     scale=axes(d.get('Scl'),time,1,2);offset=axes(d.get('Scr'),time,0,2);angle=curve(d.get('Rot'),time)
+    if random_state is not None:
+        from effect_uv import values
+        scale,offset,angle=values(node,time,random_state)
     c,s=np.cos(angle),np.sin(angle)
     # CN 3e4db0 builds the model's two original PS rows from centered
     # VDrw UVs. 3e4a90 instead emits shape corner UVs after rotating them.
@@ -62,7 +65,7 @@ def sample(effect,node,time,parent,parent_color):
     elif kind==12:geometry=disc_geometry(d,time)
     else:
         geometry={'positions':np.array(((-.5,-.5,0),(.5,-.5,0),(.5,.5,0),(-.5,.5,0))),
-            'colors':np.ones((4,4)),'base_uv':np.tile(np.array(((0,0),(1,0),(1,1),(0,1)))[:,None,:],(1,4,1)),
+            'colors':np.ones((4,4)),'base_uv':np.tile(np.array(((0,0),(1,0),(1,1),(0,1)),dtype='<f4')[:,None,:],(1,4,1)),
             'indices':np.asarray((0,1,2,0,2,3),dtype='<u4')}
     frame=number(d,'RBDT')
     if frame not in(0,1,2,4,5,6,9,10):raise UnsupportedEffect('粒子朝向类型 '+str(frame))
