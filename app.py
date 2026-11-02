@@ -137,11 +137,14 @@ class DemoEngine:
                 zoom=1.;pitch=0.;pan=0.
                 reuse_joint_palette=True
                 reuse_frame_constants=True
+                reuse_character_layer=True
                 def __init__(self,*args,**kwargs):
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
                     self.frame_constant_buffers=None;self.frame_constant_pointers=set()
                     self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True
                     super().__init__(*args,**kwargs)
+                    from character_layer import CharacterLayer
+                    self.character_layer=CharacterLayer(self);self.capture_character_layer=False
                     if native_hwnd:
                         from native_surface import NativeSurface
                         self.native_surface=NativeSurface(self,native_hwnd)
@@ -168,6 +171,7 @@ class DemoEngine:
                     width=max(64,int(width));height=max(64,int(height));scale=min(1.,2048/max(width,height))
                     width=max(64,round(width*scale));height=max(64,round(height*scale))
                     if(width,height)==(self.width,self.height):return
+                    self.character_layer.invalidate()
                     self.context(110,[])
                     # Drop the SRV first so the previous FP16 target can die.
                     self.native_surface.release(self.native_surface.source_srv)
@@ -182,13 +186,42 @@ class DemoEngine:
                 def close(self):
                     if self.native_surface:self.native_surface.close()
                     if self.material_glow:self.material_glow.close()
+                    if hasattr(self,'character_layer'):self.character_layer.close()
                     return super().close()
 
                 def draw_scene(self,scene,yaw):
                     self.frame_joints={};self.frame_constant_buffers={};self.frame_constant_pointers=set()
-                    try:return super().draw_scene(scene,yaw)
+                    try:
+                        camera,view=self.camera_inputs(scene,yaw)
+                        key=self.character_layer_key(camera,view)
+                        if self.reuse_character_layer and self.character_layer.matches(scene,key):
+                            return self.draw_character_layer(scene,camera,view)
+                        # Failed base draws must not leave a key that could
+                        # reuse Gbuffers partially overwritten by that draw.
+                        self.character_layer.invalidate();self.capture_character_layer=self.reuse_character_layer
+                        return super().draw_scene(scene,yaw)
                     finally:
+                        self.capture_character_layer=False
                         self.frame_joints={};self.frame_constant_buffers=None;self.frame_constant_pointers=set()
+
+                def character_layer_key(self,camera,view):
+                    return (camera.tobytes(),view.tobytes(),self.width,self.height,self.clear_depth,
+                        self.lighting,self.native_fringe_states,self.material_glow_enabled)
+
+                def draw_character_layer(self,scene,camera,view):
+                    from d3d11_debug import P,U,Viewport
+                    import ctypes as c
+                    try:
+                        self.character_layer.restore();self.last_pass_counts={'character_layer_reused':1}
+                        self.last_gbuffer_reads={};self.frame_start_readbacks=self.readback_count
+                        self.context(33,[U,P,P],1,c.byref(self.rtv),self.dsv)
+                        self.context(44,[U,P],1,c.byref(Viewport(0,0,self.width,self.height,0,1)))
+                        self.draw_scene_extras(scene,camera,view)
+                        return self.finish_scene_frame()
+                    finally:
+                        self.context(110,[])
+                        for resource in reversed(self.transient):self.probe.release(resource)
+                        self.transient.clear()
 
                 def joint_resource(self,scene,mesh,view):
                     import numpy as np
@@ -254,6 +287,8 @@ class DemoEngine:
                     return camera_payload(view,projection),view
 
                 def draw_scene_extras(self,scene,camera,view):
+                    if self.capture_character_layer:
+                        self.character_layer.capture(scene,self.character_layer_key(camera,view))
                     self.post_camera=(camera,view)
                     if self.material_glow_enabled:self.prepare_material_glow(scene)
                     self.last_effect_draws=[]
