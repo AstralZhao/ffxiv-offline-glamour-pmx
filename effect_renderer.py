@@ -77,6 +77,12 @@ def shader_settings(sample):
     return settings
 
 
+def document_parameters(sample,width,height):
+    result=np.zeros(20,dtype='<f4');result[:4]=(width,height,1,sample['soft_range']if sample['soft']else 0)
+    result[4:6]=(width,height);result[8:12]=1
+    return result
+
+
 def tree_basis(matrix,camera):
     # CN3e3d68..3e3ff4 reads the ALREADY composed matrix's Y axis.
     # It replaces its orientation with these three independently normalized
@@ -284,7 +290,7 @@ class EffectRenderer:
             r.context(18,[U,U,P,P,P],0,1,c.byref(vb),c.byref(U(dtype.itemsize)),c.byref(U(0)))
             r.context(19,[P,U,U],ib,42,0)
             r.context(11,[P,P,U],plan['vertex'][2],None,0);r.context(9,[P,P,U],plan['pixel'][2],None,0)
-            doc=np.zeros(20,dtype='<f4');doc[:4]=(r.width,r.height,1,.1);doc[4:6]=(r.width,r.height);doc[8:12]=1
+            doc=document_parameters(sample,r.width,r.height)
             uv_transform=np.tile(np.array(((1,0,0,0),(0,1,0,0)),dtype='<f4'),(4,1))
             for i,value in enumerate(sample['uv_matrices']):uv_transform[i*2:i*2+2]=value
             specific=np.zeros((6,4),dtype='<f4');fresnel=sample.get('fresnel_type',0)

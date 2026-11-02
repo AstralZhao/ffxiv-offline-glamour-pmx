@@ -1,6 +1,6 @@
 """Source AVFX model/disc/quad geometry and material channels at fixed time."""
 import numpy as np
-from effect_sample import fields,nested,number,curve,axes,color,transform,stationary,particle_fields,UnsupportedEffect
+from effect_sample import fields,nested,number,curve,axes,color,transform,stationary,particle_fields,soft_particle_range,UnsupportedEffect
 from vfx import records
 
 
@@ -105,7 +105,8 @@ def sample(effect,node,time,parent,parent_color):
     if mode not in range(13):raise UnsupportedEffect('混合模式 '+str(mode))
     return {**geometry,'kind':'powder'if kind==1 else'model'if kind==5 else'disc'if kind==12 else'quad','frame':frame,'local':transform(d,time),
         'parent':parent,'local_scale':axes(d.get('Scl'),time,1),'color':color(d.get('Col'),time)*parent_color,'textures':textures,'uv_matrices':matrices,
-        'uv_count':uv_count,'uv_compute':uv_compute,'blend':mode,'soft':bool(number(d,'DsSp')),'depth_test':bool(number(d,'DsDt',1)),
+        'uv_count':uv_count,'uv_compute':uv_compute,'blend':mode,'soft':bool(number(d,'DsSp')),
+        'soft_range':soft_particle_range(effect)if number(d,'DsSp')else None,'depth_test':bool(number(d,'DsDt',1)),
         'depth_write':bool(number(d,'DsDw')),'cull':number(d,'CulT'),'depth_offset':number(d,'DpOf',0.,real=True),
         'priority':number(d,'DwPr'),'texture':textures.get('TC1',{}).get('path'),
         'filter':textures.get('TC1',{}).get('filter',1),'address':textures.get('TC1',{}).get('address',(1,1))}

@@ -44,6 +44,18 @@ def number(data,name,default=0,*,real=False):
     return integer(node)
 
 
+def soft_particle_range(effect):
+    # CN3ae6e2 stores root SPFR at +0x50. 3ba576..3ba621 selects
+    # the positive runtime override, otherwise this exact source value;
+    # 3835c7 writes it to DocumentParameters.ScreenSize.w. The independent
+    # wardrobe has no runtime override, so never substitute a shared .1.
+    data=fields(n for n in effect.source_records if n.tag=='SPFR')
+    if 'SPFR'not in data:raise UnsupportedEffect('缺少软粒子淡出距离来源')
+    value=number(data,'SPFR',real=True)
+    if value<=0:raise UnsupportedEffect('非正软粒子淡出距离尚未审阅')
+    return value
+
+
 def curve(node,time,default=0,*,rgb=False):
     if node is None:return np.full(3,default)if rgb else default
     source=nested(node);raw=source.get('Keys')
@@ -251,7 +263,8 @@ def quad(effect,node,time,parent,parent_color):
         'color':color(data.get('Col'),time)*parent_color,'texture':effect.textures[index],
         'color_to_alpha':bool(number(texture,'bC2A')),'filter':number(texture,'TFT'),
         'address':(number(texture,'TBUT'),number(texture,'TBVT')),
-        'blend':mode,'soft':bool(number(data,'DsSp')),'depth_test':bool(number(data,'DsDt',1)),'depth_write':bool(number(data,'DsDw')),
+        'blend':mode,'soft':bool(number(data,'DsSp')),'soft_range':soft_particle_range(effect)if number(data,'DsSp')else None,
+        'depth_test':bool(number(data,'DsDt',1)),'depth_write':bool(number(data,'DsDw')),
         'cull':number(data,'CulT'),'depth_offset':number(data,'DpOf',0.,real=True)}
 
 
