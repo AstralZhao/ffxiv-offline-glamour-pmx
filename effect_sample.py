@@ -160,31 +160,28 @@ def stationary(data,time):
         if curve(data.get(name),time)!=0:raise UnsupportedEffect('非零速度或重力')
 
 
-# Only names explicitly documented by the pinned BinderProperties reader.
-# Positional targets (above head/front of character/etc.) are not guessed.
-BONES={1:'j_kao',28:'j_sebo_c',29:'n_root',30:'n_hara',31:'j_kosi',32:'j_te_r',33:'j_te_l',71:'n_root'}
-
-
-def binding(node,bones):
+def binding(node,bones,bind_points=None):
     data=nested(node)
     if number(data,'BnVr')!=0 or number(data,'RoTp')!=0:raise UnsupportedEffect('非固定点绑定')
     source=nested(data.get('PrpS'))
     if number(source,'BPT')!=0 or number(source,'bRng'):raise UnsupportedEffect('目标或环形绑定')
-    mode=number(source,'BPTP');name=None
+    mode=number(source,'BPTP')
     if mode==3:
         raw=source.get('Name');text=raw.data.split(b'\0',1)[0].decode('utf8')if raw else''
-        name=text if text and text!='null'else BONES.get(number(source,'BPID',-1))
-        if name not in bones:raise UnsupportedEffect('未接入绑定点 '+str(name or number(source,'BPID',-1)))
-        result=np.array(bones[name],copy=True)
+        if text and text!='null':
+            if text not in bones:raise UnsupportedEffect('未接入绑定骨骼 '+text)
+            result=np.array(bones[text],copy=True)
+        else:
+            if bind_points is None:raise UnsupportedEffect('缺少角色 EID 附着点来源')
+            result=bind_points.resolve(number(source,'BPID',-1),bones)
     elif mode==0:
         if 'n_root'not in bones:raise UnsupportedEffect('缺少角色原点')
         result=np.array(bones['n_root'],copy=True)
     else:raise UnsupportedEffect('非骨架绑定位置')
-    if number(data,'bStG'):
-        # Source requests global initial direction: the target supplies the
-        # attachment position, not the chest bone's authored local axes.
-        if 'n_root'not in bones:raise UnsupportedEffect('缺少全局方向根节点')
-        result[:3,:3]=bones['n_root'][:3,:3]
+    # bStG belongs to the native linear/spline update, not PointBinder.
+    # CN3c00d0 separates attachment scale; bFTO controls its orientation.
+    if not number(data,'bFTO'):
+        result[:3,:3]=np.diag(np.linalg.norm(result[:3,:3],axis=0))
     offset=axes(source.get('Pos'),0)
     result[:3,3]+=(result@np.r_[offset,0])[:3]
     return result
@@ -235,7 +232,7 @@ def quad(effect,node,time,parent,parent_color):
         'cull':number(data,'CulT'),'depth_offset':number(data,'DpOf',0.,real=True)}
 
 
-def prepare(effect,bones,frame=30.):
+def prepare(effect,bones,frame=30.,*,bind_points=None):
     """Normal equipment scheduler, deterministic frozen source sample.
 
     Independent preview policy: scheduler0, no state-change triggers, no
@@ -342,7 +339,7 @@ def prepare(effect,bones,frame=30.):
                 if time<0 or(end>=0 and timeline_time>=end):continue
                 try:
                     if number(item,'EfNo',-1)>=0:raise UnsupportedEffect('后处理效果器')
-                    bound=binding(get('Bind',number(item,'BdNo',-1)),bones)
+                    bound=binding(get('Bind',number(item,'BdNo',-1)),bones,bind_points)
                     emit(number(item,'EmNo',-1),time,bound,bound,np.ones(4))
                 except UnsupportedEffect as error:pending.append(str(error))
     except UnsupportedEffect as error:pending.append(str(error))

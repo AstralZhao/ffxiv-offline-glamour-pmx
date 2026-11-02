@@ -43,12 +43,18 @@ def disc_geometry(data,time):
     return {'positions':positions,'colors':colors,'indices':indices,'base_uv':np.tile(uv[:,None,:],(1,4,1))}
 
 
-def uv_matrix(node,time):
+def uv_matrix(node,time,*,model=False):
     d=nested(node)
     if number(d,'CUvT'):raise UnsupportedEffect('屏幕坐标UV')
     scale=axes(d.get('Scl'),time,1,2);offset=axes(d.get('Scr'),time,0,2);angle=curve(d.get('Rot'),time)
-    c,s=np.cos(angle),np.sin(angle);rot=np.array(((c,-s),(s,c)))
-    matrix=rot@np.diag(scale);translation=rot@(offset-.5)+.5
+    c,s=np.cos(angle),np.sin(angle)
+    # CN 3e4db0 builds the model's two original PS rows from centered
+    # VDrw UVs. 3e4a90 instead emits shape corner UVs after rotating them.
+    # Scroll is added AFTER rotation, never rotated with the coordinates.
+    if model:
+        matrix=np.array(((c,s),(-s,c)))@np.diag(scale);translation=offset+.5
+    else:
+        matrix=np.diag(scale)@np.array(((c,-s),(s,c)));translation=offset+.5-matrix@np.full(2,.5)
     return np.column_stack((matrix,np.zeros(2),translation))
 
 
@@ -70,7 +76,7 @@ def sample(effect,node,time,parent,parent_color):
     elif kind==8 and frame==1:geometry['positions']=geometry['positions'][:,(0,2,1)]
     uv_nodes=[r for r in records(node.data)if r.tag=='UvSt'];uv_count=number(d,'UvSN',len(uv_nodes))
     if not 0<=uv_count<=4 or uv_count!=len(uv_nodes):raise UnsupportedEffect('UV通道数量')
-    matrices=[uv_matrix(uv,time)for uv in uv_nodes];textures={}
+    matrices=[uv_matrix(uv,time,model=kind==5)for uv in uv_nodes];textures={}
     for name in('TC1','TC2','TC3','TC4','TD'):
         channel=nested(d.get(name))
         if not number(channel,'bEna'):continue

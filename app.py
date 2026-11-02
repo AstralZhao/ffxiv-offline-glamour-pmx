@@ -366,8 +366,11 @@ class DemoEngine:
         bones={name:worlds[index]for name,index in outfit.names.items()}
         sources={(mesh['slot'],mesh['equipment_effect_source'].path):mesh['equipment_effect_source']
             for mesh in scene.meshes if mesh.get('equipment_effect_source')is not None}
+        if sources and not hasattr(outfit,'effect_bind_points'):
+            from effect_binding import EffectBindPoints
+            outfit.effect_bind_points=EffectBindPoints(scene.pack,outfit.base.pose['identity']['race_sex_id'])
         for (slot,path),effect in sources.items():
-            samples,pending=prepare(effect,bones,frame)
+            samples,pending=prepare(effect,bones,frame,bind_points=outfit.effect_bind_points)
             if samples:
                 from effect_renderer import EffectRenderer
                 if not hasattr(self.renderer,'effect_renderer'):self.renderer.effect_renderer=EffectRenderer(self.renderer,scene.pack)
@@ -381,6 +384,8 @@ class DemoEngine:
             scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':frame,
                 'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'sampled-normal-scheduler-stable-probability-zero-random-offsets',
                 'particles_rendered':bool(samples),'effect_complete':False})
+            if outfit.effect_bind_points.sha256:
+                scene.effect_summaries[-1]['attachment_source']={'path':outfit.effect_bind_points.path,'sha256':outfit.effect_bind_points.sha256}
             if effect.missing:scene.effect_notices.append('装备附加特效文件在本机缺失。')
             elif samples:
                 scene.effect_notices.append('装备特效：'+('部分粒子尚未接入。'if pending else'尚未完成完整特效还原。'))
