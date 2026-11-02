@@ -77,6 +77,18 @@ def shader_settings(sample):
     return settings
 
 
+def tree_basis(matrix,camera):
+    # CN3e3d68..3e3ff4 reads the ALREADY composed matrix's Y axis.
+    # It replaces its orientation with these three independently normalized
+    # axes; the authored rotation is not multiplied into the result again.
+    matrix=np.asarray(matrix,dtype='<f4');up=matrix[:3,1].copy()
+    delta=matrix[:3,3]-np.asarray(camera,dtype='<f4');right=np.cross(delta,up)
+    forward=np.cross(right,up)
+    vectors=np.column_stack((right,up,forward));lengths=np.linalg.norm(vectors,axis=0)
+    if not np.isfinite(lengths).all()or np.any(lengths<1e-8):raise UnsupportedEffect('树形朝向退化')
+    return vectors/lengths
+
+
 def world_matrix(sample,view):
     parent,local=sample['parent'],sample['local'];matrix=parent@local
     if sample['frame']in(4,5,6):
@@ -87,16 +99,9 @@ def world_matrix(sample,view):
             facing/=length;up=np.array((0.,1.,0.));basis=np.column_stack((np.cross(up,facing),up,facing))
         matrix[:3,:3]=basis@np.diag(np.linalg.norm(parent[:3,:3],axis=0))@local[:3,:3]
     elif sample['frame']==9:
-        # CN3e3d68: preserve the authored attachment up axis. Right is the
-        # normalized cross of (particle-camera) with that axis; reconstruct
-        # the third axis, rather than assuming a world-Y billboard.
-        up=parent[:3,1].copy();up_length=np.linalg.norm(up)
-        delta=matrix[:3,3]-np.linalg.inv(view)[:3,3];right=np.cross(delta,up)
-        right_length=np.linalg.norm(right)
-        if up_length<1e-8 or right_length<1e-8:raise UnsupportedEffect('树形朝向退化')
-        up/=up_length;right/=right_length;forward=np.cross(right,up);forward/=np.linalg.norm(forward)
-        basis=np.column_stack((right,up,forward))
-        matrix[:3,:3]=basis@np.diag(np.linalg.norm(parent[:3,:3],axis=0))@local[:3,:3]
+        basis=tree_basis(matrix,np.linalg.inv(view)[:3,3])
+        scales=np.linalg.norm(parent[:3,:3],axis=0)*sample['local_scale']
+        matrix[:3,:3]=basis*scales
     return matrix
 
 

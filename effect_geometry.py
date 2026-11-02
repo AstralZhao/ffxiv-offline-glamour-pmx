@@ -104,7 +104,7 @@ def sample(effect,node,time,parent,parent_color):
     mode=number(d,'RMT')
     if mode not in range(13):raise UnsupportedEffect('混合模式 '+str(mode))
     return {**geometry,'kind':'powder'if kind==1 else'model'if kind==5 else'disc'if kind==12 else'quad','frame':frame,'local':transform(d,time),
-        'parent':parent,'color':color(d.get('Col'),time)*parent_color,'textures':textures,'uv_matrices':matrices,
+        'parent':parent,'local_scale':axes(d.get('Scl'),time,1),'color':color(d.get('Col'),time)*parent_color,'textures':textures,'uv_matrices':matrices,
         'uv_count':uv_count,'uv_compute':uv_compute,'blend':mode,'soft':bool(number(d,'DsSp')),'depth_test':bool(number(d,'DsDt',1)),
         'depth_write':bool(number(d,'DsDw')),'cull':number(d,'CulT'),'depth_offset':number(d,'DpOf',0.,real=True),
         'priority':number(d,'DwPr'),'texture':textures.get('TC1',{}).get('path'),
