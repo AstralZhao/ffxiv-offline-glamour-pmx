@@ -1,5 +1,6 @@
 """Source AVFX model/disc/quad geometry and material channels at fixed time."""
 import numpy as np
+from functools import lru_cache
 from effect_sample import fields,nested,number,curve,axes,color,rotation,transform,stationary,particle_fields,soft_particle_range,UnsupportedEffect
 from vfx import records
 
@@ -30,11 +31,13 @@ def disc_geometry(data,time):
     return geometry(source_parameters(data,time))
 
 
+@lru_cache(maxsize=8192)
 def uv_matrix(node,time,*,model=False,random_state=None):
     d=nested(node)
     if number(d,'CUvT')not in(0,1):raise UnsupportedEffect('UV计算类型')
-    scale=axes(d.get('Scl'),time,1,2);offset=axes(d.get('Scr'),time,0,2);angle=curve(d.get('Rot'),time)
-    if random_state is not None:
+    if random_state is None:
+        scale=axes(d.get('Scl'),time,1,2);offset=axes(d.get('Scr'),time,0,2);angle=curve(d.get('Rot'),time)
+    else:
         from effect_uv import values
         scale,offset,angle=values(node,time,random_state)
     c,s=np.cos(angle),np.sin(angle)
@@ -45,7 +48,8 @@ def uv_matrix(node,time,*,model=False,random_state=None):
         matrix=np.array(((c,s),(-s,c)))@np.diag(scale);translation=offset+.5
     else:
         matrix=np.diag(scale)@np.array(((c,-s),(s,c)));translation=offset+.5-matrix@np.full(2,.5)
-    return np.column_stack((matrix,np.zeros(2),translation))
+    result=np.column_stack((matrix,np.zeros(2),translation));result.flags.writeable=False
+    return result
 
 
 def sample(effect,node,time,parent,parent_color):

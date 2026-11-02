@@ -31,7 +31,7 @@ def has_random(node):
     return False
 
 
-@lru_cache(maxsize=128)
+@lru_cache(maxsize=4096)
 def initialize(node,seed):
     from effect_simple import SourceRandom
     random=SourceRandom(seed);result=[]

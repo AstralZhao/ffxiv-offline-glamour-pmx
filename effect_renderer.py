@@ -42,6 +42,15 @@ def quantize_vertex(value,*,color=False):
     return ((np.trunc(packed).astype('<i8')+32768)%65536-32768).astype('<i4')
 
 
+def shape_extra(power,flags):
+    # CN3e8390 stores the low byte of trunc(float32(power)*255).
+    # The matched native draw verifies R8G8B8A8_UNORM interpretation.
+    scaled=np.float32(power)*np.float32(255)
+    if not np.isfinite(scaled)or abs(scaled)>2**31-1:raise ValueError('Apricot distortion byte outside native integer range')
+    packed=int(np.trunc(scaled))&255
+    return np.array((packed/255,*flags[:3]),dtype='<f4')
+
+
 def shape_uv_coordinates(value,matrix):
     # Native 3eab8c centres each shape UV before applying its two original
     # rows. Keep that float32 operation order, including identity matrices.
@@ -173,6 +182,49 @@ class EffectRenderer:
         self.uploads=[];self.upload_cursor=0;self.frame_constants={};self.reuse_uploads=True;self.batch_draws=True
         self.upload_bytes=0;self.upload_budget=64*1024*1024
         self.geometry_cache=OrderedDict();self.geometry_bytes=0;self.reuse_geometry=True
+        self.parameter_cache=OrderedDict();self.parameter_bytes=0;self.reuse_parameters=True
+
+    def constant_inputs(self,sample,plan,matrix,camera_world,width,height,camera_constants):
+        """Only evaluate the inputs actually read by the original programs."""
+        required={v['name']for stage in('vertex','pixel')for v in plan[stage][1]['constants']}
+        if not self.reuse_parameters:
+            required|={'g_PS_Parameters','g_PS_UvTransform','g_PS_InstanceExtraParameters',
+                'g_PS_DocumentParameters','g_ToneMapParameter','g_PS_DofCocParam',
+                'g_PS_ModelSpecificParameters','g_VS_PerInstanceParameters'}
+        fresnel=sample.get('fresnel_type',0)
+        if fresnel not in(0,1):raise NotImplementedError('Unresolved model Fresnel axis')
+        key=(id(sample),id(plan),width,height)
+        cached=self.parameter_cache.get(key)if self.reuse_parameters else None
+        if cached is not None and cached[0]is sample:
+            static=cached[1];self.parameter_cache.move_to_end(key)
+        else:
+            static={}
+            if 'g_PS_Parameters'in required:static['g_PS_Parameters']=struct.pack('<4f',sample['textures'].get('TD',{}).get('power',0),0,0,0)
+            if 'g_PS_UvTransform'in required:
+                uv=np.tile(np.array(((1,0,0,0),(0,1,0,0)),dtype='<f4'),(4,1))
+                for i,value in enumerate(sample['uv_matrices']):uv[i*2:i*2+2]=value
+                static['g_PS_UvTransform']=uv.tobytes()
+            if 'g_PS_InstanceExtraParameters'in required:
+                first=sample['textures'].get('TC1',{})
+                static['g_PS_InstanceExtraParameters']=struct.pack('<8f',int(fresnel==1),first.get('color_mode',1),first.get('alpha_mode',1),0,sample['blend'],0,0,0)
+            if 'g_PS_DocumentParameters'in required:static['g_PS_DocumentParameters']=document_parameters(sample,width,height).tobytes()
+            if 'g_ToneMapParameter'in required:static['g_ToneMapParameter']=struct.pack('<4f',0,0,0,1)
+            if 'g_PS_DofCocParam'in required:static['g_PS_DofCocParam']=bytes(16)
+            size=sum(map(len,static.values()))
+            if self.reuse_parameters and size<=256*1024:
+                if key in self.parameter_cache:self.parameter_bytes-=self.parameter_cache.pop(key)[2]
+                self.parameter_cache[key]=(sample,static,size);self.parameter_bytes+=size
+                while len(self.parameter_cache)>128 or self.parameter_bytes>256*1024:
+                    _,entry=self.parameter_cache.popitem(last=False);self.parameter_bytes-=entry[2]
+        result={**camera_constants,**static}
+        if 'g_PS_ModelSpecificParameters'in required:
+            specific=np.zeros((6,4),dtype='<f4');specific[1,:3]=camera_world[:3,3];specific[1,3]=sample.get('fresnel_power',1)
+            specific[2]=sample.get('fresnel_begin',np.ones(4))if fresnel else 1
+            specific[3]=sample.get('fresnel_end',np.ones(4))if fresnel else 1
+            result['g_PS_ModelSpecificParameters']=specific.tobytes()
+        if 'g_VS_PerInstanceParameters'in required:
+            result['g_VS_PerInstanceParameters']=np.r_[matrix.T.flatten(),[sample['depth_offset'],0,0,0],sample['color']].astype('<f4').tobytes()
+        return result
 
     def upload(self,array,bind):
         """Reuse owned default buffers; D3D orders updates before each draw."""
@@ -394,7 +446,7 @@ class EffectRenderer:
                     vertices[name]=quantize_vertex(value,color=name=='color')
                 if is_model:
                     vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
-                elif not is_powder:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
+                elif not is_powder:vertices['extra']=shape_extra(power,distortion.get('distort_uv',[False]*4))
                 if cacheable and vertices.nbytes<=8*1024*1024:
                     vertices.flags.writeable=False
                     if key in self.geometry_cache:self.geometry_bytes-=self.geometry_cache.pop(key)[1].nbytes
@@ -402,22 +454,7 @@ class EffectRenderer:
                     while len(self.geometry_cache)>128 or self.geometry_bytes>8*1024*1024:
                         _,entry=self.geometry_cache.popitem(last=False);self.geometry_bytes-=entry[1].nbytes
             indices=sample['indices']
-            doc=document_parameters(sample,r.width,r.height)
-            uv_transform=np.tile(np.array(((1,0,0,0),(0,1,0,0)),dtype='<f4'),(4,1))
-            for i,value in enumerate(sample['uv_matrices']):uv_transform[i*2:i*2+2]=value
-            specific=np.zeros((6,4),dtype='<f4');fresnel=sample.get('fresnel_type',0)
-            if fresnel not in(0,1):raise NotImplementedError('Unresolved model Fresnel axis')
-            specific[1,:3]=camera_world[:3,3];specific[1,3]=sample.get('fresnel_power',1)
-            specific[2]=sample.get('fresnel_begin',np.ones(4))if fresnel else 1
-            specific[3]=sample.get('fresnel_end',np.ones(4))if fresnel else 1
-            per_instance=np.r_[matrix.T.flatten(),[sample['depth_offset'],0,0,0],sample['color']].astype('<f4')
-            first=sample['textures'].get('TC1',{});calculate_color=first.get('color_mode',1);calculate_alpha=first.get('alpha_mode',1)
-            constants={**camera_constants,
-                'g_VS_PerInstanceParameters':per_instance.tobytes(),'g_PS_Parameters':struct.pack('<4f',power,0,0,0),
-                'g_PS_UvTransform':uv_transform.tobytes(),'g_PS_ModelSpecificParameters':specific.tobytes(),
-                'g_PS_InstanceExtraParameters':struct.pack('<8f',int(fresnel==1),calculate_color,calculate_alpha,0,sample['blend'],0,0,0),
-                'g_PS_DocumentParameters':doc.tobytes(),'g_ToneMapParameter':struct.pack('<4f',0,0,0,1),
-                'g_PS_DofCocParam':bytes(16)}
+            constants=self.constant_inputs(sample,plan,matrix,camera_world,r.width,r.height,camera_constants)
             constant_bindings=[]
             for stage,setter in(('vertex',7),('pixel',16)):
                 for entry in plan[stage][1]['constants']:

@@ -1,5 +1,6 @@
 """Original AVFX emission vertices and normals for model emitters."""
 import math
+from functools import lru_cache
 
 import numpy as np
 
@@ -8,7 +9,12 @@ from effect_simple import emission_points,SourceRandom
 
 
 def model_injection(effect,data,time,ordinal,identity):
-    source=nested(data.get('Data'));method=number(source,'GeMT')
+    return model_birth(effect,data.get('Data'),time,ordinal,identity)
+
+
+@lru_cache(maxsize=4096)
+def model_birth(effect,node,time,ordinal,identity):
+    source=nested(node);method=number(source,'GeMT')
     if method not in(0,1,2,3,4,5,6,7):raise UnsupportedEffect('模型发射方式 '+str(method))
     positions,normals=emission_points(effect,number(source,'MdNo',-1))
     # CN3db820 maps 0/4 and 1/5 to radial directions, 2/6 and 3/7
@@ -25,11 +31,17 @@ def model_injection(effect,data,time,ordinal,identity):
     length=np.linalg.norm(direction)
     if not math.isfinite(length)or length<1e-8:raise UnsupportedEffect('模型发射零方向')
     direction/=length;speed=curve(source.get('IjS'),time)
-    return position,direction*speed
+    velocity=direction*speed;position.flags.writeable=False;velocity.flags.writeable=False
+    return position,velocity
 
 
 def sphere_injection(effect,data,time,ordinal,identity):
-    source=nested(data.get('Data'));method=number(source,'GeMT');u=number(source,'DivX');v=number(source,'DivY')
+    return sphere_birth(effect,data.get('Data'),time,ordinal,identity)
+
+
+@lru_cache(maxsize=4096)
+def sphere_birth(effect,node,time,ordinal,identity):
+    source=nested(node);method=number(source,'GeMT');u=number(source,'DivX');v=number(source,'DivY')
     if method not in(2,3,6,7):raise UnsupportedEffect('球形径向目标发射方式 '+str(method))
     if not 1<=u<=127 or not 2<=v<=127:raise UnsupportedEffect('球形发射分段')
     # CN3dda40 defines a source grid, Rx(latitude) then Ry(longitude),
@@ -43,4 +55,6 @@ def sphere_injection(effect,data,time,ordinal,identity):
     if any(curve(source.get('An'+a+'R'),time)for a in'XYZ')or curve(source.get('IjSR'),time):
         raise UnsupportedEffect('球形发射随机角度或速度')
     direction=rotation(np.array([curve(source.get('An'+a),time)for a in'XYZ']),number(source,'ROT'))@direction
-    return direction*curve(source.get('Rads'),time),direction*curve(source.get('IjS'),time)
+    position=direction*curve(source.get('Rads'),time);velocity=direction*curve(source.get('IjS'),time)
+    position.flags.writeable=False;velocity.flags.writeable=False
+    return position,velocity

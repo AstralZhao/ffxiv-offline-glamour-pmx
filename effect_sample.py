@@ -71,6 +71,19 @@ def curve_source(node):
 
 
 def curve(node,time,default=0,*,rgb=False):
+    if node is not None:
+        source,keys=curve_source(node)
+        if keys:
+            if len(keys)==1:time=keys[0][0]
+            elif time<keys[0][0]and number(source,'BvPr')in(0,-1):time=keys[0][0]
+            elif time>keys[-1][0]and number(source,'BvPo')in(0,-1):time=keys[-1][0]
+    value=curve_value(node,time,default,rgb=rgb)
+    # Never expose the cached RGB array to a caller's in-place color edits.
+    return value.copy() if rgb else value
+
+
+@lru_cache(maxsize=16384)
+def curve_value(node,time,default=0,*,rgb=False):
     if node is None:return np.full(3,default)if rgb else default
     source,keys=curve_source(node)
     if keys is None:return np.full(3,default)if rgb else default
@@ -111,6 +124,11 @@ def curve(node,time,default=0,*,rgb=False):
 
 
 def axes(node,time,default=0,dimensions=3):
+    return axes_value(node,time,default,dimensions).copy()
+
+
+@lru_cache(maxsize=16384)
+def axes_value(node,time,default=0,dimensions=3):
     source=nested(node);names='XYZ'[:dimensions]
     value=np.array([curve(source.get(axis),time,default)for axis in names],dtype=float)
     connect=number(source,'ACT')
@@ -122,6 +140,11 @@ def axes(node,time,default=0,dimensions=3):
 
 
 def color(node,time):
+    return color_value(node,time).copy()
+
+
+@lru_cache(maxsize=16384)
+def color_value(node,time):
     data=nested(node);value=np.r_[curve(data.get('RGB'),time,1,rgb=True),curve(data.get('A'),time,1)]
     value*=np.array([curve(data.get('Scl'+axis),time,1)for axis in'RGBA'])
     value[:3]*=curve(data.get('Bri'),time,1)
@@ -129,6 +152,11 @@ def color(node,time):
 
 
 def rotation(value,order):
+    return rotation_value(tuple(value),order).copy()
+
+
+@lru_cache(maxsize=4096)
+def rotation_value(value,order):
     orders=('XYZ','YZX','ZXY','XZY','YXZ','ZYX')
     if not 0<=order<len(orders):raise UnsupportedEffect('旋转顺序')
     x,y,z=value;cx,sx=math.cos(x),math.sin(x);cy,sy=math.cos(y),math.sin(y);cz,sz=math.cos(z),math.sin(z)
@@ -329,9 +357,11 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
         for birth in times:
             for i in range(count):
                 if time<birth:continue
-                seed=(effect.sha256+repr((identity,birth,i))).encode()
-                draw=int.from_bytes(hashlib.sha256(seed).digest()[:4],'little')/2**32
-                if draw*100>=probability:continue
+                if probability==0:continue
+                if probability<100:
+                    seed=(effect.sha256+repr((identity,birth,i))).encode()
+                    draw=int.from_bytes(hashlib.sha256(seed).digest()[:4],'little')/2**32
+                    if draw*100>=probability:continue
                 sequence=i if once else int(round((birth-start)/interval))*count+i
                 yield time-birth,birth,sequence
     def emit(index,time,bound,inherited,inherited_color,stack=()):
@@ -358,8 +388,10 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                     target_node=get(tag,target)
                     target_data=particle_fields(target_node)if tag=='Ptcl'else fields(r for r in records(target_node.data)if r.tag not in('ItPr','ItEm'))
                     max_age=number(nested(target_data.get('Life')),'Val',-1.,real=True)
+                    inherited_matrix=None
                     for age,birth,occurrence in births(child,data,time,(stack,index,container,ordinal),max_age):
-                        matrix=inherit(child,parent,bound)
+                        if inherited_matrix is None:inherited_matrix=inherit(child,parent,bound)
+                        matrix=inherited_matrix
                         if emitter_type in(3,5):
                             from effect_emitter import model_injection,sphere_injection
                             inject=model_injection if emitter_type==5 else sphere_injection
