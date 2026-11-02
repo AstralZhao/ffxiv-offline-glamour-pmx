@@ -28,24 +28,19 @@ def model_geometry(effect,data,time):
 def disc_geometry(data,time):
     d=nested(data.get('Data'));u=number(d,'PCnU',1);v=number(d,'PCnV',24)
     if not 2<=u<=128 or not 3<=v<=256 or number(d,'PrtC',1)!=1:raise UnsupportedEffect('圆盘分段或重复结构')
-    angle=curve(d.get('Ang'),time,2*np.pi);positions=[];uv=[];colors=[]
-    # Source disk is in XZ; rows span inner->outer, columns span the arc.
-    for i in range(u+1):
-        radial=i/u
-        for j in range(v+1):
-            t=j/v;a=t*angle
-            radius=curve(d.get('RB'),time,1)*(1-t)+curve(d.get('RE'),time,1)*t
-            width=curve(d.get('WB'),time,1)*(1-t)+curve(d.get('WE'),time,1)*t
-            r=radius-width+width*radial
-            height=(curve(d.get('HBI'),time)*(1-t)+curve(d.get('HEI'),time)*t)*(1-radial)+(curve(d.get('HBO'),time)*(1-t)+curve(d.get('HEO'),time)*t)*radial
-            positions.append((r*np.cos(a),height,r*np.sin(a)));uv.append((t,radial))
-            colors.append(color(d.get('CEI'),time)*(1-radial)+color(d.get('CEO'),time)*radial)
-    indices=[]
-    for i in range(u):
-        for j in range(v):
-            a=i*(v+1)+j;b=a+v+1;indices.extend((a,b,a+1,a+1,b,b+1))
-    return {'positions':np.asarray(positions),'colors':np.asarray(colors),'indices':np.asarray(indices,dtype='<u4'),
-        'base_uv':np.tile(np.asarray(uv)[:,None,:],(1,4,1))}
+    angle=curve(d.get('Ang'),time,2*np.pi)
+    # Evaluate authored curves once per update, not once per generated vertex.
+    radial,t=np.meshgrid(np.linspace(0,1,u+1),np.linspace(0,1,v+1),indexing='ij')
+    radius=curve(d.get('RB'),time,1)*(1-t)+curve(d.get('RE'),time,1)*t
+    width=curve(d.get('WB'),time,1)*(1-t)+curve(d.get('WE'),time,1)*t
+    r=radius-width+width*radial
+    height=(curve(d.get('HBI'),time)*(1-t)+curve(d.get('HEI'),time)*t)*(1-radial)+(curve(d.get('HBO'),time)*(1-t)+curve(d.get('HEO'),time)*t)*radial
+    positions=np.stack((r*np.cos(t*angle),height,r*np.sin(t*angle)),axis=-1).reshape(-1,3)
+    colors=(color(d.get('CEI'),time)*(1-radial[...,None])+color(d.get('CEO'),time)*radial[...,None]).reshape(-1,4)
+    a=(np.arange(u)[:,None]*(v+1)+np.arange(v)[None,:]).ravel();b=a+v+1
+    indices=np.column_stack((a,b,a+1,a+1,b,b+1)).ravel().astype('<u4')
+    uv=np.stack((t,radial),axis=-1).reshape(-1,2)
+    return {'positions':positions,'colors':colors,'indices':indices,'base_uv':np.tile(uv[:,None,:],(1,4,1))}
 
 
 def uv_matrix(node,time):

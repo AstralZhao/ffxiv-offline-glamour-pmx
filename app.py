@@ -90,7 +90,7 @@ class DemoEngine:
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
         self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
         self.rendered_parameters=None;self.appearance_is_preview=False;self.characters=None
-        self.native_hwnd=native_hwnd
+        self.native_hwnd=native_hwnd;self.effect_frame=30.
         self.item_icons=None  # Resource indexes are opened on the worker below.
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
@@ -205,6 +205,11 @@ class DemoEngine:
                     if resource.value in self.geometry_pointers:return resource
                     return super().temporary(resource)
 
+                def dynamic_buffer(self,array,bind):
+                    # Animated shape vertices must not fill the immutable
+                    # character geometry cache with a new entry every frame.
+                    return super().buffer(array,bind)
+
                 def camera_inputs(self,scene,yaw):
                     if (self.zoom,self.pitch,self.pan)==(1,0,0):return super().camera_inputs(scene,yaw)
                     # A real orbit camera over the same source scene. Only
@@ -313,9 +318,11 @@ class DemoEngine:
         self.last_character_load={**cache,'seconds':time.perf_counter()-started}
         return {**result,'preset':self.presets[key][1],'appearance':self.appearance_state(),'character_cache':self.last_character_load}
 
-    def render(self,raw):
+    def render(self,raw,*,effect_frame=None):
         from preset_outfit import CHOICES
         state=parse_state(raw);started=time.perf_counter()
+        frame=self.effect_frame if effect_frame is None else effect_frame
+        if type(frame)not in(int,float)or not math.isfinite(frame)or not 0<=frame<=1e9:raise ValueError('特效预览帧不正确')
         key=json.dumps([state['equipment'],state['head_visible'],state['effects_visible']],sort_keys=True)
         if key in self.scene_cache:
             scene=self.scene_cache[key];self.scene_cache.move_to_end(key)
@@ -324,7 +331,6 @@ class DemoEngine:
             scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
                 head=chosen['Head'],head_visible=state['head_visible'])
             scene=self.accessories.resolve(scene,state,info)
-            self.prepare_effects(scene,enabled=state['effects_visible'])
             # Keep the preset framing as a minimum, expanding only for actual
             # referenced geometry such as wings. Dye changes reuse this scene.
             import numpy as np
@@ -336,20 +342,24 @@ class DemoEngine:
             scene.bounds=np.asarray((low,high));self.scene_cache[key]=scene
             while len(self.scene_cache)>6:self.scene_cache.popitem(last=False)
         if scene.pending_meshes or scene.omitted:raise NotImplementedError('当前装备含尚未接入的可见部件')
+        if getattr(scene,'effect_frame',None)!=frame:
+            self.prepare_effects(scene,enabled=state['effects_visible'],frame=frame)
         self.renderer.zoom=state['zoom'];self.renderer.pitch=state['pitch'];self.renderer.pan=state['pan']
         image,_=self.renderer.draw_scene(scene,state['yaw'])
+        self.effect_frame=frame
         url=self.image_record(image)
         result={'image':url,'state':state,'seconds':round(time.perf_counter()-started,3),
             'visible_meshes':len(scene.meshes),'renderer':'native-d3d11-3d','scene_cache_entries':len(self.scene_cache),
             'shader_families':sorted({mesh['material']['shader']for mesh in scene.meshes}),
             'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')}|set(scene.effect_notices)),
-            'equipment_effects':scene.effect_summaries,'effect_draws':self.renderer.last_effect_draws}
+            'equipment_effects':scene.effect_summaries,'effect_draws':self.renderer.last_effect_draws,'effect_frame':frame}
         with self.lock:self.last=result
         return result
 
-    def prepare_effects(self,scene,*,enabled=True):
+    def prepare_effects(self,scene,*,enabled=True,frame=30.):
         scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
-        if not enabled or not self.character.outfit.equipment_effects_enabled:return
+        if not enabled or not self.character.outfit.equipment_effects_enabled:
+            scene.effect_frame=frame;return
         from effect_sample import prepare,UnsupportedEffect
         outfit=self.character.outfit
         worlds=scene.skinning@outfit.bind
@@ -357,7 +367,7 @@ class DemoEngine:
         sources={(mesh['slot'],mesh['equipment_effect_source'].path):mesh['equipment_effect_source']
             for mesh in scene.meshes if mesh.get('equipment_effect_source')is not None}
         for (slot,path),effect in sources.items():
-            samples,pending=prepare(effect,bones)
+            samples,pending=prepare(effect,bones,frame)
             if samples:
                 from effect_renderer import EffectRenderer
                 if not hasattr(self.renderer,'effect_renderer'):self.renderer.effect_renderer=EffectRenderer(self.renderer,scene.pack)
@@ -368,13 +378,14 @@ class DemoEngine:
                     else:accepted.append(sample)
                 samples=accepted;pending=tuple(sorted(set(pending)))
             scene.effect_samples.extend({**s,'effect_path':path}for s in samples)
-            scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':30,
-                'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'frozen-normal-scheduler-stable-probability-zero-random-offsets',
+            scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':frame,
+                'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'sampled-normal-scheduler-stable-probability-zero-random-offsets',
                 'particles_rendered':bool(samples),'effect_complete':False})
             if effect.missing:scene.effect_notices.append('装备附加特效文件在本机缺失。')
             elif samples:
-                scene.effect_notices.append('装备特效为固定时刻预览；'+('部分粒子尚未接入。'if pending else'尚未完成完整特效还原。'))
+                scene.effect_notices.append('装备特效：'+('部分粒子尚未接入。'if pending else'尚未完成完整特效还原。'))
             else:scene.effect_notices.append('装备主体已显示，附加粒子特效尚未绘制。')
+        scene.effect_frame=frame
 
     def import_dat(self,raw,name):
         path,key=self.library.add(raw,name);self.refresh_presets()

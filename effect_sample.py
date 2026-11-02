@@ -7,6 +7,7 @@ with invented particles. Schema/curve conventions follow pinned VFXEditor.
 import math
 import struct
 import hashlib
+from functools import lru_cache
 
 import numpy as np
 
@@ -24,6 +25,7 @@ def fields(nodes):
     return result
 
 
+@lru_cache(maxsize=4096)
 def nested(node):return fields(records(node.data))if node else{}
 
 
@@ -264,7 +266,7 @@ def prepare(effect,bones,frame=30.):
         else:raise UnsupportedEffect('继承模式 '+str(mode))
         result[:3,:3]=result[:3,:3]@rotation(np.array([number(child,'BIA'+a,0.,real=True)for a in'XYZ']),0)
         return result
-    def births(child,data,time,identity):
+    def births(child,data,time,identity,max_age):
         # Bounded independent frozen scheduling policy. CrTm=1 is sampled once;
         # interval emissions use the authored CrI/CrC. Random choices are stable
         # across redraws, not a replay of the game's RNG or simulation state.
@@ -274,7 +276,13 @@ def prepare(effect,bones,frame=30.):
         interval=curve(data.get('CrI'),time,1)
         if not once and interval<=0:raise UnsupportedEffect('非正发射间隔')
         count=count if once else max(1,int(curve(data.get('CrC'),time,1)))
-        times=[start]if once else np.arange(start,time+1e-6,interval).tolist()
+        if once:times=[start]
+        else:
+            if max_age<0:raise UnsupportedEffect('无限寿命的重复发射尚未接入')
+            first=max(0,math.floor((time-max_age-start)/interval)+1)
+            last=math.floor((time-start)/interval)
+            if last-first>512:raise UnsupportedEffect('发射预算')
+            times=[start+i*interval for i in range(first,last+1)]
         if len(times)*count>512:raise UnsupportedEffect('发射预算')
         for birth in times:
             for i in range(count):
@@ -299,7 +307,10 @@ def prepare(effect,bones,frame=30.):
                 if not number(child,'bEnb',1):continue
                 try:
                     target=number(child,'TgtB',-1)
-                    for age,birth in births(child,data,time,(stack,index,container,ordinal)):
+                    target_node=get(tag,target)
+                    target_data=particle_fields(target_node)if tag=='Ptcl'else fields(r for r in records(target_node.data)if r.tag not in('ItPr','ItEm'))
+                    max_age=number(nested(target_data.get('Life')),'Val',-1.,real=True)
+                    for age,birth in births(child,data,time,(stack,index,container,ordinal),max_age):
                         matrix=inherit(child,parent,bound)
                         tint=parent_color if number(child,'PICo')else np.ones(4)
                         if tag=='Emit':emit(target,age,bound,matrix,tint,stack+(index,));continue

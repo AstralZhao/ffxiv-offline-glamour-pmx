@@ -72,7 +72,7 @@ class CharacterCache:
         self.entries=OrderedDict();self.limit=limit
         code,profiles=application_files()
         ui_only={'qt_client','qt_theme','qt_runtime','qt_settings','launch','client','settings','catalogue','catalogue_cache',
-            'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection'}
+            'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection','effect_clock'}
         self.identity={'format':1,'client':(pack.game_root/'game/ffxivgame.ver').read_text().strip(),
             'numpy_version':np.__version__,
             'executable_sha256':digest((pack.game_root/'game/ffxiv_dx11.exe').read_bytes()),

@@ -8,6 +8,7 @@ from collections import OrderedDict
 from dataclasses import dataclass
 import hashlib
 import struct
+from functools import lru_cache
 
 
 @dataclass(frozen=True)
@@ -16,6 +17,7 @@ class Record:
     data:bytes
 
 
+@lru_cache(maxsize=1024)
 def records(data):
     if len(data)>16*1024*1024:raise ValueError('AVFX exceeds the source byte budget')
     result=[];at=0

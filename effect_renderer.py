@@ -182,7 +182,8 @@ class EffectRenderer:
             if is_model:
                 vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
             else:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
-            vb=r.temporary(r.buffer(vertices,1));indices=sample['indices'];ib=r.temporary(r.buffer(indices,2))
+            create_vertices=r.buffer if is_model else getattr(r,'dynamic_buffer',r.buffer)
+            vb=r.temporary(create_vertices(vertices,1));indices=sample['indices'];ib=r.temporary(r.buffer(indices,2))
             r.context(17,[P],plan['layout']);r.context(24,[U],4)
             r.context(18,[U,U,P,P,P],0,1,c.byref(vb),c.byref(U(dtype.itemsize)),c.byref(U(0)))
             r.context(19,[P,U,U],ib,42,0)

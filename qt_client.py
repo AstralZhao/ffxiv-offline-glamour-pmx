@@ -18,6 +18,7 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
+from effect_clock import EffectClock
 from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,slot_icon,swatch_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
@@ -144,6 +145,9 @@ class QtClient(NativeClient):
         self.window=window;window.controller=self;self.root=TimerHost(window)
         self.settings_handler=settings_handler;self.game=Path(game).resolve()
         self.closed=False;self.closing=False;self.job=None;self.dirty=False;self.timer=None;self.generation=0
+        self.effect_clock=EffectClock();self.effect_future=None;self.effect_deferred=None;self.effect_poll=None
+        self.effect_last_frame=30.
+        self.effect_timer=C.QTimer(window);self.effect_timer.setInterval(33);self.effect_timer.timeout.connect(self.tick_effects)
         self.session_timer=None;self.accept_baseline=None;self.boot=None;self.ready=False
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
         self.catalog_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeSearch')
@@ -257,8 +261,11 @@ class QtClient(NativeClient):
         cards.addStretch()
         self.head_check=W.QCheckBox('显示头饰');self.head_check.setChecked(True);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
         self.effects_check=W.QCheckBox('显示装备特效');self.effects_check.setChecked(True)
-        self.effects_check.setToolTip('显示原始装备特效的固定时刻预览。角色保持静态；尚未支持的特效分支会提示。')
+        self.effects_check.setToolTip('默认定格显示。可播放装备特效，角色保持静态；尚未支持的特效分支会提示。')
         self.effects_check.toggled.connect(self.effects_toggled);right.addWidget(self.effects_check)
+        self.effects_play=button('▶ 播放特效',self.toggle_effect_playback,ghost=True);self.effects_play.setCheckable(True)
+        self.effects_play.setEnabled(False);self.effects_play.setToolTip('播放 / 暂停装备特效。暂停保留当前帧；重新启动默认暂停。')
+        right.addWidget(self.effects_play)
         body_layout.addWidget(self.dressing)
         footer=W.QFrame();footer.setObjectName('Footer');f=horizontal(footer,12,8)
         self.status_dot=label('●');self.status_dot.setStyleSheet('color:#89d5c4;font-size:9px');f.addWidget(self.status_dot)
@@ -302,6 +309,12 @@ class QtClient(NativeClient):
     def submit(self,fn,callback,*arguments):
         if self.engine is None or not self.engine.ready.done():
             self.message.set('正在加载角色，请稍候…');return False
+        if self.effect_future is not None:
+            # Finish the single in-flight presentation before model/save work.
+            # Do not reject a click just because a playback frame is drawing.
+            if self.effect_deferred is not None:return False
+            self.effect_deferred=(fn,callback,arguments,deepcopy(self.state),self.generation)
+            self.loading_kind='正在准备预览…';self.sync_loading();return True
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
@@ -315,7 +328,7 @@ class QtClient(NativeClient):
         return accepted
 
     def sync_loading(self):
-        startup=self.engine is None or not self.engine.ready.done();busy=not self.closing and(startup or self.job is not None)
+        startup=self.engine is None or not self.engine.ready.done();busy=not self.closing and(startup or self.job is not None or self.effect_deferred is not None)
         text='正在加载角色…'if startup else self.loading_kind
         prominent=busy and text not in('正在调整视角…','正在保存预设…')
         self.loading_label.setText(text);self.loading_panel.setVisible(prominent)
@@ -344,6 +357,10 @@ class QtClient(NativeClient):
                 self.editor.status.setText('操作未完成，已保留原模型和预设。');self.editor.status.setToolTip(self.raw_status)
 
     def close(self):
+        self.effect_timer.stop();self.effect_clock.pause(self.effect_last_frame)
+        self.effect_deferred=None
+        if self.effect_future is not None:
+            self.closing=True;self.ready=False;self.root.after(30,self.close);return
         for spinner in(self.loading_spinner,self.footer_spinner):spinner.set_running(False)
         if self.editor:self.editor.spinner.set_running(False)
         self.catalog_spinner.set_running(False)
@@ -390,6 +407,8 @@ class QtClient(NativeClient):
         self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values()))+' 件')
         self.head_check.blockSignals(True);self.head_check.setChecked(self.state['head_visible']);self.head_check.blockSignals(False)
         self.effects_check.blockSignals(True);self.effects_check.setChecked(self.state['effects_visible']);self.effects_check.blockSignals(False)
+        if not self.state['effects_visible']:self.pause_effects()
+        self.effects_play.setEnabled(self.ready and self.state['effects_visible'])
         self.zoom_label.setText(f"{self.state['zoom']*100:.0f}%")
         for yaw,b in self.camera_buttons:b.setChecked(abs(self.state['yaw']-yaw)<.01)
         for s,b in self.slot_buttons.items():b.setChecked(s==self.slot_key())
@@ -642,7 +661,48 @@ class QtClient(NativeClient):
 
     def head_toggled(self,checked):self.show_head.set(checked);self.toggle_head()
 
-    def effects_toggled(self,checked):self.state['effects_visible']=checked;self.queue_render()
+    def effects_toggled(self,checked):
+        if not checked:self.pause_effects()
+        self.state['effects_visible']=checked;self.effects_play.setEnabled(self.ready and checked);self.queue_render()
+
+    def pause_effects(self):
+        self.effect_timer.stop();self.effect_clock.pause(self.effect_last_frame)
+        self.effects_play.setChecked(False);self.effects_play.setText('▶ 播放特效')
+
+    def toggle_effect_playback(self):
+        if not self.effects_play.isChecked():self.pause_effects();return
+        if not self.ready or not self.state['effects_visible']:self.pause_effects();return
+        self.effect_clock.play();self.effects_play.setText('Ⅱ 暂停特效');self.effect_timer.start()
+
+    def pump_render(self):
+        if self.effect_future is not None:return
+        super().pump_render()
+
+    def tick_effects(self):
+        if(self.closing or not self.ready or not self.effect_clock.playing or not self.state['effects_visible']
+            or self.job is not None or self.effect_future is not None or self.dirty or self.dialogs
+            or self.window.isMinimized()or not self.window.isVisible()):return
+        if not self.engine.last or not self.engine.last.get('equipment_effects'):return
+        frame=self.effect_clock.sample();state=deepcopy(self.state)
+        self.effect_future=self.engine.pool.submit(self.engine.render,state,effect_frame=frame)
+        self.effect_poll=self.root.after(10,self.poll_effects)
+
+    def poll_effects(self):
+        self.effect_poll=None
+        if self.effect_future is None:return
+        if not self.effect_future.done():self.effect_poll=self.root.after(10,self.poll_effects);return
+        future=self.effect_future;self.effect_future=None
+        try:
+            result=future.result();self.effect_last_frame=result['effect_frame']
+            if not self.effect_clock.playing:self.effect_clock.pause(self.effect_last_frame)
+        except Exception as error:
+            self.pause_effects();self.message.set('特效播放未能完成，已暂停。'+str(error))
+        if self.closing:return
+        if self.effect_deferred is not None:
+            fn,callback,arguments,baseline,generation=self.effect_deferred;self.effect_deferred=None
+            if self.submit(fn,callback,*arguments)and self.job is not None:
+                self.job=(self.job[0],self.job[1],generation,baseline)
+        elif self.dirty:self.pump_render()
 
     def select_preset(self,index):
         if index>=0 and self.boot:self.submit(self.engine.run,self.accept_result,'preset',{'id':self.preset_ids[index]})
