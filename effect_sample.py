@@ -73,7 +73,11 @@ def curve(node,time,default=0,*,rgb=False):
         # VFXEditor uses normalized horizontal Bezier handles (Data.X/Y),
         # not slope tangents. Solve time on the monotonic cubic first.
         h1,h2=a[2]/2,1-a[3]/2
-        if not 0<=h1<=h2<=1:raise UnsupportedEffect('非单调样条时间')
+        # Both handles in [0,1] guarantee monotonic time even when they
+        # cross. The extremal crossing h1=1,h2=0 has x'=3*(1-2u)^2;
+        # the other three corners have nonnegative derivatives as well.
+        # Native old armor uses .83/.17, which the old ordered test rejected.
+        if not(0<=h1<=1 and 0<=h2<=1):raise UnsupportedEffect('非单调样条时间')
         lo,hi=0.,1.
         for _ in range(32):
             u=(lo+hi)/2;v=1-u
@@ -115,9 +119,12 @@ def rotation(value,order):
 
 
 def transform(data,time,*,emitter=False):
-    if number(data,'CCOT')!=0:raise UnsupportedEffect('坐标计算顺序')
-    result=np.eye(4);result[:3,:3]=rotation(axes(data.get('Rot'),time),number(data,'ROT'if emitter else'RoOT'))@np.diag(axes(data.get('Scl'),time,1))
-    result[:3,3]=axes(data.get('Pos'),time)
+    order=number(data,'CCOT')
+    if not 0<=order<6:raise UnsupportedEffect('坐标计算顺序')
+    rotate=np.eye(4);rotate[:3,:3]=rotation(axes(data.get('Rot'),time),number(data,'ROT'if emitter else'RoOT'))
+    scale=np.diag(np.r_[axes(data.get('Scl'),time,1),1]);translate=np.eye(4);translate[:3,3]=axes(data.get('Pos'),time)
+    matrices={'R':rotate,'S':scale,'T':translate};result=np.eye(4)
+    for component in('SRT','TSR','RTS','TRS','STR','RST')[order]:result=matrices[component]@result
     return result
 
 
@@ -184,6 +191,22 @@ def binding(node,bones,bind_points=None):
         result[:3,:3]=np.diag(np.linalg.norm(result[:3,:3],axis=0))
     offset=axes(source.get('Pos'),0)
     result[:3,3]+=(result@np.r_[offset,0])[:3]
+    # The native callback separates the attachment orientation from scale.
+    # bBET keeps the VFX scalar separate, interpolating it before multiplying
+    # bone scale; the other branch interpolates the combined scale vector.
+    from effect_binding import attachment_scale
+    scales=np.linalg.norm(result[:3,:3],axis=0)
+    if np.any(scales<1e-8):raise UnsupportedEffect('退化附着点尺度')
+    source_scales=scales if number(data,'bTSc')else np.ones(3)
+    vfx_enabled=bool(number(data,'bVSc'));separate=bool(number(data,'bBET'))
+    if vfx_enabled:
+        if bind_points is None or not hasattr(bind_points,'vfx_scale'):raise UnsupportedEffect('缺少角色特效尺度来源')
+        vfx=bind_points.vfx_scale()
+    else:vfx=1.
+    bias=number(data,'bVSb',1.,real=True)
+    adjusted=(source_scales if not vfx_enabled and(separate or bias==1)else
+        attachment_scale(source_scales,vfx,bias,separate))
+    result[:3,:3]=result[:3,:3]/scales*adjusted
     return result
 
 
@@ -242,7 +265,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
     from effect_geometry import sample
     result=[];pending=[];visits=0
     if effect.missing:return (),('特效来源缺失',)
-    groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl')}
+    groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl','Efct')}
     def get(tag,index):
         if not 0<=index<len(groups[tag]):raise ValueError('AVFX graph index out of range: '+tag)
         return groups[tag][index]
@@ -287,15 +310,21 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                 seed=(effect.sha256+repr((identity,birth,i))).encode()
                 draw=int.from_bytes(hashlib.sha256(seed).digest()[:4],'little')/2**32
                 if draw*100>=probability:continue
-                yield time-birth,birth
+                sequence=i if once else int(round((birth-start)/interval))*count+i
+                yield time-birth,birth,sequence
     def emit(index,time,bound,inherited,inherited_color,stack=()):
         nonlocal visits
         visits+=1
         if index in stack or len(stack)>12 or visits>256:raise UnsupportedEffect('发射器循环或预算')
         nodes=records(get('Emit',index).data);data=fields(r for r in nodes if r.tag not in('ItPr','ItEm'))
-        if number(data,'EVT')!=0:raise UnsupportedEffect('非点发射器 '+str(number(data,'EVT')))
-        if number(data,'EfNo',-1)>=0:raise UnsupportedEffect('发射器效果器')
+        emitter_type=number(data,'EVT')
+        if emitter_type not in(0,3,5):raise UnsupportedEffect('未接入发射器 '+str(emitter_type))
         if not alive(data,time):return
+        if number(data,'EfNo',-1)>=0:
+            # An attached effector is additional work, not a replacement for
+            # the emitter. Keep its independently supported particle children.
+            effector=nested(get('Efct',number(data,'EfNo')))
+            pending.append('局部点光源尚未接入'if number(effector,'EfVT')==0 else'发射器效果器尚未接入')
         stationary(data,time);parent=inherited@transform(data,time,emitter=True)
         parent_color=inherited_color*color(data.get('Col'),time)
         particles,emitters=emitter_items(nodes,data)
@@ -307,13 +336,20 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                     target_node=get(tag,target)
                     target_data=particle_fields(target_node)if tag=='Ptcl'else fields(r for r in records(target_node.data)if r.tag not in('ItPr','ItEm'))
                     max_age=number(nested(target_data.get('Life')),'Val',-1.,real=True)
-                    for age,birth in births(child,data,time,(stack,index,container,ordinal),max_age):
+                    for age,birth,occurrence in births(child,data,time,(stack,index,container,ordinal),max_age):
                         matrix=inherit(child,parent,bound)
+                        if emitter_type in(3,5):
+                            from effect_emitter import model_injection,sphere_injection
+                            inject=model_injection if emitter_type==5 else sphere_injection
+                            position,velocity=inject(effect,data,birth,occurrence,(stack,index,container,ordinal,birth,occurrence))
+                            injection=np.eye(4);injection[:3,3]=position+velocity*age
+                            matrix=matrix@injection
                         tint=parent_color if number(child,'PICo')else np.ones(4)
                         if tag=='Emit':emit(target,age,bound,matrix,tint,stack+(index,));continue
                         particle=get(tag,target);particle_data=particle_fields(particle)
                         if not alive(particle_data,age):continue
                         value=sample(effect,particle,age,matrix,tint)
+                        if not len(value['indices']):continue
                         value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth)
                         if len(result)>=512:raise UnsupportedEffect('粒子预算')
                         result.append(value)

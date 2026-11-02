@@ -45,7 +45,7 @@ def disc_geometry(data,time):
 
 def uv_matrix(node,time,*,model=False):
     d=nested(node)
-    if number(d,'CUvT'):raise UnsupportedEffect('屏幕坐标UV')
+    if number(d,'CUvT')not in(0,1):raise UnsupportedEffect('UV计算类型')
     scale=axes(d.get('Scl'),time,1,2);offset=axes(d.get('Scr'),time,0,2);angle=curve(d.get('Rot'),time)
     c,s=np.cos(angle),np.sin(angle)
     # CN 3e4db0 builds the model's two original PS rows from centered
@@ -60,27 +60,42 @@ def uv_matrix(node,time,*,model=False):
 
 def sample(effect,node,time,parent,parent_color):
     d=particle_fields(node);kind=number(d,'PrVT');stationary(d,time)
-    if kind not in(5,8,12):raise UnsupportedEffect('粒子类型 '+str(kind))
-    if number(d,'bSCt')or any(number(d,n)for n in('bNea','bFar')):raise UnsupportedEffect('粒子简化动画或距离裁剪')
+    if kind not in(1,5,8,12):raise UnsupportedEffect('粒子类型 '+str(kind))
+    simple=bool(number(d,'bSCt'))
+    if simple and kind!=1:raise UnsupportedEffect('非粉尘的简化动画')
+    if any(number(d,n)for n in('bNea','bFar')):raise UnsupportedEffect('粒子距离裁剪')
+    if kind==1 and number(nested(d.get('Data')),'bLgt'):raise UnsupportedEffect('粉尘光照')
     for name in('TN','TR','TP'):
         if number(nested(d.get(name)),'bEna'):raise UnsupportedEffect('法线、反射或调色板特效材质')
-    if kind==5:geometry=model_geometry(effect,d,time)
+    if simple:
+        from effect_simple import geometry as simple_geometry
+        if number(d,'RBDT')!=10:raise UnsupportedEffect('Simple 粒子外层朝向')
+        geometry=simple_geometry(effect,d.get('Smpl'),time)
+    elif kind==5:geometry=model_geometry(effect,d,time)
     elif kind==12:geometry=disc_geometry(d,time)
     else:
         geometry={'positions':np.array(((-.5,-.5,0),(.5,-.5,0),(.5,.5,0),(-.5,.5,0))),
             'colors':np.ones((4,4)),'base_uv':np.tile(np.array(((0,0),(1,0),(1,1),(0,1)))[:,None,:],(1,4,1)),
             'indices':np.asarray((0,1,2,0,2,3),dtype='<u4')}
     frame=number(d,'RBDT')
-    if frame not in(0,1,2,4,5,6):raise UnsupportedEffect('粒子朝向类型 '+str(frame))
-    if kind==8 and frame==0:geometry['positions']=geometry['positions'][:,(2,0,1)]
-    elif kind==8 and frame==1:geometry['positions']=geometry['positions'][:,(0,2,1)]
+    if frame not in(0,1,2,4,5,6,9,10):raise UnsupportedEffect('粒子朝向类型 '+str(frame))
+    if kind in(1,8)and frame==0:geometry['positions']=geometry['positions'][:,(2,0,1)]
+    elif kind in(1,8)and frame==1:geometry['positions']=geometry['positions'][:,(0,2,1)]
     uv_nodes=[r for r in records(node.data)if r.tag=='UvSt'];uv_count=number(d,'UvSN',len(uv_nodes))
     if not 0<=uv_count<=4 or uv_count!=len(uv_nodes):raise UnsupportedEffect('UV通道数量')
+    uv_compute=[number(nested(uv),'CUvT')for uv in uv_nodes]
+    if any(uv_compute)and kind in(1,5):raise UnsupportedEffect('模型或粉尘屏幕坐标UV')
     matrices=[uv_matrix(uv,time,model=kind==5)for uv in uv_nodes];textures={}
+    if simple:
+        # CN3faa60 fills the source atlas UV directly; the fixed Powder VS/PS
+        # route has no generic per-UV transform constant.
+        matrices=[uv_matrix(None,0)for _ in uv_nodes]
     for name in('TC1','TC2','TC3','TC4','TD'):
         channel=nested(d.get(name))
         if not number(channel,'bEna'):continue
-        if any(number(channel,n)for n in('bUSC','bPFC','bUOS')):raise UnsupportedEffect('画面或肖像贴图')
+        if any(number(channel,n)for n in('bPFC','bUOS')):raise UnsupportedEffect('肖像或离屏特殊贴图')
+        screen_copy=bool(number(channel,'bUSC'))
+        if screen_copy and name=='TD':raise UnsupportedEffect('扭曲层画面复制')
         if curve(channel.get('TxN'),time):raise UnsupportedEffect('动画贴图索引')
         index=number(channel,'TxNo',-1)
         if index<0:
@@ -90,20 +105,20 @@ def sample(effect,node,time,parent,parent_color):
         if not 0<=index<len(effect.textures):raise ValueError('Source effect texture index differs')
         uv=number(channel,'UvSN')
         if not 0<=uv<uv_count:raise ValueError('Source effect UV index differs')
-        textures[name]={'path':effect.textures[index],'uv':uv,'color_to_alpha':bool(number(channel,'bC2A')),
+        textures[name]={'path':effect.textures[index],'uv':uv,'color_to_alpha':bool(number(channel,'bC2A')),'screen_copy':screen_copy,
             'filter':number(channel,'TFT',1),'address':(number(channel,'TBUT'),number(channel,'TBVT')),
             'color_mode':number(channel,'TCCT',0),'alpha_mode':number(channel,'TCAT',0),
             'power':curve(channel.get('DPow'),time),'distort_uv':[bool(number(channel,'bT'+str(i+1)))for i in range(4)]}
-        if name!='TD'and(number(channel,'TCCT')not in range(5)or number(channel,'TCAT')not in range(4)):
+        if name!='TD'and(number(channel,'TCCT')not in range(6)or number(channel,'TCAT')not in range(4)):
             raise UnsupportedEffect('贴图混合计算类型')
         if name=='TC1'and(number(channel,'TCCT')not in(0,1)or number(channel,'TCAT')not in(0,1)):
             raise UnsupportedEffect('首层贴图计算类型')
         if name=='TD'and number(channel,'bT4')and kind!=5:raise UnsupportedEffect('平面粒子第四UV扭曲')
     mode=number(d,'RMT')
-    if mode not in(0,1,2,3,4,8):raise UnsupportedEffect('混合模式 '+str(mode))
-    return {**geometry,'kind':'model'if kind==5 else'disc'if kind==12 else'quad','frame':frame,'local':transform(d,time),
+    if mode not in range(13):raise UnsupportedEffect('混合模式 '+str(mode))
+    return {**geometry,'kind':'powder'if kind==1 else'model'if kind==5 else'disc'if kind==12 else'quad','frame':frame,'local':transform(d,time),
         'parent':parent,'color':color(d.get('Col'),time)*parent_color,'textures':textures,'uv_matrices':matrices,
-        'uv_count':uv_count,'blend':mode,'soft':bool(number(d,'DsSp')),'depth_test':bool(number(d,'DsDt',1)),
+        'uv_count':uv_count,'uv_compute':uv_compute,'blend':mode,'soft':bool(number(d,'DsSp')),'depth_test':bool(number(d,'DsDt',1)),
         'depth_write':bool(number(d,'DsDw')),'cull':number(d,'CulT'),'depth_offset':number(d,'DpOf',0.,real=True),
         'priority':number(d,'DwPr'),'texture':textures.get('TC1',{}).get('path'),
         'filter':textures.get('TC1',{}).get('filter',1),'address':textures.get('TC1',{}).get('address',(1,1))}

@@ -2,10 +2,36 @@
 from dataclasses import dataclass
 import hashlib
 import struct
+import json
+from pathlib import Path
+from functools import lru_cache
 
 import numpy as np
 
 from effect_sample import rotation,UnsupportedEffect
+
+
+def attachment_scale(scales,vfx,bias,separate):
+    """CN3c0280 / 3c0461+3c0487; float32 operations, no fitted multiplier."""
+    scales=np.asarray(scales,dtype='<f4');vfx=np.float32(vfx);bias=np.float32(bias)
+    if scales.shape!=(3,)or not np.isfinite(scales).all()or not np.isfinite((vfx,bias)).all():
+        raise ValueError('Invalid attachment scale')
+    if separate:return scales*((vfx-np.float32(1))*bias+np.float32(1))
+    return (scales*vfx-np.float32(1))*bias+np.float32(1)
+
+
+@lru_cache(maxsize=4)
+def character_vfx_scale(game_root,race):
+    from cn_offscreen_lighting import rva_bytes
+    profile=json.loads((Path(__file__).resolve().parents[1]/'docs/cn-equipment-effect-rules.json').read_text(encoding='utf8'))
+    exe=(Path(game_root)/'game/ffxiv_dx11.exe').read_bytes()
+    if hashlib.sha256(exe).hexdigest()!=profile['executable_sha256']:raise ValueError('Unreviewed CN VFX scale source')
+    for name in('character_scale','character_scale_callback','separate_scale','combined_scale'):
+        entry=profile['native_ranges'][name]
+        if hashlib.sha256(rva_bytes(exe,int(entry['rva'],16),entry['bytes'])).hexdigest()!=entry['sha256']:
+            raise ValueError('Original CN attachment scale changed')
+    if str(race)not in profile['character_scales']:raise UnsupportedEffect('未审阅的角色特效尺度')
+    return profile['character_scales'][str(race)]
 
 
 @dataclass(frozen=True)
@@ -41,7 +67,10 @@ class EffectBindPoints:
     def __init__(self,pack,race_sex_id):
         if type(race_sex_id)is not int or not 0<race_sex_id<=9999:raise ValueError('Invalid EID character identity')
         self.pack=pack;self.path=f'chara/human/c{race_sex_id:04}/skeleton/base/b0001/eid_c{race_sex_id:04}b0001.eid'
+        self.race_sex_id=race_sex_id
         self.points=None;self.sha256=None
+
+    def vfx_scale(self):return character_vfx_scale(str(self.pack.game_root),self.race_sex_id)
 
     def resolve(self,identifier,bones):
         if self.points is None:

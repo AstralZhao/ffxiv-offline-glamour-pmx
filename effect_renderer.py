@@ -16,19 +16,31 @@ from mesh_sampling_probe import SamplerDesc
 from shader_feasibility import inspect_shpk
 from shader_input_profiles import program_plan
 from static_material_inputs import shader_crc
-from effect_sample import UnsupportedEffect
+from effect_sample import UnsupportedEffect,rotation
 
 
 SHAPE_PATH='shader/sm5/shpk/apricot_shape.shpk'
 SHAPE_SHA='8840be69ec20f030f1b7be71098d1dd3b346dcec0318498da330cc3a685549b1'
 MODEL_PATH='shader/sm5/shpk/apricot_model.shpk'
 MODEL_SHA='b1d91a2da0006aafa97a596966bbf15bf271f6840b800141574b3a6e8a14f10f'
+POWDER_PATH='shader/sm5/shpk/apricot_powder.shpk'
+POWDER_SHA='7716804edfa5dcff15aad2675991f76c7d33f4b3a3f9e277676e85ea27bd1fed'
 VERTEX=np.dtype([('position','<f4',4),('color','<i4',4),('uv','<i4',4),('uv2','<i4',4),('extra','<f4',4)])
 MODEL_VERTEX=np.dtype([('position','<f4',4),('normal','<f4',3),('tangent','<f4',3),('color','<f4',4),('uv','<f4',4),('uv2','<f4',4)])
+POWDER_VERTEX=np.dtype([('position','<f4',3),('angles','<f4',3),('center','<f4',3),('uv','<f4',2),('color','<i4',4)])
 
 
 def shader_settings(sample):
-    settings={'UvSetCount_Table':'UvSetCount_'+str(sample['uv_count'])}
+    # Original Powder VS has one fixed float2 UV input; all 75 CN nodes use
+    # UvSetCount_0. This key is not the source particle's UvSN field.
+    settings={'UvSetCount_Table':'UvSetCount_'+str(0 if sample['kind']=='powder'else sample['uv_count'])}
+    # CN3aa8a9 reads RMT -> table 215ca40; 385b1d selects bits 8..9
+    # from [NoneControl, ModulateAlpha, LerpWhite]. This is independent of
+    # texture-layer arithmetic and must be selected before the exact SHPK route.
+    final_color=(0,2,0,0,1,0,0,0,0,2,0,0,1)[sample.get('blend',0)]
+    settings['ComputeFinalColorType_Table']='ComputeFinalColorType_'+('NoneControl','ModulateAlpha','LerpWhite')[final_color]
+    for i,mode in enumerate(sample.get('uv_compute',())):
+        if mode:settings[f'UvCompute{i}_Table']='UvCompute_ByPixelPosition'
     for channel,data in sample['textures'].items():
         name='TextureDistortion'if channel=='TD'else'TextureColor'+channel[-1]
         settings[name+'_Table']=name+'_Enable'
@@ -37,9 +49,10 @@ def shader_settings(sample):
             for i,enabled in enumerate(data['distort_uv']):
                 if enabled:settings[f'TextureDistortion_UvSet{i}_Table']='TextureDistortion_UvSet_Enable'
         else:
+            if data.get('screen_copy'):settings[name+'_Decode_Table']=name+'_Decode_On'
             if data['color_to_alpha']:settings[name+'_ColorToAlpha_Table']=name+'_ColorToAlpha_On'
             if channel!='TC1':
-                settings[name+'_CalculateColor_Table']=name+'_CalculateColor_'+('Mul','Add','Sub','Max','Min')[data['color_mode']]
+                settings[name+'_CalculateColor_Table']=name+'_CalculateColor_'+('Mul','Add','Sub','Max','Min','None')[data['color_mode']]
                 settings[name+'_CalculateAlpha_Table']=name+'_CalculateAlpha_'+('Mul','Max','Min','None')[data['alpha_mode']]
     if sample['soft']:settings['ComputeSoftParticleType_Table']='ComputeSoftParticleType_Enable'
     return settings
@@ -54,19 +67,51 @@ def world_matrix(sample,view):
             if length<1e-8:raise ValueError('Singular axis-Y billboard camera')
             facing/=length;up=np.array((0.,1.,0.));basis=np.column_stack((np.cross(up,facing),up,facing))
         matrix[:3,:3]=basis@np.diag(np.linalg.norm(parent[:3,:3],axis=0))@local[:3,:3]
+    elif sample['frame']==9:
+        # CN3e3d68: preserve the authored attachment up axis. Right is the
+        # normalized cross of (particle-camera) with that axis; reconstruct
+        # the third axis, rather than assuming a world-Y billboard.
+        up=parent[:3,1].copy();up_length=np.linalg.norm(up)
+        delta=matrix[:3,3]-np.linalg.inv(view)[:3,3];right=np.cross(delta,up)
+        right_length=np.linalg.norm(right)
+        if up_length<1e-8 or right_length<1e-8:raise UnsupportedEffect('树形朝向退化')
+        up/=up_length;right/=right_length;forward=np.cross(right,up);forward/=np.linalg.norm(forward)
+        basis=np.column_stack((right,up,forward))
+        matrix[:3,:3]=basis@np.diag(np.linalg.norm(parent[:3,:3],axis=0))@local[:3,:3]
     return matrix
+
+
+def simple_world_positions(sample,matrix):
+    centers=sample['simple_centers'];gravity=sample['simple_gravity']
+    if not len(centers):return np.empty((0,3))
+    world=(matrix@np.column_stack((centers,np.ones(len(centers)))).T).T[:,:3]
+    world+=gravity@matrix[:3,:3].T if sample['simple_bind_parent']else gravity
+    basis=matrix[:3,:3].copy()
+    if not sample['simple_inherit_scale']:
+        lengths=np.linalg.norm(basis,axis=0)
+        if np.any(lengths<1e-8):raise ValueError('Singular Simple attachment scale')
+        basis/=lengths
+    # CN3fc4ad: authored sizes are half extents and pivot is a multiplier.
+    corners=np.array(((-1,1),(1,1),(-1,-1),(1,-1)))+sample['simple_pivot']
+    # Powder's original VS rotates Z -> X -> Y, independent of the parent's
+    # separately composed transform. Preserve that order for resolved corners.
+    rotations=np.array([rotation(value,2)for value in sample['simple_angles']])
+    plane=np.pad(corners[None,:,:]*sample['simple_sizes'][:,None,:],((0,0),(0,0),(0,1)))
+    offsets=np.einsum('ij,njk,nvk->nvi',basis,rotations,plane)
+    return (world[:,None,:]+offsets).reshape(-1,3)
 
 
 class EffectRenderer:
     def __init__(self,renderer,pack):
         self.renderer=renderer;self.pack=pack;self.packages={};self.plans={};self.samplers={};self.depth_copy=None;self.depth_size=None
+        self.color_copy=None;self.color_size=None
 
     def plan(self,sample):
-        kind='model'if sample['kind']=='model'else'shape';settings=shader_settings(sample)
+        kind=sample['kind']if sample['kind']in('model','powder')else'shape';settings=shader_settings(sample)
         key=(kind,tuple(sorted(settings.items())))
         if key in self.plans:return self.plans[key]
         if kind not in self.packages:
-            path,expected=(MODEL_PATH,MODEL_SHA)if kind=='model'else(SHAPE_PATH,SHAPE_SHA)
+            path,expected={'model':(MODEL_PATH,MODEL_SHA),'powder':(POWDER_PATH,POWDER_SHA),'shape':(SHAPE_PATH,SHAPE_SHA)}[kind]
             raw=self.pack.read(path)
             if hashlib.sha256(raw).hexdigest()!=expected:raise ValueError('CN Apricot shader package changed')
             self.packages[kind]=inspect_shpk(raw,True)[1]['_package']
@@ -96,6 +141,7 @@ class EffectRenderer:
         program,plan,_=result['vertex']
         inputs={(s['name'],s['index'])for s in signature(disassemble(program['bytecode']),False)if s['system']=='NONE'}
         specs=([('POSITION',0,2,0),('NORMAL',0,6,16),('TANGENT',0,6,28),('COLOR',0,2,40),('TEXCOORD',0,2,56),('TEXCOORD',1,2,72)]if kind=='model'else
+            [('POSITION',0,6,0),('TEXCOORD',0,6,12),('TEXCOORD',1,6,24),('TEXCOORD',2,16,36),('TEXCOORD',3,4,44)]if kind=='powder'else
             [('POSITION',0,2,0),('TEXCOORD',0,4,16),('TEXCOORD',1,4,32),('TEXCOORD',2,4,48),('TEXCOORD',3,2,64)])
         # D3D validates the complete declared input signature, including the
         # extra channels that this source-selected program does not read.
@@ -137,12 +183,27 @@ class EffectRenderer:
     def blend(self,mode):
         r=self.renderer;key=('apricot-blend',mode)
         if key not in r.cache:
-            # Defined fixed-preview RGBA composition. Native draw-state
-            # capture has not been performed for these AVFX routes.
-            src,dst,operation={0:(5,6,1),1:(1,3,1),2:(5,2,1),3:(5,2,3),4:(2,4,1),8:(2,1,1)}[mode]
-            targets=[1,src,dst,operation,1,2,1,7]+[0,1,0,1,1,0,1,15]*7
+            # CN38832f table: 9..12 share the exact RGB branches of 1..4.
+            # Packed fields are enable:1, operation:3, src:4, dst:4; D3D
+            # factors/operations below use its one-based enums. Preserve the
+            # preview emission alpha; the native second DOF target is absent.
+            src,dst,operation={0:(5,6,1),1:(1,3,1),2:(5,2,1),3:(5,2,3),4:(2,4,1),
+                5:(10,1,1),6:(2,2,4),7:(2,2,5),8:(5,6,1),9:(1,3,1),10:(5,2,1),11:(5,2,3),12:(2,4,1)}[mode]
+            targets=[int(mode!=8),src,dst,operation,1,2,1,7]+[0,1,0,1,1,0,1,15]*7
             r.cache[key]=r.create(20,[P],(U*66)(0,0,*targets))
         return r.cache[key]
+
+    def copy_color(self):
+        """Snapshot the owned preview, before particles; no CPU readback."""
+        r=self.renderer;size=(r.width,r.height)
+        if self.color_copy is not None and self.color_size!=size:
+            for pointer in reversed(self.color_copy):r.resources.remove(pointer);r.probe.release(pointer)
+            self.color_copy=None
+        if self.color_copy is None:
+            texture=r.create(5,[P,P],c.byref(TextureDesc(*size,1,1,10,1,0,0,8,0,0)),None)
+            self.color_copy=(texture,r.create(7,[P,P],texture,None));self.color_size=size
+        r.context(47,[P,P],self.color_copy[0],r.color)
+        return self.color_copy[1]
 
     def depth(self,sample):
         r=self.renderer;key=('apricot-depth',sample['depth_test'],sample['depth_write'])
@@ -161,27 +222,37 @@ class EffectRenderer:
     def draw(self,scene,samples,camera,view):
         if not samples:return []
         r=self.renderer;depth=self.copy_depth()if any(s['soft']for s in samples)else None
+        screen_copy=self.copy_color()if any(t.get('screen_copy')for s in samples for t in s['textures'].values())else None
         projection=camera[288//4:352//4].reshape(4,4).astype(float)
         vp=projection@view;neutral=self.neutral();result=[]
         ordered=sorted(samples,key=lambda s:(s['priority'],float((view@s['parent']@np.r_[s['local'][:3,3],1])[2])))
         for sample in ordered:
-            plan=self.plan(sample);matrix=world_matrix(sample,view);positions=sample['positions'];is_model=sample['kind']=='model'
-            dtype=MODEL_VERTEX if is_model else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
-            vertices['position'][:,:3]=positions if is_model else(matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3]
-            vertices['position'][:,3]=1 if is_model else sample['depth_offset']
+            plan=self.plan(sample);matrix=world_matrix(sample,view);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
+            dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
+            world_positions=(simple_world_positions(sample,matrix)if 'simple_centers'in sample else
+                (matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3])
+            if is_powder:
+                # The original VS adds center after rotating the local corner.
+                # Supplying the fully resolved corner as center, with zero
+                # local xy/angles, is algebraically identical for this path.
+                vertices['center']=world_positions;vertices['position'][:,2]=sample['depth_offset']
+            else:
+                vertices['position'][:,:3]=positions if is_model else world_positions
+                vertices['position'][:,3]=1 if is_model else sample['depth_offset']
             uv=sample['base_uv'].copy()
             if not is_model:
                 for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=np.column_stack((uv[:,i],np.zeros(len(uv)),np.ones(len(uv))))@uv_matrix.T
-            values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,:2].reshape(-1,4),'uv2':uv[:,2:].reshape(-1,4)}
+            values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,0]if is_powder else uv[:,:2].reshape(-1,4)}
+            if not is_powder:values['uv2']=uv[:,2:].reshape(-1,4)
             for name,value in values.items():
-                if is_model:vertices[name]=value;continue
+                if is_model or(is_powder and name=='uv'):vertices[name]=value;continue
                 packed=np.rint(np.asarray(value)*1000)
                 if not np.isfinite(packed).all()or np.any(abs(packed)>2**31-1):raise ValueError('Apricot quantized vertex value exceeds its range')
                 vertices[name]=packed.astype('<i4')
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
             if is_model:
                 vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
-            else:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
+            elif not is_powder:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
             create_vertices=r.buffer if is_model else getattr(r,'dynamic_buffer',r.buffer)
             vb=r.temporary(create_vertices(vertices,1));indices=sample['indices'];ib=r.temporary(r.buffer(indices,2))
             r.context(17,[P],plan['layout']);r.context(24,[U],4)
@@ -214,7 +285,7 @@ class EffectRenderer:
             sources={'g_ToneMapSampler':neutral,'g_DofLutSampler':neutral,'g_SamplerDepth':depth};samplers={}
             for channel,data in sample['textures'].items():
                 name='g_SamplerDistortion'if channel=='TD'else'g_SamplerColor'+channel[-1]
-                sources[name]=r.source_texture(scene.pack,data['path']);samplers[name]=self.sampler(data)
+                sources[name]=screen_copy if data.get('screen_copy')else r.source_texture(scene.pack,data['path']);samplers[name]=self.sampler(data)
             neutral_sampler=r.sampler('g_SamplerGBuffer',{})
             for entry in plan['pixel'][1]['resources']:
                 resource=sources.get(entry['name'])
