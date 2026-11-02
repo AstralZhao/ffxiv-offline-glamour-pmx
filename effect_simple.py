@@ -38,6 +38,19 @@ def packed_vector(values,precision):
     return (packed/np.float32(precision)*length).astype(np.float32)
 
 
+def random_scales(data,random):
+    # CN3e61da..3e6369: bSRL copies the packed X BYTE to Y; it does
+    # not reuse a random fraction in the separate (possibly stale) Y range.
+    values=[]
+    for axis in ('X',)if number(data,'bSRL')else('X','Y'):
+        low=number(data,'SR'+axis+'0',real=True);high=number(data,'SR'+axis+'1',real=True)
+        value=np.float32(np.float32(high-low)*np.float32(random.word()&65535))
+        value=np.float32(np.float32(value/np.float32(65535))+np.float32(low))
+        packed=int(np.trunc(np.float32(value*np.float32(50))))
+        values.append(np.float32(((packed+128)%256-128)/50))
+    return np.array(values*2 if len(values)==1 else values,dtype=np.float32)
+
+
 def emission_points(effect,index):
     models=[r for r in effect.source_records if r.tag=='Modl']
     if not 0<=index<len(models):raise ValueError('Simple injection model index differs')
@@ -89,11 +102,7 @@ def initial(effect,node):
             base=random.between(-real('RB'+axis),real('RB'+axis))+real('RI'+axis)
             delta=random.between(-real('RV'+axis),real('RV'+axis))+real('RA'+axis)
             angles[i,j]=np.trunc(base/(2*math.pi)*1024);spin[i,j]=np.trunc(delta/(2*math.pi)*1024)
-        u=random.unit()
-        for j,axis in enumerate('XY'):
-            fraction=u if j==0 or integer('bSRL')else random.unit()
-            value=real('SR'+axis+'0')+(real('SR'+axis+'1')-real('SR'+axis+'0'))*fraction
-            scales[i,j]=np.trunc(value*50)/50
+        scales[i]=random_scales(d,random)
         spread=integer('UvNR');atlas[i]=random.integer(spread)if spread>0 else 0
         reverse[i]=bool(random.integer(2))if integer('bRUV')else False
     result={'positions':positions,'velocity':velocity,'angles':angles,'spin':spin,'scales':scales,'atlas':atlas,

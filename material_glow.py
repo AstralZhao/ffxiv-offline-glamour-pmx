@@ -11,6 +11,12 @@ import numpy as np
 from d3d11_debug import P,U,F,TextureDesc,Viewport,compile_shader
 from mesh_sampling_probe import SamplerDesc
 
+# Shared display calibration against the CN native try-on target, 2026-11-02.
+# The old uncalibrated 2.0 gain made the measured halo about thirteen times
+# too strong. This is a preview calibration, not an extracted native uniform
+# or a replacement for the still-pending complete Glare/ToneMapping pipeline.
+PREVIEW_GLOW_STRENGTH=.15
+
 SOURCE=b'''
 struct Output { float4 position:SV_POSITION; float2 uv:TEXCOORD; };
 Output vs(uint id:SV_VertexID) {
@@ -91,7 +97,7 @@ class MaterialGlow:
         for radius in(1.,2.):
             self.pass_('blur',self.targets[1],[self.targets[0][2]],w,h,(radius/w,0,0,0))
             self.pass_('blur',self.targets[0],[self.targets[1][2]],w,h,(0,radius/h,0,0))
-        self.pass_('compose',self.targets[2],[view,self.targets[0][2]],r.width,r.height,(0,0,2.,0))
+        self.pass_('compose',self.targets[2],[view,self.targets[0][2]],r.width,r.height,(0,0,PREVIEW_GLOW_STRENGTH,0))
         return self.targets[2][0]
 
     def close(self):
