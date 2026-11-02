@@ -8,9 +8,9 @@ from preset_customization import sha
 
 
 class DemoMaterials:
-    # User scope: show original gear meshes now; optional AVFX will get a
-    # user-facing switch after its complete rendering is implemented.
-    equipment_effects_enabled=False
+    # Source AVFX is optional in the viewer; unsupported branches remain
+    # explicit in the preview notices, never substituted with invented meshes.
+    equipment_effects_enabled=True
 
     def variant_supported(self,imc,*,model_set=None,slot=None):
         if not imc['material_id']:return False

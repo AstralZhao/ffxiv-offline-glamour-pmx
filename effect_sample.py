@@ -6,6 +6,7 @@ with invented particles. Schema/curve conventions follow pinned VFXEditor.
 """
 import math
 import struct
+import hashlib
 
 import numpy as np
 
@@ -139,6 +140,17 @@ def alive(data,time):
     return time>=0 and(lifetime<0 or time<lifetime)
 
 
+def emitter_items(nodes,data):
+    particles=items(nodes,'ItPr','bEnb',number(data,'PrCn'))
+    count=number(data,'EmCn')
+    if not count:return particles,()
+    # ItEm's final cumulative container starts with the complete ItPr list.
+    # VFXEditor AvfxEmitter.ReadContents/WriteContents removes this prefix.
+    combined=items(nodes,'ItEm','bEnb',len(particles)+count)
+    if combined[:len(particles)]!=particles:raise ValueError('AVFX emitter particle prefix differs')
+    return particles,combined[len(particles):]
+
+
 def stationary(data,time):
     # Nonzero velocity/gravity requires integration, rather than sampling the
     # position curve alone. Keep that path visibly pending in this preview.
@@ -228,12 +240,76 @@ def prepare(effect,bones,frame=30.):
     random displacement. The result always reports this policy and gaps;
     zero random offsets are a fixed preview choice, not a game RNG replay.
     """
-    result=[];pending=[]
+    from effect_geometry import sample
+    result=[];pending=[];visits=0
     if effect.missing:return (),('特效来源缺失',)
     groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl')}
     def get(tag,index):
         if not 0<=index<len(groups[tag]):raise ValueError('AVFX graph index out of range: '+tag)
         return groups[tag][index]
+    def inherit(child,parent,bound):
+        mode=number(child,'PICd')
+        if number(child,'PrLk',-1)>=0 or number(child,'IPbV')or number(child,'IPbL')or number(child,'bOvr'):
+            raise UnsupportedEffect('链接、速度或寿命继承')
+        if mode in(2,3):result=parent.copy()
+        elif mode in(0,1):
+            result=bound.copy();result[:3,3]=parent[:3,3]
+            if mode==1:
+                relative=np.linalg.solve(bound[:3,:3],parent[:3,:3]);scales=np.linalg.norm(relative,axis=0)
+                if np.any(scales<1e-8):raise ValueError('Singular AVFX inherited transform')
+                basis=relative/scales if number(child,'ICbR')else np.eye(3)
+                if number(child,'ICbS'):basis=basis@np.diag(scales)
+                result[:3,:3]=bound[:3,:3]@basis
+                if not number(child,'ICbP'):result[:3,3]=bound[:3,3]
+        else:raise UnsupportedEffect('继承模式 '+str(mode))
+        result[:3,:3]=result[:3,:3]@rotation(np.array([number(child,'BIA'+a,0.,real=True)for a in'XYZ']),0)
+        return result
+    def births(child,data,time,identity):
+        # Bounded independent frozen scheduling policy. CrTm=1 is sampled once;
+        # interval emissions use the authored CrI/CrC. Random choices are stable
+        # across redraws, not a replay of the game's RNG or simulation state.
+        once=number(child,'CrTm',1);count=number(child,'CrCn',1);probability=number(child,'CrPr',100)
+        if once not in(0,1)or not 0<=count<=64 or not 0<=probability<=100:raise UnsupportedEffect('发射次数或概率范围')
+        start=number(child,'StFr')+number(child,'GenD')+once
+        interval=curve(data.get('CrI'),time,1)
+        if not once and interval<=0:raise UnsupportedEffect('非正发射间隔')
+        count=count if once else max(1,int(curve(data.get('CrC'),time,1)))
+        times=[start]if once else np.arange(start,time+1e-6,interval).tolist()
+        if len(times)*count>512:raise UnsupportedEffect('发射预算')
+        for birth in times:
+            for i in range(count):
+                if time<birth:continue
+                seed=(effect.sha256+repr((identity,birth,i))).encode()
+                draw=int.from_bytes(hashlib.sha256(seed).digest()[:4],'little')/2**32
+                if draw*100>=probability:continue
+                yield time-birth,birth
+    def emit(index,time,bound,inherited,inherited_color,stack=()):
+        nonlocal visits
+        visits+=1
+        if index in stack or len(stack)>12 or visits>256:raise UnsupportedEffect('发射器循环或预算')
+        nodes=records(get('Emit',index).data);data=fields(r for r in nodes if r.tag not in('ItPr','ItEm'))
+        if number(data,'EVT')!=0:raise UnsupportedEffect('非点发射器 '+str(number(data,'EVT')))
+        if number(data,'EfNo',-1)>=0:raise UnsupportedEffect('发射器效果器')
+        if not alive(data,time):return
+        stationary(data,time);parent=inherited@transform(data,time,emitter=True)
+        parent_color=inherited_color*color(data.get('Col'),time)
+        particles,emitters=emitter_items(nodes,data)
+        for container,children,tag in(('ItPr',particles,'Ptcl'),('ItEm',emitters,'Emit')):
+            for ordinal,child in enumerate(children):
+                if not number(child,'bEnb',1):continue
+                try:
+                    target=number(child,'TgtB',-1)
+                    for age,birth in births(child,data,time,(stack,index,container,ordinal)):
+                        matrix=inherit(child,parent,bound)
+                        tint=parent_color if number(child,'PICo')else np.ones(4)
+                        if tag=='Emit':emit(target,age,bound,matrix,tint,stack+(index,));continue
+                        particle=get(tag,target);particle_data=particle_fields(particle)
+                        if not alive(particle_data,age):continue
+                        value=sample(effect,particle,age,matrix,tint)
+                        value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth)
+                        if len(result)>=512:raise UnsupportedEffect('粒子预算')
+                        result.append(value)
+                except UnsupportedEffect as error:pending.append(str(error))
     try:
         root=fields(r for r in effect.source_records if r.tag.startswith('Rv'))
         for name in('RvPx','RvPy','RvPz','RvRx','RvRy','RvRz'):
@@ -256,29 +332,7 @@ def prepare(effect,bones,frame=30.):
                 try:
                     if number(item,'EfNo',-1)>=0:raise UnsupportedEffect('后处理效果器')
                     bound=binding(get('Bind',number(item,'BdNo',-1)),bones)
-                    emitter=get('Emit',number(item,'EmNo',-1));nodes=records(emitter.data)
-                    data=fields([r for r in nodes if r.tag not in('ItPr','ItEm')])
-                    if number(data,'EVT')!=0:raise UnsupportedEffect('非点发射器 '+str(number(data,'EVT')))
-                    if number(data,'EmCn')or number(data,'EfNo',-1)>=0:pending.append('子发射器或效果器')
-                    if not alive(data,time):continue
-                    stationary(data,time)
-                    parent=bound@transform(data,time,emitter=True)
-                    for child in items(nodes,'ItPr','bEnb',number(data,'PrCn')):
-                        if not number(child,'bEnb',1):continue
-                        try:
-                            age=time-number(child,'CrTm')-number(child,'StFr')
-                            if age<0:continue
-                            if number(child,'CrCn',1)!=1 or number(child,'CrPr',100)!=100:raise UnsupportedEffect('概率或多重发射')
-                            if number(child,'PICd')not in(2,3)or number(child,'PrLk',-1)>=0:raise UnsupportedEffect('继承模式或链接粒子')
-                            particle=get('Ptcl',number(child,'TgtB',-1));particle_data=particle_fields(particle)
-                            if not alive(particle_data,age):continue
-                            inherited=parent.copy()
-                            inherited[:3,:3]=inherited[:3,:3]@rotation(np.array([number(child,'BIA'+a,0.,real=True)for a in'XYZ']),0)
-                            sample=quad(effect,particle,age,inherited,color(data.get('Col'),time)if number(child,'PICo')else np.ones(4))
-                            sample.update(source_particle=number(child,'TgtB'),source_age=age)
-                            result.append(sample)
-                            if len(result)>256:raise ValueError('AVFX preview particle budget exceeded')
-                        except UnsupportedEffect as error:pending.append(str(error))
+                    emit(number(item,'EmNo',-1),time,bound,bound,np.ones(4))
                 except UnsupportedEffect as error:pending.append(str(error))
     except UnsupportedEffect as error:pending.append(str(error))
     return tuple(result),tuple(sorted(set(pending)))

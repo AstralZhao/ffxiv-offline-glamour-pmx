@@ -63,12 +63,14 @@ def parse_state(raw):
         result[slot]={'item_id':item,'first':first,'second':second}
     yaw=raw.get('yaw',0);zoom=raw.get('zoom',1);visible=raw.get('head_visible',True)
     pitch=raw.get('pitch',0);pan=raw.get('pan',0)
+    effects_visible=raw.get('effects_visible',True)
     if type(yaw)not in(int,float)or not math.isfinite(yaw)or not -3600<=yaw<=3600:raise ValueError('观察角度不正确')
     if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .25<=zoom<=4:raise ValueError('缩放范围不正确')
     if type(visible)is not bool:raise ValueError('头饰显示状态不正确')
+    if type(effects_visible)is not bool:raise ValueError('特效显示状态不正确')
     if type(pitch)not in(int,float)or not math.isfinite(pitch)or not -65<=pitch<=65:raise ValueError('俯仰角度不正确')
     if type(pan)not in(int,float)or not math.isfinite(pan)or not -1<=pan<=1:raise ValueError('相机平移范围不正确')
-    return {'equipment':result,'head_visible':visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan)}
+    return {'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan)}
 
 
 def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,library=None,favorites_only=False,tags=(),favorite_snapshot=None):
@@ -314,7 +316,7 @@ class DemoEngine:
     def render(self,raw):
         from preset_outfit import CHOICES
         state=parse_state(raw);started=time.perf_counter()
-        key=json.dumps([state['equipment'],state['head_visible']],sort_keys=True)
+        key=json.dumps([state['equipment'],state['head_visible'],state['effects_visible']],sort_keys=True)
         if key in self.scene_cache:
             scene=self.scene_cache[key];self.scene_cache.move_to_end(key)
         else:
@@ -322,7 +324,7 @@ class DemoEngine:
             scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
                 head=chosen['Head'],head_visible=state['head_visible'])
             scene=self.accessories.resolve(scene,state,info)
-            self.prepare_effects(scene)
+            self.prepare_effects(scene,enabled=state['effects_visible'])
             # Keep the preset framing as a minimum, expanding only for actual
             # referenced geometry such as wings. Dye changes reuse this scene.
             import numpy as np
@@ -345,10 +347,10 @@ class DemoEngine:
         with self.lock:self.last=result
         return result
 
-    def prepare_effects(self,scene):
+    def prepare_effects(self,scene,*,enabled=True):
         scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
-        if not self.character.outfit.equipment_effects_enabled:return
-        from effect_sample import prepare
+        if not enabled or not self.character.outfit.equipment_effects_enabled:return
+        from effect_sample import prepare,UnsupportedEffect
         outfit=self.character.outfit
         worlds=scene.skinning@outfit.bind
         bones={name:worlds[index]for name,index in outfit.names.items()}
@@ -356,9 +358,18 @@ class DemoEngine:
             for mesh in scene.meshes if mesh.get('equipment_effect_source')is not None}
         for (slot,path),effect in sources.items():
             samples,pending=prepare(effect,bones)
+            if samples:
+                from effect_renderer import EffectRenderer
+                if not hasattr(self.renderer,'effect_renderer'):self.renderer.effect_renderer=EffectRenderer(self.renderer,scene.pack)
+                accepted=[];pending=list(pending)
+                for sample in samples:
+                    try:self.renderer.effect_renderer.plan(sample)
+                    except UnsupportedEffect as error:pending.append(str(error))
+                    else:accepted.append(sample)
+                samples=accepted;pending=tuple(sorted(set(pending)))
             scene.effect_samples.extend({**s,'effect_path':path}for s in samples)
             scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':30,
-                'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'frozen-zero-random-offsets-normal-scheduler',
+                'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'frozen-normal-scheduler-stable-probability-zero-random-offsets',
                 'particles_rendered':bool(samples),'effect_complete':False})
             if effect.missing:scene.effect_notices.append('装备附加特效文件在本机缺失。')
             elif samples:

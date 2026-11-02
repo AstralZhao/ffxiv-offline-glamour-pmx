@@ -256,6 +256,9 @@ class QtClient(NativeClient):
             card.customContextMenuRequested.connect(lambda point,s=slot:self.outfit_context(s,point))
         cards.addStretch()
         self.head_check=W.QCheckBox('显示头饰');self.head_check.setChecked(True);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
+        self.effects_check=W.QCheckBox('显示装备特效');self.effects_check.setChecked(True)
+        self.effects_check.setToolTip('显示原始装备特效的固定时刻预览。角色保持静态；尚未支持的特效分支会提示。')
+        self.effects_check.toggled.connect(self.effects_toggled);right.addWidget(self.effects_check)
         body_layout.addWidget(self.dressing)
         footer=W.QFrame();footer.setObjectName('Footer');f=horizontal(footer,12,8)
         self.status_dot=label('●');self.status_dot.setStyleSheet('color:#89d5c4;font-size:9px');f.addWidget(self.status_dot)
@@ -302,7 +305,7 @@ class QtClient(NativeClient):
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
-                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible'))
+                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))
                 self.loading_kind='正在调整视角…'if same_outfit else'正在绘制搭配…'
             else:
                 operation=arguments[0]if arguments and isinstance(arguments[0],str)else''
@@ -386,6 +389,7 @@ class QtClient(NativeClient):
             self.outfit_cards[slot].display(choice,self.items.get(choice['item_id'],{}),slot==self.slot_key())
         self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values()))+' 件')
         self.head_check.blockSignals(True);self.head_check.setChecked(self.state['head_visible']);self.head_check.blockSignals(False)
+        self.effects_check.blockSignals(True);self.effects_check.setChecked(self.state['effects_visible']);self.effects_check.blockSignals(False)
         self.zoom_label.setText(f"{self.state['zoom']*100:.0f}%")
         for yaw,b in self.camera_buttons:b.setChecked(abs(self.state['yaw']-yaw)<.01)
         for s,b in self.slot_buttons.items():b.setChecked(s==self.slot_key())
@@ -637,6 +641,8 @@ class QtClient(NativeClient):
         self.search.setPlaceholderText('名称、编号、标签 · 多词组合');self.update_outfit()
 
     def head_toggled(self,checked):self.show_head.set(checked);self.toggle_head()
+
+    def effects_toggled(self,checked):self.state['effects_visible']=checked;self.queue_render()
 
     def select_preset(self,index):
         if index>=0 and self.boot:self.submit(self.engine.run,self.accept_result,'preset',{'id':self.preset_ids[index]})

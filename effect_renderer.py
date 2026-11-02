@@ -9,58 +9,94 @@ import struct
 
 import numpy as np
 
-from d3d11_debug import F,U,P,InputElement,TextureDesc
+from d3d11_debug import F,U,P,InputElement,TextureDesc,RasterizerDesc
 from material_shader_probe import selector,disassemble
 from material_stage_feasibility import signature
 from mesh_sampling_probe import SamplerDesc
 from shader_feasibility import inspect_shpk
 from shader_input_profiles import program_plan
 from static_material_inputs import shader_crc
+from effect_sample import UnsupportedEffect
 
 
 SHAPE_PATH='shader/sm5/shpk/apricot_shape.shpk'
 SHAPE_SHA='8840be69ec20f030f1b7be71098d1dd3b346dcec0318498da330cc3a685549b1'
+MODEL_PATH='shader/sm5/shpk/apricot_model.shpk'
+MODEL_SHA='b1d91a2da0006aafa97a596966bbf15bf271f6840b800141574b3a6e8a14f10f'
 VERTEX=np.dtype([('position','<f4',4),('color','<i4',4),('uv','<i4',4),('uv2','<i4',4),('extra','<f4',4)])
+MODEL_VERTEX=np.dtype([('position','<f4',4),('normal','<f4',3),('tangent','<f4',3),('color','<f4',4),('uv','<f4',4),('uv2','<f4',4)])
+
+
+def shader_settings(sample):
+    settings={'UvSetCount_Table':'UvSetCount_'+str(sample['uv_count'])}
+    for channel,data in sample['textures'].items():
+        name='TextureDistortion'if channel=='TD'else'TextureColor'+channel[-1]
+        settings[name+'_Table']=name+'_Enable'
+        settings[name+'_UvNo_Table']=name+'_Uv_'+str(data['uv'])
+        if channel=='TD':
+            for i,enabled in enumerate(data['distort_uv']):
+                if enabled:settings[f'TextureDistortion_UvSet{i}_Table']='TextureDistortion_UvSet_Enable'
+        else:
+            if data['color_to_alpha']:settings[name+'_ColorToAlpha_Table']=name+'_ColorToAlpha_On'
+            if channel!='TC1':
+                settings[name+'_CalculateColor_Table']=name+'_CalculateColor_'+('Mul','Add','Sub','Max','Min')[data['color_mode']]
+                settings[name+'_CalculateAlpha_Table']=name+'_CalculateAlpha_'+('Mul','Max','Min','None')[data['alpha_mode']]
+    if sample['soft']:settings['ComputeSoftParticleType_Table']='ComputeSoftParticleType_Enable'
+    return settings
+
+
+def world_matrix(sample,view):
+    parent,local=sample['parent'],sample['local'];matrix=parent@local
+    if sample['frame']in(4,5,6):
+        basis=view[:3,:3].T.copy()
+        if sample['frame']==4:
+            facing=basis[:,2].copy();facing[1]=0;length=np.linalg.norm(facing)
+            if length<1e-8:raise ValueError('Singular axis-Y billboard camera')
+            facing/=length;up=np.array((0.,1.,0.));basis=np.column_stack((np.cross(up,facing),up,facing))
+        matrix[:3,:3]=basis@np.diag(np.linalg.norm(parent[:3,:3],axis=0))@local[:3,:3]
+    return matrix
 
 
 class EffectRenderer:
     def __init__(self,renderer,pack):
-        self.renderer=renderer;raw=pack.read(SHAPE_PATH)
-        if hashlib.sha256(raw).hexdigest()!=SHAPE_SHA:raise ValueError('CN Apricot shader package changed')
-        self.package=inspect_shpk(raw,True)[1]['_package'];self.plans={};self.samplers={};self.depth_copy=None
+        self.renderer=renderer;self.pack=pack;self.packages={};self.plans={};self.samplers={};self.depth_copy=None;self.depth_size=None
 
     def plan(self,sample):
-        key=(sample['color_to_alpha'],sample['soft'])
+        kind='model'if sample['kind']=='model'else'shape';settings=shader_settings(sample)
+        key=(kind,tuple(sorted(settings.items())))
         if key in self.plans:return self.plans[key]
-        overrides={'UvSetCount_Table':'UvSetCount_1','TextureColor1_Table':'TextureColor1_Enable'}
-        if key[0]:overrides['TextureColor1_ColorToAlpha_Table']='TextureColor1_ColorToAlpha_On'
-        if key[1]:overrides['ComputeSoftParticleType_Table']='ComputeSoftParticleType_Enable'
-        overrides={shader_crc(k):shader_crc(v)for k,v in overrides.items()}
+        if kind not in self.packages:
+            path,expected=(MODEL_PATH,MODEL_SHA)if kind=='model'else(SHAPE_PATH,SHAPE_SHA)
+            raw=self.pack.read(path)
+            if hashlib.sha256(raw).hexdigest()!=expected:raise ValueError('CN Apricot shader package changed')
+            self.packages[kind]=inspect_shpk(raw,True)[1]['_package']
+        package=self.packages[kind];overrides={shader_crc(k):shader_crc(v)for k,v in settings.items()}
         groups=[];seen=set()
         for group in('system','scene','material'):
             values=[]
-            for entry in self.package['keys'][group]:
+            for entry in package['keys'][group]:
                 identifier=int(entry['id'],16);value=overrides.get(identifier,int(entry['default'],16))
                 if identifier in overrides:seen.add(identifier)
                 values.append(value)
             groups.append(selector(values))
         if seen!=set(overrides):raise ValueError('Original Apricot scene keys are missing')
-        route=selector(groups+[selector(self.package['subview_defaults'])])
-        if route not in self.package['selectors']:raise ValueError('No original Apricot shader route')
-        node_id=self.package['selectors'][route];node=self.package['nodes'][node_id]
+        route=selector(groups+[selector(package['subview_defaults'])])
+        if route not in package['selectors']:raise UnsupportedEffect('原始特效着色组合尚未接入')
+        node_id=package['selectors'][route];node=package['nodes'][node_id]
         if len(node['passes'])!=1:raise NotImplementedError('Multi-pass Apricot route')
         pass_id,vi,pi,hs,ds,gs=node['passes'][0]
         if any(value!=0xffffffff for value in(hs,ds,gs)):raise NotImplementedError('Additional Apricot shader stage')
         result={'node':node_id,'pass':pass_id,'selector':route}
         for stage,index in(('vertex',vi),('pixel',pi)):
-            program=self.package['stages'][stage][index];plan=program_plan(program,index,stage,True)
+            program=package['stages'][stage][index];plan=program_plan(program,index,stage,True)
             code=program['bytecode'];identity=(stage,plan['code_sha256'])
             if identity not in self.renderer.programs:
                 self.renderer.programs[identity]=self.renderer.create(12 if stage=='vertex'else 15,[P,c.c_size_t,P],code,len(code),None)
             result[stage]=(program,plan,self.renderer.programs[identity])
         program,plan,_=result['vertex']
         inputs={(s['name'],s['index'])for s in signature(disassemble(program['bytecode']),False)if s['system']=='NONE'}
-        specs=[('POSITION',0,2,0),('TEXCOORD',0,4,16),('TEXCOORD',1,4,32),('TEXCOORD',2,4,48),('TEXCOORD',3,2,64)]
+        specs=([('POSITION',0,2,0),('NORMAL',0,6,16),('TANGENT',0,6,28),('COLOR',0,2,40),('TEXCOORD',0,2,56),('TEXCOORD',1,2,72)]if kind=='model'else
+            [('POSITION',0,2,0),('TEXCOORD',0,4,16),('TEXCOORD',1,4,32),('TEXCOORD',2,4,48),('TEXCOORD',3,2,64)])
         # D3D validates the complete declared input signature, including the
         # extra channels that this source-selected program does not read.
         if {(n,i)for n,i,_,_ in specs}!=inputs:raise ValueError('Unknown Apricot vertex layout')
@@ -86,11 +122,15 @@ class EffectRenderer:
 
     def copy_depth(self):
         r=self.renderer
+        if self.depth_copy is not None and self.depth_size!=(r.width,r.height):
+            for pointer in reversed(self.depth_copy):r.resources.remove(pointer);r.probe.release(pointer)
+            self.depth_copy=None
         if self.depth_copy is None:
             descriptor=TextureDesc(r.width,r.height,1,1,39,1,0,0,8,0,0)
             texture=r.create(5,[P,P],c.byref(descriptor),None)
             # D3D11_SHADER_RESOURCE_VIEW_DESC R32_FLOAT / TEXTURE2D.
             view=r.create(7,[P,P],texture,(U*6)(41,4,0,1,0,0));self.depth_copy=(texture,view)
+            self.depth_size=(r.width,r.height)
         r.context(47,[P,P],self.depth_copy[0],r.depth)
         return self.depth_copy[1]
 
@@ -112,35 +152,57 @@ class EffectRenderer:
             r.cache[key]=r.create(21,[P],c.create_string_buffer(data))
         return r.cache[key]
 
+    def raster(self,mode):
+        if mode not in(0,1,2,3):raise ValueError('Unknown source AVFX culling')
+        r=self.renderer;key=('apricot-raster',mode)
+        if key not in r.cache:r.cache[key]=r.create(22,[P],c.byref(RasterizerDesc(3,{0:1,1:2,2:3,3:1}[mode],1,0,0,0,1,0,0,0)))
+        return r.cache[key]
+
     def draw(self,scene,samples,camera,view):
         if not samples:return []
         r=self.renderer;depth=self.copy_depth()if any(s['soft']for s in samples)else None
         projection=camera[288//4:352//4].reshape(4,4).astype(float)
         vp=projection@view;neutral=self.neutral();result=[]
-        ordered=sorted(samples,key=lambda s:float((view@s['parent']@np.r_[s['local'][:3,3],1])[2]))
+        ordered=sorted(samples,key=lambda s:(s['priority'],float((view@s['parent']@np.r_[s['local'][:3,3],1])[2])))
         for sample in ordered:
-            plan=self.plan(sample);parent=sample['parent'];local=sample['local'];positions=sample['positions']
-            if sample['frame']in(5,6):
-                # Static camera-facing plane; local spin/scale is retained.
-                matrix=np.eye(4);matrix[:3,:3]=view[:3,:3].T@local[:3,:3]
-                matrix[:3,3]=(parent@np.r_[local[:3,3],1])[:3]
-            else:matrix=parent@local
-            positions=(matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3]
-            vertices=np.zeros(len(positions),dtype=VERTEX);vertices['position'][:,:3]=positions;vertices['position'][:,3]=sample['depth_offset']
-            for name,values in(('color',sample['color']),('uv',np.pad(sample['uv'],((0,0),(0,2))))):
-                packed=np.rint(np.asarray(values)*1000)
+            plan=self.plan(sample);matrix=world_matrix(sample,view);positions=sample['positions'];is_model=sample['kind']=='model'
+            dtype=MODEL_VERTEX if is_model else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
+            vertices['position'][:,:3]=positions if is_model else(matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3]
+            vertices['position'][:,3]=1 if is_model else sample['depth_offset']
+            uv=sample['base_uv'].copy()
+            if not is_model:
+                for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=np.column_stack((uv[:,i],np.zeros(len(uv)),np.ones(len(uv))))@uv_matrix.T
+            values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,:2].reshape(-1,4),'uv2':uv[:,2:].reshape(-1,4)}
+            for name,value in values.items():
+                if is_model:vertices[name]=value;continue
+                packed=np.rint(np.asarray(value)*1000)
                 if not np.isfinite(packed).all()or np.any(abs(packed)>2**31-1):raise ValueError('Apricot quantized vertex value exceeds its range')
                 vertices[name]=packed.astype('<i4')
-            vb=r.temporary(r.buffer(vertices,1));indices=np.array((0,1,2,0,2,3),dtype='<u4');ib=r.temporary(r.buffer(indices,2))
+            distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
+            if is_model:
+                vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
+            else:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
+            vb=r.temporary(r.buffer(vertices,1));indices=sample['indices'];ib=r.temporary(r.buffer(indices,2))
             r.context(17,[P],plan['layout']);r.context(24,[U],4)
-            r.context(18,[U,U,P,P,P],0,1,c.byref(vb),c.byref(U(VERTEX.itemsize)),c.byref(U(0)))
+            r.context(18,[U,U,P,P,P],0,1,c.byref(vb),c.byref(U(dtype.itemsize)),c.byref(U(0)))
             r.context(19,[P,U,U],ib,42,0)
             r.context(11,[P,P,U],plan['vertex'][2],None,0);r.context(9,[P,P,U],plan['pixel'][2],None,0)
             doc=np.zeros(20,dtype='<f4');doc[:4]=(r.width,r.height,1,.1);doc[4:6]=(r.width,r.height);doc[8:12]=1
+            uv_transform=np.tile(np.array(((1,0,0,0),(0,1,0,0)),dtype='<f4'),(4,1))
+            for i,value in enumerate(sample['uv_matrices']):uv_transform[i*2:i*2+2]=value
+            specific=np.zeros((6,4),dtype='<f4');fresnel=sample.get('fresnel_type',0)
+            if fresnel not in(0,1):raise NotImplementedError('Unresolved model Fresnel axis')
+            specific[1,:3]=np.linalg.inv(view)[:3,3];specific[1,3]=sample.get('fresnel_power',1)
+            specific[2]=sample.get('fresnel_begin',np.ones(4))if fresnel else 1
+            specific[3]=sample.get('fresnel_end',np.ones(4))if fresnel else 1
+            per_instance=np.r_[matrix.T.flatten(),[sample['depth_offset'],0,0,0],sample['color']].astype('<f4')
+            first=sample['textures'].get('TC1',{});calculate_color=first.get('color_mode',1);calculate_alpha=first.get('alpha_mode',1)
             constants={'g_VS_ViewProjectionMatrix':np.asarray(vp.T,dtype='<f4').tobytes(),
                 'g_VS_ProjectionInverseMatrix':np.asarray(np.linalg.inv(projection).T,dtype='<f4').tobytes(),
                 'g_PS_ViewProjectionInverseMatrix':np.asarray(np.linalg.inv(vp).T,dtype='<f4').tobytes(),
-                'g_PS_InstanceExtraParameters':struct.pack('<8f',0,1,1,0,sample['blend'],0,0,0),
+                'g_VS_PerInstanceParameters':per_instance.tobytes(),'g_PS_Parameters':struct.pack('<4f',power,0,0,0),
+                'g_PS_UvTransform':uv_transform.tobytes(),'g_PS_ModelSpecificParameters':specific.tobytes(),
+                'g_PS_InstanceExtraParameters':struct.pack('<8f',int(fresnel==1),calculate_color,calculate_alpha,0,sample['blend'],0,0,0),
                 'g_PS_DocumentParameters':doc.tobytes(),'g_ToneMapParameter':struct.pack('<4f',0,0,0,1),
                 'g_PS_DofCocParam':bytes(16)}
             for stage,setter in(('vertex',7),('pixel',16)):
@@ -148,19 +210,22 @@ class EffectRenderer:
                     payload=constants.get(entry['name'])
                     if payload is None or len(payload)!=entry['bytes']:raise ValueError('Unresolved original Apricot constant: '+entry['name'])
                     buffer=r.temporary(r.buffer(np.frombuffer(payload,dtype=np.uint8),4));r.context(setter,[U,U,P],entry['slot'],1,c.byref(buffer))
-            sources={'g_SamplerColor1':r.source_texture(scene.pack,sample['texture']),
-                'g_ToneMapSampler':neutral,'g_DofLutSampler':neutral,'g_SamplerDepth':depth}
-            sampler=self.sampler(sample);neutral_sampler=r.sampler('g_SamplerGBuffer',{})
+            sources={'g_ToneMapSampler':neutral,'g_DofLutSampler':neutral,'g_SamplerDepth':depth};samplers={}
+            for channel,data in sample['textures'].items():
+                name='g_SamplerDistortion'if channel=='TD'else'g_SamplerColor'+channel[-1]
+                sources[name]=r.source_texture(scene.pack,data['path']);samplers[name]=self.sampler(data)
+            neutral_sampler=r.sampler('g_SamplerGBuffer',{})
             for entry in plan['pixel'][1]['resources']:
                 resource=sources.get(entry['name'])
                 if resource is None:raise ValueError('Unresolved original Apricot texture: '+entry['name'])
                 r.context(8,[U,U,P],entry['slot'],1,c.byref(resource))
             for entry in plan['pixel'][0]['bindings']['samplers']:
-                selected=sampler if entry['name']=='g_SamplerColor1'else neutral_sampler
+                selected=samplers.get(entry['name'],neutral_sampler)
                 r.context(10,[U,U,P],entry['slot'],1,c.byref(selected))
             r.context(35,[P,P,U],self.blend(sample['blend']),None,0xffffffff);r.context(36,[P,U],self.depth(sample),0)
-            r.context(43,[P],r.rasters[False]);r.context(12,[U,U,c.c_int],len(indices),0,0)
+            r.context(43,[P],self.raster(sample['cull']));r.context(12,[U,U,c.c_int],len(indices),0,0)
             result.append({'path':sample['effect_path'],'particle':sample['source_particle'],'age':sample['source_age'],
-                'texture':sample['texture'],'node':plan['node'],'vertex':plan['vertex'][1]['index'],'pixel':plan['pixel'][1]['index']})
+                'texture':sample['texture'],'kind':sample['kind'],'triangles':len(indices)//3,'emitter':sample['source_emitter'],
+                'textures':{k:v['path']for k,v in sample['textures'].items()},'node':plan['node'],'vertex':plan['vertex'][1]['index'],'pixel':plan['pixel'][1]['index']})
         r.last_pass_counts['equipment_effects']=len(result)
         return result
