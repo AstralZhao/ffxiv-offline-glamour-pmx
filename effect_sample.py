@@ -364,7 +364,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                     if draw*100>=probability:continue
                 sequence=i if once else int(round((birth-start)/interval))*count+i
                 yield time-birth,birth,sequence
-    def emit(index,time,bound,inherited,inherited_color,stack=()):
+    def emit(index,time,bound,inherited,inherited_color,stack=(),inherited_at=None):
         nonlocal visits
         visits+=1
         if index in stack or len(stack)>12 or visits>256:raise UnsupportedEffect('发射器循环或预算')
@@ -377,7 +377,12 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
             # the emitter. Keep its independently supported particle children.
             effector=nested(get('Efct',number(data,'EfNo')))
             pending.append('局部点光源尚未接入'if number(effector,'EfVT')==0 else'发射器效果器尚未接入')
-        stationary(data,time);parent=inherited@transform(data,time,emitter=True)
+        stationary(data,time)
+        @lru_cache(maxsize=512)
+        def parent_at(at):
+            history=inherited if inherited_at is None else inherited_at(at)
+            return history@transform(data,at,emitter=True)
+        parent=parent_at(time)
         parent_color=inherited_color*color(data.get('Col'),time)
         particles,emitters=emitter_items(nodes,data)
         for container,children,tag in(('ItPr',particles,'Ptcl'),('ItEm',emitters,'Emit')):
@@ -399,7 +404,26 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                             injection=np.eye(4);injection[:3,3]=position+velocity*age
                             matrix=matrix@injection
                         tint=parent_color if number(child,'PICo')else np.ones(4)
-                        if tag=='Emit':emit(target,age,bound,matrix,tint,stack+(index,));continue
+                        # Keep a source-time transform history, rather than
+                        # rotating already emitted, unbound Simple centers by
+                        # the current parent. Only the reviewed AllAlways
+                        # hierarchy supports history; other modes retain their
+                        # existing current-time path and report missing history.
+                        def history(at,child=child,birth=birth,occurrence=occurrence,
+                                    identity=(stack,index,container,ordinal),current=time):
+                            when=birth+at
+                            if when!=current and number(child,'PICd')!=2:
+                                raise UnsupportedEffect('非持续继承的粒子出生变换历史')
+                            value=inherit(child,parent_at(when),bound)
+                            if emitter_type in(3,5):
+                                from effect_emitter import model_injection,sphere_injection
+                                inject=model_injection if emitter_type==5 else sphere_injection
+                                position,velocity=inject(effect,data,birth,occurrence,(*identity,birth,occurrence))
+                                injection=np.eye(4);injection[:3,3]=position+velocity*at
+                                value=value@injection
+                            return value
+                        if tag=='Emit':
+                            emit(target,age,bound,matrix,tint,stack+(index,),history);continue
                         particle=get(tag,target);particle_data=particle_fields(particle)
                         if not alive(particle_data,age):continue
                         # Geometry/curves depend on source and age, not on
@@ -408,6 +432,10 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         if sample_key not in sampled:sampled[sample_key]=sample(effect,particle,age,np.eye(4),np.ones(4))
                         prototype=sampled[sample_key]
                         value={**prototype,'parent':matrix,'color':prototype['color']*tint}
+                        if 'simple_centers'in prototype and not prototype['simple_bind_parent']:
+                            value['simple_birth_matrices']=np.asarray([
+                                history(float(at))@transform(particle_data,float(at))
+                                for at in prototype['simple_birth_age']])
                         from effect_uv import has_random,initialize,uv_nodes
                         if 'simple_centers'not in prototype and has_random(particle):
                             from effect_geometry import uv_matrix

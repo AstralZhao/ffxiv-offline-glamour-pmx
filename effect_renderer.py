@@ -149,7 +149,19 @@ def world_matrix(sample,view,camera_world=None):
 def simple_world_positions(sample,matrix):
     centers=sample['simple_centers'];gravity=sample['simple_gravity']
     if not len(centers):return np.empty((0,3))
-    world=(matrix@np.column_stack((centers,np.ones(len(centers)))).T).T[:,:3]
+    if sample['simple_bind_parent']:
+        world=(matrix@np.column_stack((centers,np.ones(len(centers)))).T).T[:,:3]
+    else:
+        births=sample.get('simple_birth_matrices')
+        if births is None or births.shape!=(len(centers),4,4):
+            raise UnsupportedEffect('缺少非绑定粒子的出生变换历史')
+        initial=sample['simple_initial_positions'];velocity=sample['simple_initial_velocity']
+        world=np.einsum('nij,nj->ni',births,np.column_stack((initial,np.ones(len(initial)))))[:,:3]
+        # The unbound native birth branch transforms velocity before the
+        # per-world-axis damping update. These operations do not commute
+        # for a rotated parent with unequal authored damping components.
+        velocity=np.einsum('nij,nj->ni',births[:,:3,:3],velocity)
+        world+=velocity*sample['simple_motion_factors']
     world+=gravity@matrix[:3,:3].T if sample['simple_bind_parent']else gravity
     basis=matrix[:3,:3].copy()
     if not sample['simple_inherit_scale']:

@@ -31,11 +31,16 @@ class SourceRandom:
     def integer(self,count):return ((self.word()&65535)*count)>>16
 
 
-def packed_vector(values,precision):
+def packed_direction(values,precision):
     value=np.asarray(values,dtype=np.float32);length=np.sqrt(np.sum(value*value,dtype=np.float32))
     if length==0:return np.zeros(3,dtype=np.float32)
     packed=np.trunc(value/length*np.float32(precision))
-    return (packed/np.float32(precision)*length).astype(np.float32)
+    return (packed/np.float32(precision)).astype(np.float32)
+
+
+def packed_vector(values,precision):
+    value=np.asarray(values,dtype=np.float32);length=np.sqrt(np.sum(value*value,dtype=np.float32))
+    return (packed_direction(value,precision)*length).astype(np.float32)
 
 
 def random_scales(data,random):
@@ -94,12 +99,12 @@ def initial(effect,node):
     points=emission_points(effect,integer('IJMN',-1))[0]if integer('SIPT')==1 else np.zeros((1,3))
     for i in range(count):
         pos=points[i%len(points)]+[random.between(-a,a)for a in area]
-        positions[i]=packed_vector(pos,32767)
+        positions[i]=packed_vector(pos,32000)
         y=1-2*random.unit();phi=random.unit()*2*math.pi;r=math.sqrt(max(0,1-y*y))
         direction=np.array((r*math.sin(phi),y,r*math.cos(phi)),dtype=np.float32)
         # Native directions are normalized, truncated to signed bytes, then
         # multiplied by the separately stored authored speed.
-        direction=np.trunc(direction*127)/127
+        direction=packed_direction(direction,100)
         velocity[i]=direction*random.between(real('VMin'),real('VMax'))
         for j,axis in enumerate('XYZ'):
             base=random.between(-real('RB'+axis),real('RB'+axis))+real('RI'+axis)
@@ -123,9 +128,10 @@ def geometry(effect,node,time):
     if source['repeat']:age=np.remainder(age,source['life'])
     else:live&=age<source['life']
     age=age[live];count=len(age);steps=np.floor(age*10+1e-6).astype(int)
-    damping=source['damping'];displacement=np.empty((count,3))
+    damping=source['damping'];displacement=np.empty((count,3));motion=np.empty((count,3))
     for axis,d in enumerate(damping):
         total=steps if d==1 else d*(1-np.power(d,steps))/(1-d)
+        motion[:,axis]=total*.1
         displacement[:,axis]=source['velocity'][live,axis]*total*.1
     centers=source['positions'][live]+displacement;gravity=.5*age[:,None]**2*source['gravity']
     angles=(source['angles'][live]+np.trunc(age[:,None]*source['spin'][live])).astype(int)&1023
@@ -143,6 +149,9 @@ def geometry(effect,node,time):
     return {'positions':np.zeros((count*4,3)),'colors':np.repeat(colors,4,axis=0),'indices':indices,
         'base_uv':np.tile(uv.reshape(-1,1,2),(1,4,1)),
         'simple_centers':centers,'simple_angles':angles,'simple_sizes':sizes,'simple_pivot':source['pivot'],
+        'simple_initial_positions':source['positions'][live].copy(),
+        'simple_initial_velocity':source['velocity'][live].copy(),'simple_motion_factors':motion,
+        'simple_birth_age':time-age,
         'simple_gravity':gravity,'simple_bind_parent':source['bind_parent'],
         'simple_inherit_scale':source['inherit_scale'],'simple_particle_count':count,
         'random_policy':'native-xorshift128-independent-stable-preview-seed'}
