@@ -53,12 +53,12 @@ class SettingsDialog(W.QDialog):
 
     def export(self):
         if self.future:return
-        path,_=W.QFileDialog.getSaveFileName(self,'导出幻衣间资源包',str(self.store.root/'幻衣间资源包.ff14resources'),'幻衣间资源包 (*.ff14resources)')
+        path,_=W.QFileDialog.getSaveFileName(self,'导出幻衣间资源包',str(self.store.root/'幻衣间资源包-全种族精简.ff14resources'),'幻衣间资源包 (*.ff14resources)')
         if not path:return
         from resource_pack import export_resource_pack
         self.operation='export';self.cancel_event.clear();self.progress_record=None;self.busy(True)
-        self.status.setText('正在准备导出，全部装备资源可能需要数十 GB…')
-        self.future=self.pool.submit(export_resource_pack,self.path.text(),path,root=self.store.root,callback=self.progress,cancel=self.cancel_event);self.timer.start()
+        self.status.setText('正在扫描全部种族与装备依赖，准备精简资源包…')
+        self.future=self.pool.submit(export_resource_pack,self.path.text(),path,root=self.store.root,callback=self.progress,cancel=self.cancel_event,compact=True);self.timer.start()
 
     def save(self):
         if self.future:return
@@ -77,7 +77,9 @@ class SettingsDialog(W.QDialog):
     def poll(self):
         if self.progress_record:
             record=self.progress_record;total=max(1,record['total'])
-            self.status.setText(f"{record['phase']} · {record['done']/total:.0%} · {record['done']/1024**3:.2f} / {record['total']/1024**3:.2f} GB")
+            if record['phase']in('读取资源索引','扫描角色与装备','收集全部种族与装备图标'):
+                self.status.setText(f"{record['phase']} · {record['done']/total:.0%} · {record['done']:,} / {record['total']:,} 项")
+            else:self.status.setText(f"{record['phase']} · {record['done']/total:.0%} · {record['done']/1024**3:.2f} / {record['total']/1024**3:.2f} GiB")
         if not self.future or not self.future.done():return
         self.timer.stop();self.spinner.set_running(False);future=self.future;self.future=None
         try:

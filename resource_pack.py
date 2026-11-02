@@ -43,8 +43,11 @@ def allowed(name):
 
 def manifest_data(raw,profile):
     data=json.loads(raw)
-    if (data.get('format'),data.get('region'),data.get('scope'))!=(FORMAT,'CN','wardrobe-base-archives'):
+    supported=((FORMAT,'CN','wardrobe-base-archives'),('ff14-wardrobe-resources-v2','CN','wardrobe-selected-all-races'))
+    if (data.get('format'),data.get('region'),data.get('scope'))not in supported:
         raise ValueError('不是受支持的幻衣间国服资源包')
+    if data.get('format')=='ff14-wardrobe-resources-v2'and data.get('selection',{}).get('race_gender_clan_filters')is not False:
+        raise ValueError('精简包缺少全部种族保留声明')
     if data.get('client_version')!=profile['client_version']:raise ValueError('资源包的国服版本与当前软件不匹配')
     if data.get('categories')!=list(CATEGORIES):raise ValueError('资源包缺少必需的资源分类')
     files=data.get('files')
@@ -84,11 +87,14 @@ def validate_directory(path,profile,*,full=False,callback=None,cancel=None):
     return path
 
 
-def export_resource_pack(game,output,*,root=None,callback=None,cancel=None):
+def export_resource_pack(game,output,*,root=None,callback=None,cancel=None,compact=False):
     from settings import ROOT,validate_game
     root=Path(root or ROOT);game=validate_game(game,root);output=Path(output).resolve()
     if output.is_relative_to(game):raise ValueError('资源包不能写入游戏安装目录')
     if output.exists():raise ValueError('目标文件已存在，请使用新的资源包文件名')
+    if compact:
+        from compact_resources import export_compact
+        return export_compact(game,output,root,callback=callback,cancel=cancel)
     files=[game/'game/ffxivgame.ver',game/'game/ffxiv_dx11.exe']
     for path in sorted((game/'game/sqpack/ffxiv').iterdir()):
         if path.is_file()and allowed(path.relative_to(game).as_posix()):files.append(path)
