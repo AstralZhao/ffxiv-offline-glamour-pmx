@@ -30,6 +30,25 @@ MODEL_VERTEX=np.dtype([('position','<f4',4),('normal','<f4',3),('tangent','<f4',
 POWDER_VERTEX=np.dtype([('position','<f4',3),('angles','<f4',3),('center','<f4',3),('uv','<f4',2),('color','<i4',4)])
 
 
+def quantize_vertex(value,*,color=False):
+    # Native shape/Powder packed inputs are signed 16-bit integers. Expand
+    # them to the original VS int signature with the SAME truncation/wrap,
+    # rather than rounding float values into an unbounded 32-bit input.
+    packed=np.asarray(value,dtype='<f4')*np.float32(1000)
+    if not np.isfinite(packed).all():raise ValueError('Non-finite Apricot vertex value')
+    if color:packed=np.clip(packed,0,10000)
+    if np.any(abs(packed)>2**31-1):raise ValueError('Apricot quantized vertex value exceeds its range')
+    return ((np.trunc(packed).astype('<i8')+32768)%65536-32768).astype('<i4')
+
+
+def shape_uv_coordinates(value,matrix):
+    # Native 3eab8c centres each shape UV before applying its two original
+    # rows. Keep that float32 operation order, including identity matrices.
+    matrix=np.asarray(matrix);rows=matrix.astype('<f4');uv=np.asarray(value,dtype='<f4')-np.float32(.5)
+    offset=np.asarray(matrix[:,3]+matrix[:,:2]@np.full(2,.5),dtype='<f4')
+    return uv[:,0:1]*rows[:,0]+uv[:,1:2]*rows[:,1]+offset
+
+
 def shader_settings(sample):
     # Original Powder VS has one fixed float2 UV input; all 75 CN nodes use
     # UvSetCount_0. This key is not the source particle's UvSN field.
@@ -228,6 +247,9 @@ class EffectRenderer:
         ordered=sorted(samples,key=lambda s:(s['priority'],float((view@s['parent']@np.r_[s['local'][:3,3],1])[2])))
         for sample in ordered:
             plan=self.plan(sample);matrix=world_matrix(sample,view);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
+            if sample.get('disc_parameters',{}).get('scaling',1)<1:
+                from effect_disc import geometry as disc_geometry
+                positions=disc_geometry(sample['disc_parameters'],np.linalg.norm(matrix[:3,:3],axis=0))['positions']
             dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
             world_positions=(simple_world_positions(sample,matrix)if 'simple_centers'in sample else
                 (matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3])
@@ -241,14 +263,12 @@ class EffectRenderer:
                 vertices['position'][:,3]=1 if is_model else sample['depth_offset']
             uv=sample['base_uv'].copy()
             if not is_model:
-                for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=np.column_stack((uv[:,i],np.zeros(len(uv)),np.ones(len(uv))))@uv_matrix.T
+                for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=shape_uv_coordinates(uv[:,i],uv_matrix)
             values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,0]if is_powder else uv[:,:2].reshape(-1,4)}
             if not is_powder:values['uv2']=uv[:,2:].reshape(-1,4)
             for name,value in values.items():
                 if is_model or(is_powder and name=='uv'):vertices[name]=value;continue
-                packed=np.rint(np.asarray(value)*1000)
-                if not np.isfinite(packed).all()or np.any(abs(packed)>2**31-1):raise ValueError('Apricot quantized vertex value exceeds its range')
-                vertices[name]=packed.astype('<i4')
+                vertices[name]=quantize_vertex(value,color=name=='color')
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
             if is_model:
                 vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
