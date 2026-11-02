@@ -276,7 +276,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
     zero random offsets are a fixed preview choice, not a game RNG replay.
     """
     from effect_geometry import sample
-    result=[];pending=[];visits=0
+    result=[];pending=[];visits=0;sampled={}
     if effect.missing:return (),('特效来源缺失',)
     groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl','Efct')}
     def get(tag,index):
@@ -361,7 +361,12 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         if tag=='Emit':emit(target,age,bound,matrix,tint,stack+(index,));continue
                         particle=get(tag,target);particle_data=particle_fields(particle)
                         if not alive(particle_data,age):continue
-                        value=sample(effect,particle,age,matrix,tint)
+                        # Geometry/curves depend on source and age, not on
+                        # which crystal attachment spawned this instance.
+                        sample_key=(target,age)
+                        if sample_key not in sampled:sampled[sample_key]=sample(effect,particle,age,np.eye(4),np.ones(4))
+                        prototype=sampled[sample_key]
+                        value={**prototype,'parent':matrix,'color':prototype['color']*tint}
                         if not len(value['indices']):continue
                         value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth)
                         if len(result)>=512:raise UnsupportedEffect('粒子预算')

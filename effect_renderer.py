@@ -9,7 +9,7 @@ import struct
 
 import numpy as np
 
-from d3d11_debug import F,U,P,InputElement,TextureDesc,RasterizerDesc
+from d3d11_debug import F,U,P,InputElement,TextureDesc,RasterizerDesc,BufferDesc,InitialData
 from material_shader_probe import selector,disassemble
 from material_stage_feasibility import signature
 from mesh_sampling_probe import SamplerDesc
@@ -95,17 +95,42 @@ def tree_basis(matrix,camera):
     return vectors/lengths
 
 
-def world_matrix(sample,view):
+def look_basis(position,target,up):
+    """CN37de30 positive-length path, column-vector convention."""
+    direction=np.asarray(target,dtype='<f4')-np.asarray(position,dtype='<f4')
+    square=np.sum(direction*direction,dtype=np.float32)
+    if square<np.float32(.0001):raise UnsupportedEffect('相机朝向退化')
+    forward=direction*(np.float32(1)/np.sqrt(square))
+    up=np.asarray(up,dtype='<f4');up=up/np.sqrt(np.sum(up*up,dtype=np.float32))
+    if not np.isfinite(up).all()or abs(np.sum(forward*up,dtype=np.float32))>np.float32(.99):
+        raise UnsupportedEffect('相机朝向与上方向重合')
+    right=np.cross(up,forward);right/=np.sqrt(np.sum(right*right,dtype=np.float32))
+    return np.column_stack((right,np.cross(forward,right),forward))
+
+
+def world_matrix(sample,view,camera_world=None):
     parent,local=sample['parent'],sample['local'];matrix=parent@local
     if sample['frame']in(4,5,6):
-        basis=view[:3,:3].T.copy()
+        camera_world=np.linalg.inv(view)if camera_world is None else camera_world
+        basis=camera_world[:3,:3].copy()
         if sample['frame']==4:
             facing=basis[:,2].copy();facing[1]=0;length=np.linalg.norm(facing)
             if length<1e-8:raise ValueError('Singular axis-Y billboard camera')
             facing/=length;up=np.array((0.,1.,0.));basis=np.column_stack((np.cross(up,facing),up,facing))
-        matrix[:3,:3]=basis@np.diag(np.linalg.norm(parent[:3,:3],axis=0))@local[:3,:3]
+        elif sample['frame']==6:
+            # ScreenBillboard(5) uses the view basis; CameraBillboard(6)
+            # instead looks from EACH particle position towards the camera.
+            try:basis=look_basis(matrix[:3,3],camera_world[:3,3],camera_world[:3,1])
+            except UnsupportedEffect:
+                # Original 3e3c98 retries a +Z target with the same up vector.
+                basis=look_basis(matrix[:3,3],matrix[:3,3]+(0,0,1),camera_world[:3,1])
+        scales=np.linalg.norm(parent[:3,:3],axis=0)*sample['local_scale']
+        rot=sample['local_rotation'];order=sample['coordinate_order']
+        scaled=rot*scales if order in(0,1,4)else scales[:,None]*rot
+        matrix[:3,:3]=basis@scaled
     elif sample['frame']==9:
-        basis=tree_basis(matrix,np.linalg.inv(view)[:3,3])
+        camera_world=np.linalg.inv(view)if camera_world is None else camera_world
+        basis=tree_basis(matrix,camera_world[:3,3])
         scales=np.linalg.norm(parent[:3,:3],axis=0)*sample['local_scale']
         matrix[:3,:3]=basis*scales
     return matrix
@@ -135,6 +160,40 @@ class EffectRenderer:
     def __init__(self,renderer,pack):
         self.renderer=renderer;self.pack=pack;self.packages={};self.plans={};self.samplers={};self.depth_copy=None;self.depth_size=None
         self.color_copy=None;self.color_size=None
+        self.uploads=[];self.upload_cursor=0;self.frame_constants={};self.reuse_uploads=True;self.batch_draws=True
+        self.upload_bytes=0;self.upload_budget=64*1024*1024
+
+    def upload(self,array,bind):
+        """Reuse owned default buffers; D3D orders updates before each draw."""
+        r=self.renderer
+        if not self.reuse_uploads:
+            create=r.dynamic_buffer if bind==1 and hasattr(r,'dynamic_buffer')else r.buffer
+            return r.temporary(create(array,bind))
+        if bind==4:
+            key=array.tobytes()
+            if key in self.frame_constants:return self.frame_constants[key]
+        index=self.upload_cursor;self.upload_cursor+=1
+        if index==len(self.uploads):self.uploads.append(None)
+        entry=self.uploads[index]
+        if entry is None or entry[:2]!=(bind,array.nbytes):
+            previous=entry[1]if entry is not None else 0
+            if self.upload_bytes-previous+array.nbytes>self.upload_budget:
+                # Keep a strict retained-memory bound. The original temporary
+                # upload path is equivalent and is released at frame end.
+                create=r.dynamic_buffer if hasattr(r,'dynamic_buffer')else r.buffer
+                return r.temporary(create(array,bind))
+            if entry is not None:
+                r.resources.remove(entry[2]);r.probe.release(entry[2])
+                self.upload_bytes-=previous;self.uploads[index]=None
+            desc=BufferDesc(array.nbytes,0,bind,0,0,0);initial=InitialData(array.ctypes.data,0,0)
+            pointer=r.create(3,[P,P],c.byref(desc),c.byref(initial))
+            self.uploads[index]=(bind,array.nbytes,pointer)
+            self.upload_bytes+=array.nbytes
+        else:
+            pointer=entry[2]
+            r.context(48,[P,U,P,P,U,U],pointer,0,None,array.ctypes.data,0,0)
+        if bind==4:self.frame_constants[key]=pointer
+        return pointer
 
     def plan(self,sample):
         kind=sample['kind']if sample['kind']in('model','powder')else'shape';settings=shader_settings(sample)
@@ -255,9 +314,31 @@ class EffectRenderer:
         screen_copy=self.copy_color()if any(t.get('screen_copy')for s in samples for t in s['textures'].values())else None
         projection=camera[288//4:352//4].reshape(4,4).astype(float)
         vp=projection@view;neutral=self.neutral();result=[]
+        camera_world=np.linalg.inv(view);projection_inverse=np.linalg.inv(projection);vp_inverse=np.linalg.inv(vp)
+        camera_constants={'g_VS_ViewProjectionMatrix':np.asarray(vp.T,dtype='<f4').tobytes(),
+            'g_VS_ProjectionInverseMatrix':np.asarray(projection_inverse.T,dtype='<f4').tobytes(),
+            'g_PS_ViewProjectionInverseMatrix':np.asarray(vp_inverse.T,dtype='<f4').tobytes()}
+        self.upload_cursor=0;self.frame_constants={};batch=None;self.last_batches=0
+        def flush():
+            if batch is None:return
+            plan=batch['plan'];parts=batch['vertices'];offsets=np.cumsum([0]+[len(v)for v in parts[:-1]])
+            vertices=np.concatenate(parts);indices=np.concatenate([idx+off for idx,off in zip(batch['indices'],offsets)]).astype('<u4')
+            vb=self.upload(vertices,1);ib=self.upload(indices,2)
+            r.context(17,[P],plan['layout']);r.context(24,[U],4)
+            r.context(18,[U,U,P,P,P],0,1,c.byref(vb),c.byref(U(vertices.dtype.itemsize)),c.byref(U(0)))
+            r.context(19,[P,U,U],ib,42,0)
+            r.context(11,[P,P,U],plan['vertex'][2],None,0);r.context(9,[P,P,U],plan['pixel'][2],None,0)
+            for setter,slot,payload in batch['constants']:
+                buffer=self.upload(np.frombuffer(payload,dtype=np.uint8),4);r.context(setter,[U,U,P],slot,1,c.byref(buffer))
+            for slot,resource in batch['resources']:r.context(8,[U,U,P],slot,1,c.byref(resource))
+            for slot,sampler in batch['samplers']:r.context(10,[U,U,P],slot,1,c.byref(sampler))
+            blend,depth_state,raster=batch['states']
+            r.context(35,[P,P,U],blend,None,0xffffffff);r.context(36,[P,U],depth_state,0)
+            r.context(43,[P],raster);r.context(12,[U,U,c.c_int],len(indices),0,0)
+            self.last_batches+=1
         ordered=sorted(samples,key=lambda s:(s['priority'],float((view@s['parent']@np.r_[s['local'][:3,3],1])[2])))
         for sample in ordered:
-            plan=self.plan(sample);matrix=world_matrix(sample,view);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
+            plan=self.plan(sample);matrix=world_matrix(sample,view,camera_world);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
             if sample.get('disc_parameters',{}).get('scaling',1)<1:
                 from effect_disc import geometry as disc_geometry
                 positions=disc_geometry(sample['disc_parameters'],np.linalg.norm(matrix[:3,:3],axis=0))['positions']
@@ -284,51 +365,55 @@ class EffectRenderer:
             if is_model:
                 vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
             elif not is_powder:vertices['extra']=(power,*distortion.get('distort_uv',[False]*4)[:3])
-            create_vertices=r.buffer if is_model else getattr(r,'dynamic_buffer',r.buffer)
-            vb=r.temporary(create_vertices(vertices,1));indices=sample['indices'];ib=r.temporary(r.buffer(indices,2))
-            r.context(17,[P],plan['layout']);r.context(24,[U],4)
-            r.context(18,[U,U,P,P,P],0,1,c.byref(vb),c.byref(U(dtype.itemsize)),c.byref(U(0)))
-            r.context(19,[P,U,U],ib,42,0)
-            r.context(11,[P,P,U],plan['vertex'][2],None,0);r.context(9,[P,P,U],plan['pixel'][2],None,0)
+            indices=sample['indices']
             doc=document_parameters(sample,r.width,r.height)
             uv_transform=np.tile(np.array(((1,0,0,0),(0,1,0,0)),dtype='<f4'),(4,1))
             for i,value in enumerate(sample['uv_matrices']):uv_transform[i*2:i*2+2]=value
             specific=np.zeros((6,4),dtype='<f4');fresnel=sample.get('fresnel_type',0)
             if fresnel not in(0,1):raise NotImplementedError('Unresolved model Fresnel axis')
-            specific[1,:3]=np.linalg.inv(view)[:3,3];specific[1,3]=sample.get('fresnel_power',1)
+            specific[1,:3]=camera_world[:3,3];specific[1,3]=sample.get('fresnel_power',1)
             specific[2]=sample.get('fresnel_begin',np.ones(4))if fresnel else 1
             specific[3]=sample.get('fresnel_end',np.ones(4))if fresnel else 1
             per_instance=np.r_[matrix.T.flatten(),[sample['depth_offset'],0,0,0],sample['color']].astype('<f4')
             first=sample['textures'].get('TC1',{});calculate_color=first.get('color_mode',1);calculate_alpha=first.get('alpha_mode',1)
-            constants={'g_VS_ViewProjectionMatrix':np.asarray(vp.T,dtype='<f4').tobytes(),
-                'g_VS_ProjectionInverseMatrix':np.asarray(np.linalg.inv(projection).T,dtype='<f4').tobytes(),
-                'g_PS_ViewProjectionInverseMatrix':np.asarray(np.linalg.inv(vp).T,dtype='<f4').tobytes(),
+            constants={**camera_constants,
                 'g_VS_PerInstanceParameters':per_instance.tobytes(),'g_PS_Parameters':struct.pack('<4f',power,0,0,0),
                 'g_PS_UvTransform':uv_transform.tobytes(),'g_PS_ModelSpecificParameters':specific.tobytes(),
                 'g_PS_InstanceExtraParameters':struct.pack('<8f',int(fresnel==1),calculate_color,calculate_alpha,0,sample['blend'],0,0,0),
                 'g_PS_DocumentParameters':doc.tobytes(),'g_ToneMapParameter':struct.pack('<4f',0,0,0,1),
                 'g_PS_DofCocParam':bytes(16)}
+            constant_bindings=[]
             for stage,setter in(('vertex',7),('pixel',16)):
                 for entry in plan[stage][1]['constants']:
                     payload=constants.get(entry['name'])
                     if payload is None or len(payload)!=entry['bytes']:raise ValueError('Unresolved original Apricot constant: '+entry['name'])
-                    buffer=r.temporary(r.buffer(np.frombuffer(payload,dtype=np.uint8),4));r.context(setter,[U,U,P],entry['slot'],1,c.byref(buffer))
+                    constant_bindings.append((setter,entry['slot'],payload))
             sources={'g_ToneMapSampler':neutral,'g_DofLutSampler':neutral,'g_SamplerDepth':depth};samplers={}
             for channel,data in sample['textures'].items():
                 name='g_SamplerDistortion'if channel=='TD'else'g_SamplerColor'+channel[-1]
                 sources[name]=screen_copy if data.get('screen_copy')else r.source_texture(scene.pack,data['path']);samplers[name]=self.sampler(data)
             neutral_sampler=r.sampler('g_SamplerGBuffer',{})
+            resource_bindings=[];sampler_bindings=[]
             for entry in plan['pixel'][1]['resources']:
                 resource=sources.get(entry['name'])
                 if resource is None:raise ValueError('Unresolved original Apricot texture: '+entry['name'])
-                r.context(8,[U,U,P],entry['slot'],1,c.byref(resource))
+                resource_bindings.append((entry['slot'],resource))
             for entry in plan['pixel'][0]['bindings']['samplers']:
                 selected=samplers.get(entry['name'],neutral_sampler)
-                r.context(10,[U,U,P],entry['slot'],1,c.byref(selected))
-            r.context(35,[P,P,U],self.blend(sample['blend']),None,0xffffffff);r.context(36,[P,U],self.depth(sample),0)
-            r.context(43,[P],self.raster(sample['cull']));r.context(12,[U,U,c.c_int],len(indices),0,0)
+                sampler_bindings.append((entry['slot'],selected))
+            states=(self.blend(sample['blend']),self.depth(sample),self.raster(sample['cull']))
+            # Merge ONLY adjacent commands with identical effective original
+            # programs, constants, textures and states. Triangle order stays
+            # unchanged; no particle, texture or blend operation is dropped.
+            key=(id(plan),tuple(constant_bindings),tuple((s,p.value)for s,p in resource_bindings),
+                tuple((s,p.value)for s,p in sampler_bindings),tuple(p.value for p in states))
+            if batch is None or not self.batch_draws or batch['key']!=key:
+                flush();batch={'key':key,'plan':plan,'constants':constant_bindings,'resources':resource_bindings,
+                    'samplers':sampler_bindings,'states':states,'vertices':[],'indices':[]}
+            batch['vertices'].append(vertices);batch['indices'].append(indices)
             result.append({'path':sample['effect_path'],'particle':sample['source_particle'],'age':sample['source_age'],
                 'texture':sample['texture'],'kind':sample['kind'],'triangles':len(indices)//3,'emitter':sample['source_emitter'],
                 'textures':{k:v['path']for k,v in sample['textures'].items()},'node':plan['node'],'vertex':plan['vertex'][1]['index'],'pixel':plan['pixel'][1]['index']})
-        r.last_pass_counts['equipment_effects']=len(result)
+        flush();r.last_pass_counts['equipment_effects']=len(result)
+        r.last_pass_counts['equipment_effect_batches']=self.last_batches
         return result

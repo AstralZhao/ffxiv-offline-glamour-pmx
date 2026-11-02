@@ -51,6 +51,7 @@ def random_scales(data,random):
     return np.array(values*2 if len(values)==1 else values,dtype=np.float32)
 
 
+@lru_cache(maxsize=64)
 def emission_points(effect,index):
     models=[r for r in effect.source_records if r.tag=='Modl']
     if not 0<=index<len(models):raise ValueError('Simple injection model index differs')
@@ -61,7 +62,9 @@ def emission_points(effect,index):
     values=np.frombuffer(vertices.data,dtype=dtype);order=np.frombuffer(numbers.data,dtype='<u2')
     if not len(order)or not len(values)or np.any(order>=len(values)):raise ValueError('Emission model vertex order differs')
     if not np.isfinite(values['position']).all()or not np.isfinite(values['normal']).all():raise ValueError('Non-finite emission model')
-    return values['position'][order].copy(),values['normal'][order].copy()
+    result=values['position'][order].copy(),values['normal'][order].copy()
+    for value in result:value.flags.writeable=False
+    return result
 
 
 @lru_cache(maxsize=128)
