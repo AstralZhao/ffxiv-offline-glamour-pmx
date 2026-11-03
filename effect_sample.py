@@ -303,6 +303,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
     if effect.missing:return (),('特效来源缺失',)
     groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl','Efct')}
     draw_order=number(fields(r for r in effect.source_records if r.tag=='DwOT'),'DwOT')
+    draw_layer=number(fields(r for r in effect.source_records if r.tag=='DwLy'),'DwLy')
     if draw_order not in(0,1,2):return (),('未审阅的特效绘制顺序',)
     def get(tag,index):
         if not 0<=index<len(groups[tag]):raise ValueError('AVFX graph index out of range: '+tag)
@@ -446,7 +447,8 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                                 for uv,state in zip(uv_nodes(particle),states)]
                             value['uv_random_bytes']=states
                         if not len(value['indices']):continue
-                        value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth,draw_order=draw_order)
+                        value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth,
+                            draw_order=draw_order,draw_layer=draw_layer)
                         if len(result)>=512:raise UnsupportedEffect('粒子预算')
                         result.append(value)
                 except UnsupportedEffect as error:pending.append(str(error))

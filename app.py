@@ -141,7 +141,7 @@ class DemoEngine:
                 def __init__(self,*args,**kwargs):
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
                     self.frame_constant_buffers=None;self.frame_constant_pointers=set()
-                    self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True
+                    self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True;self.pending_effect_draw=None
                     super().__init__(*args,**kwargs)
                     from character_layer import CharacterLayer
                     self.character_layer=CharacterLayer(self);self.capture_character_layer=False
@@ -157,7 +157,8 @@ class DemoEngine:
                     output=self.color
                     if self.material_glow_enabled:
                         if self.material_glow is None:raise ValueError('Original postprocess inputs were not prepared')
-                        output=self.material_glow.apply(self.color,*self.post_camera)
+                        output=self.material_glow.apply(self.color,*self.post_camera,
+                            draw_layer2=self.pending_effect_draw)
                     if self.native_surface:
                         self.native_surface.present(output)
                         return None,None
@@ -202,6 +203,7 @@ class DemoEngine:
                         return super().draw_scene(scene,yaw)
                     finally:
                         self.capture_character_layer=False
+                        self.pending_effect_draw=None
                         self.frame_joints={};self.frame_constant_buffers=None;self.frame_constant_pointers=set()
 
                 def character_layer_key(self,camera,view):
@@ -287,6 +289,7 @@ class DemoEngine:
                     return camera_payload(view,projection),view
 
                 def draw_scene_extras(self,scene,camera,view):
+                    self.pending_effect_draw=None
                     if self.capture_character_layer:
                         self.character_layer.capture(scene,self.character_layer_key(camera,view))
                     self.post_camera=(camera,view)
@@ -295,7 +298,15 @@ class DemoEngine:
                     if not getattr(scene,'effect_samples',()):return
                     from effect_renderer import EffectRenderer
                     if not hasattr(self,'effect_renderer'):self.effect_renderer=EffectRenderer(self,scene.pack)
-                    self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view)
+                    if self.material_glow_enabled:
+                        from effect_sample import UnsupportedEffect
+                        if any(sample.get('draw_layer')!=2 for sample in scene.effect_samples):
+                            raise UnsupportedEffect('原生试穿合成尚未审阅此特效层')
+                        def draw_layer2(color):
+                            self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view,
+                                color_source=color,native_alpha=True)
+                        self.pending_effect_draw=draw_layer2
+                    else:self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view)
 
                 def render_plan(self,scene,mesh,role):
                     if role!='material'or not mesh['shader_path'].endswith('/characterlegacy.shpk'):

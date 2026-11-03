@@ -364,29 +364,35 @@ class EffectRenderer:
         r.context(47,[P,P],self.depth_copy[0],r.depth)
         return self.depth_copy[1]
 
-    def blend(self,mode):
-        r=self.renderer;key=('apricot-blend',mode)
+    def blend(self,mode,*,native_alpha=False,alpha_channel=True):
+        r=self.renderer;key=('apricot-blend',mode,native_alpha,alpha_channel)
         if key not in r.cache:
             # CN38832f table: 9..12 share the exact RGB branches of 1..4.
             # Packed fields are enable:1, operation:3, src:4, dst:4; D3D
-            # factors/operations below use its one-based enums. Preserve the
-            # preview emission alpha; the native second DOF target is absent.
+            # factors/operations below use its one-based enums. Only the
+            # separate native UI color target can use native alpha; the old
+            # FP16 material target still owns an emission mask in alpha.
             src,dst,operation={0:(5,6,1),1:(1,3,1),2:(5,2,1),3:(5,2,3),4:(2,4,1),
                 5:(10,1,1),6:(2,2,4),7:(2,2,5),8:(5,6,1),9:(1,3,1),10:(5,2,1),11:(5,2,3),12:(2,4,1)}[mode]
-            targets=[int(mode!=8),src,dst,operation,1,2,1,7]+[0,1,0,1,1,0,1,15]*7
+            alpha=(2,6,1)if alpha_channel and mode in(0,1,3,5,6,7,8,9,11)else(1,2,1)
+            targets=[int(mode!=8),src,dst,operation,*(alpha if native_alpha else(1,2,1)),15 if native_alpha else 7]+[0,1,0,1,1,0,1,15]*7
             r.cache[key]=r.create(20,[P],(U*66)(0,0,*targets))
         return r.cache[key]
 
-    def copy_color(self):
+    def copy_color(self,source=None):
         """Snapshot the owned preview, before particles; no CPU readback."""
-        r=self.renderer;size=(r.width,r.height)
+        r=self.renderer;source=r.color if source is None else source
+        description=(U*11)();r.probe.method(source,10,None,P)(source,c.byref(description))
+        if list(description[:4])!=[r.width,r.height,1,1]or description[4]not in(10,87):
+            raise ValueError('Unreviewed Apricot screen-copy source')
+        size=(r.width,r.height,int(description[4]))
         if self.color_copy is not None and self.color_size!=size:
             for pointer in reversed(self.color_copy):r.resources.remove(pointer);r.probe.release(pointer)
             self.color_copy=None
         if self.color_copy is None:
-            texture=r.create(5,[P,P],c.byref(TextureDesc(*size,1,1,10,1,0,0,8,0,0)),None)
+            texture=r.create(5,[P,P],c.byref(TextureDesc(r.width,r.height,1,1,size[2],1,0,0,8,0,0)),None)
             self.color_copy=(texture,r.create(7,[P,P],texture,None));self.color_size=size
-        r.context(47,[P,P],self.color_copy[0],r.color)
+        r.context(47,[P,P],self.color_copy[0],source)
         return self.color_copy[1]
 
     def depth(self,sample):
@@ -403,10 +409,10 @@ class EffectRenderer:
         if key not in r.cache:r.cache[key]=r.create(22,[P],c.byref(RasterizerDesc(3,{0:1,1:2,2:3,3:1}[mode],1,0,0,0,1,0,0,0)))
         return r.cache[key]
 
-    def draw(self,scene,samples,camera,view):
+    def draw(self,scene,samples,camera,view,*,color_source=None,native_alpha=False):
         if not samples:return []
         r=self.renderer;depth=self.copy_depth()if any(s['soft']for s in samples)else None
-        screen_copy=self.copy_color()if any(t.get('screen_copy')for s in samples for t in s['textures'].values())else None
+        screen_copy=self.copy_color(color_source)if any(t.get('screen_copy')for s in samples for t in s['textures'].values())else None
         projection=camera[288//4:352//4].reshape(4,4).astype(float)
         vp=projection@view;neutral=self.neutral();result=[]
         camera_world=np.linalg.inv(view);projection_inverse=np.linalg.inv(projection);vp_inverse=np.linalg.inv(vp)
@@ -500,7 +506,8 @@ class EffectRenderer:
             for entry in plan['pixel'][0]['bindings']['samplers']:
                 selected=samplers.get(entry['name'],neutral_sampler)
                 sampler_bindings.append((entry['slot'],selected))
-            states=(self.blend(sample['blend']),self.depth(sample),self.raster(sample['cull']))
+            states=(self.blend(sample['blend'],native_alpha=native_alpha,
+                alpha_channel=sample.get('alpha_channel',True)),self.depth(sample),self.raster(sample['cull']))
             # Merge ONLY adjacent commands with identical effective original
             # programs, constants, textures and states. Triangle order stays
             # unchanged; no particle, texture or blend operation is dropped.
