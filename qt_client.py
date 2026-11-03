@@ -678,6 +678,14 @@ class QtClient(NativeClient):
         if self.effect_future is not None:return
         super().pump_render()
 
+    def render_effect_frame(self):
+        return self.effect_clock.sample()if self.effect_clock.playing and self.state['effects_visible']else None
+
+    def effect_frame_presented(self,result):
+        if 'effect_frame'not in result:return
+        self.effect_last_frame=result['effect_frame']
+        if not self.effect_clock.playing:self.effect_clock.pause(self.effect_last_frame)
+
     def tick_effects(self):
         if(self.closing or not self.ready or not self.effect_clock.playing or not self.state['effects_visible']
             or self.job is not None or self.effect_future is not None or self.dirty or self.dialogs
@@ -693,8 +701,7 @@ class QtClient(NativeClient):
         if not self.effect_future.done():self.effect_poll=self.root.after(10,self.poll_effects);return
         future=self.effect_future;self.effect_future=None
         try:
-            result=future.result();self.effect_last_frame=result['effect_frame']
-            if not self.effect_clock.playing:self.effect_clock.pause(self.effect_last_frame)
+            result=future.result();self.effect_frame_presented(result)
         except Exception as error:
             self.pause_effects();self.message.set('特效播放未能完成，已暂停。'+str(error))
         if self.closing:return

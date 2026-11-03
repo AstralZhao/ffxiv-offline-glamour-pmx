@@ -199,14 +199,22 @@ class NativeClient:
         if not self.ready or self.closing or self.job is not None or not self.dirty:return
         self.dirty=False;state=deepcopy(self.state);generation=self.generation
         size=(max(64,self.viewport.winfo_width()),max(64,self.viewport.winfo_height()))
-        def draw():self.engine.renderer.resize_native(*size);return self.engine.render(state)
+        effect_frame=self.render_effect_frame()
+        def draw():
+            self.engine.renderer.resize_native(*size)
+            return self.engine.render(state,effect_frame=effect_frame)if effect_frame is not None else self.engine.render(state)
         def done(result):
             self.good=deepcopy(result['state'])
             if generation==self.generation:self.state=deepcopy(self.good)
             self.accept_result(result,replace_state=False,refresh=False)
         self.submit(draw,done)
 
+    def render_effect_frame(self):return None
+
+    def effect_frame_presented(self,result):pass
+
     def accept_result(self,result,replace_state=True,*,persist=True,refresh=True):
+        self.effect_frame_presented(result)
         was_ready=self.ready
         if replace_state:
             self.good=deepcopy(result['state'])

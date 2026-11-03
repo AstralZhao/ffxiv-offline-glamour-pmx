@@ -1,8 +1,9 @@
 """Source-driven, frozen AVFX preview, separate from a native VFX simulation.
 
-The wardrobe uses a fixed frame. UV and Simple size random bytes follow reviewed
-native math with stable independent birth seeds; other random ranges still use
-their centres. It does not animate the character. Unsupported branches are reported, not replaced
+The wardrobe starts at a fixed frame, with optional effect-only playback. UV,
+Simple size and initial particle TRS random bytes follow reviewed native math
+with independent stable birth seeds, not a captured native RNG stream.
+It does not animate the character. Unsupported branches are reported, not replaced
 with invented particles. Schema/curve conventions follow pinned VFXEditor.
 """
 import math
@@ -167,14 +168,25 @@ def rotation_value(value,order):
     return result
 
 
-def transform(data,time,*,emitter=False):
+def transform(data,time,*,emitter=False,random_values=None):
     order=number(data,'CCOT')
     if not 0<=order<6:raise UnsupportedEffect('坐标计算顺序')
-    rotate=np.eye(4);rotate[:3,:3]=rotation(axes(data.get('Rot'),time),number(data,'ROT'if emitter else'RoOT'))
-    scale=np.diag(np.r_[axes(data.get('Scl'),time,1),1]);translate=np.eye(4);translate[:3,3]=axes(data.get('Pos'),time)
+    coordinate=lambda name,default=0:random_values[name]if random_values is not None else axes(data.get(name),time,default)
+    rotate=np.eye(4);rotate[:3,:3]=rotation(coordinate('Rot'),number(data,'ROT'if emitter else'RoOT'))
+    scale=np.diag(np.r_[coordinate('Scl',1),1]);translate=np.eye(4);translate[:3,3]=coordinate('Pos')
     matrices={'R':rotate,'S':scale,'T':translate};result=np.eye(4)
     for component in('SRT','TSR','RTS','TRS','STR','RST')[order]:result=matrices[component]@result
     return result
+
+
+def injection_angles(child,occurrence):
+    # CN3cc9e8 clears per-link signed16 counters. 3d26a0 uses the OLD
+    # counter times BIA XYZ, then increments it. BIA is not a fixed rotation.
+    source=np.array([number(child,'BIA'+a,0.,real=True)for a in'XYZ'],dtype=np.float32)
+    if np.any(source)and number(child,'CrPr',100)!=100:
+        raise UnsupportedEffect('带随机淘汰的累计注入角度计数尚未接入')
+    ordinal=(int(occurrence)+32768)%65536-32768
+    return source*np.float32(ordinal)
 
 
 def items(nodes,container,start,count):
@@ -308,9 +320,10 @@ def quad(effect,node,time,parent,parent_color):
 def prepare(effect,bones,frame=30.,*,bind_points=None):
     """Normal equipment scheduler, deterministic frozen source sample.
 
-    Independent preview policy: scheduler0, no state-change triggers, no
-    random displacement. The result always reports this policy and gaps;
-    zero random offsets are a fixed preview choice, not a game RNG replay.
+    Independent preview policy: scheduler0, no state-change triggers, stable
+    per-birth random choices rather than a replay of the game's RNG stream.
+    Initial particle TRS random ranges are evaluated; complete scheduling,
+    dynamic random modes and native update history remain separate work.
     """
     from effect_geometry import sample
     result=[];pending=[];visits=0;sampled={}
@@ -334,15 +347,17 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                 result[:3,:3]=bound[:3,:3]@basis
                 if not number(child,'ICbP'):result[:3,3]=bound[:3,3]
         else:raise UnsupportedEffect('继承模式 '+str(mode))
-        result[:3,:3]=result[:3,:3]@rotation(np.array([number(child,'BIA'+a,0.,real=True)for a in'XYZ']),0)
         return result
     def births(child,data,time,identity,max_age):
-        # Bounded independent frozen scheduling policy. CrTm=1 is sampled once;
-        # interval emissions use the authored CrI/CrC. Random choices are stable
+        # CN3a0611 stores CrTm as an EVENT, compared to the dispatched
+        # event at3d2595. Initializer3cd9bf sends1, then0; finalizer3cddf7
+        # sends2. The initial event is not an extra source-frame delay.
+        # Interval emissions use the authored CrI/CrC. Random choices are stable
         # across redraws, not a replay of the game's RNG or simulation state.
-        once=number(child,'CrTm',1);count=number(child,'CrCn',1);probability=number(child,'CrPr',100)
-        if once not in(0,1)or not 0<=count<=64 or not 0<=probability<=100:raise UnsupportedEffect('发射次数或概率范围')
-        start=number(child,'StFr')+number(child,'GenD')+once
+        event=number(child,'CrTm',1);count=number(child,'CrCn',1);probability=number(child,'CrPr',100)
+        if event not in(0,1):raise UnsupportedEffect('结束或未知事件发射尚未接入')
+        if not 0<=count<=64 or not 0<=probability<=100:raise UnsupportedEffect('发射次数或概率范围')
+        once=event==1;start=number(child,'StFr')+number(child,'GenD')
         interval=curve(data.get('CrI'),time,1)
         if not once and interval<=0:raise UnsupportedEffect('非正发射间隔')
         count=count if once else max(1,int(curve(data.get('CrC'),time,1)))
@@ -396,7 +411,8 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                     inherited_matrix=None
                     for age,birth,occurrence in births(child,data,time,(stack,index,container,ordinal),max_age):
                         if inherited_matrix is None:inherited_matrix=inherit(child,parent,bound)
-                        matrix=inherited_matrix
+                        injected=np.eye(4);injected[:3,:3]=rotation(injection_angles(child,occurrence),0)
+                        matrix=inherited_matrix@injected
                         if emitter_type in(3,5):
                             from effect_emitter import model_injection,sphere_injection
                             inject=model_injection if emitter_type==5 else sphere_injection
@@ -410,11 +426,11 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         # hierarchy supports history; other modes retain their
                         # existing current-time path and report missing history.
                         def history(at,child=child,birth=birth,occurrence=occurrence,
-                                    identity=(stack,index,container,ordinal),current=time):
+                                    identity=(stack,index,container,ordinal),current=time,injected=injected):
                             when=birth+at
                             if when!=current and number(child,'PICd')!=2:
                                 raise UnsupportedEffect('非持续继承的粒子出生变换历史')
-                            value=inherit(child,parent_at(when),bound)
+                            value=inherit(child,parent_at(when),bound)@injected
                             if emitter_type in(3,5):
                                 from effect_emitter import model_injection,sphere_injection
                                 inject=model_injection if emitter_type==5 else sphere_injection
@@ -432,14 +448,24 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         if sample_key not in sampled:sampled[sample_key]=sample(effect,particle,age,np.eye(4),np.ones(4))
                         prototype=sampled[sample_key]
                         value={**prototype,'parent':matrix,'color':prototype['color']*tint}
+                        seed=(effect.sha256+repr((stack,index,container,ordinal,birth,occurrence))).encode()
+                        from effect_transform_random import has_random as random_transform,initialize as initialize_transform,values as transform_values
+                        transform_state=initialize_transform(particle,seed+b':transform')if random_transform(particle)else None
+                        def local_at(at):
+                            coordinates=transform_values(particle,at,transform_state)if transform_state is not None else None
+                            return transform(particle_data,at,random_values=coordinates)
+                        if transform_state is not None:
+                            coordinates=transform_values(particle,age,transform_state)
+                            value.update(local=local_at(age),local_scale=coordinates['Scl'],
+                                local_rotation=rotation(coordinates['Rot'],number(particle_data,'RoOT')),
+                                transform_random_bytes=transform_state)
                         if 'simple_centers'in prototype and not prototype['simple_bind_parent']:
                             value['simple_birth_matrices']=np.asarray([
-                                history(float(at))@transform(particle_data,float(at))
+                                history(float(at))@local_at(float(at))
                                 for at in prototype['simple_birth_age']])
                         from effect_uv import has_random,initialize,uv_nodes
                         if 'simple_centers'not in prototype and has_random(particle):
                             from effect_geometry import uv_matrix
-                            seed=(effect.sha256+repr((stack,index,container,ordinal,birth,occurrence))).encode()
                             states=initialize(particle,seed)
                             value['uv_matrices']=[uv_matrix(uv,age,model=value['kind']=='model',random_state=state)
                                 for uv,state in zip(uv_nodes(particle),states)]
