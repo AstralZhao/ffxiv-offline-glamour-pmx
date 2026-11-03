@@ -162,6 +162,46 @@ def injection_angles(child,occurrence):
     return source*np.float32(ordinal)
 
 
+def inherited_coordinates(chain,*,scale=False,z_only=False):
+    """CN3b1a50/3b1b90/3b1ca0, supplied source-time ancestor channels.
+
+    These are separate from ordinary matrix assembly. In particular a
+    billboard never decomposes a bone/world matrix to invent Euler angles.
+    """
+    if not chain:return np.ones(3,dtype='<f4')if scale else np.zeros(3,dtype='<f4')
+    f=np.float32;first=chain[0]
+    value=np.asarray(first['scale'],dtype='<f4').copy()if scale else f(
+        np.asarray(first['rotation'],dtype='<f4')+np.asarray(first['extra_rotation'],dtype='<f4'))
+    for i,node in enumerate(chain[:-1]):
+        if not node['flags']&(2 if scale else 4):break
+        if node['mode']==3:
+            saved=np.asarray(node['birth_scale'if scale else'birth_rotation'],dtype='<f4')
+            if scale:value=f(value*saved)
+            elif z_only:value[2]=f(value[2]+saved[2])
+            else:value=f(value+saved)
+            break
+        parent=chain[i+1]
+        if scale:value=f(value*np.asarray(parent['scale'],dtype='<f4'))
+        elif z_only:value[2]=f(f(value[2]+f(parent['rotation'][2]))+f(parent['extra_rotation'][2]))
+        else:
+            value=f(value+np.asarray(parent['rotation'],dtype='<f4'))
+            value=f(value+np.asarray(parent['extra_rotation'],dtype='<f4'))
+    return value
+
+
+def coordinate_node(data,time,child,parents,birth_parents,extra,coordinates=None):
+    coordinate=lambda name,default=0:axes(data.get(name),time,default)if coordinates is None else coordinates[name]
+    mode=number(child,'PICd')
+    # CN3a07f8..3a089c normalizes inheritance flags after parsing. AllAlways
+    # and AllCreate force scale/rotation on; None clears them. Only Custom
+    # consumes the individual source checkboxes.
+    flags=0 if mode==0 else 6 if mode in(2,3)else 2*bool(number(child,'ICbS'))+4*bool(number(child,'ICbR'))
+    return {'scale':coordinate('Scl',1),'rotation':coordinate('Rot'),'extra_rotation':extra,
+        'flags':flags,'mode':mode,
+        'birth_scale':inherited_coordinates(birth_parents,scale=True),
+        'birth_rotation':inherited_coordinates(birth_parents)}
+
+
 def items(nodes,container,start,count):
     # These files append cumulative snapshots. Only the LAST container is
     # authoritative; parsing all containers duplicates earlier particles.
@@ -355,7 +395,8 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                     if draw*100>=probability:continue
                 sequence=i if once else int(round((birth-start)/interval))*count+i
                 yield time-birth,birth,sequence
-    def emit(index,time,bound,inherited,inherited_color,stack=(),inherited_at=None):
+    def emit(index,time,bound,inherited,inherited_color,stack=(),inherited_at=None,
+             channel_history=None,incoming=None,birth_channels=(),extra_angles=None):
         nonlocal visits
         visits+=1
         if index in stack or len(stack)>12 or visits>256:raise UnsupportedEffect('发射器循环或预算')
@@ -373,6 +414,12 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
         def parent_at(at):
             history=inherited if inherited_at is None else inherited_at(at)
             return history@transform(data,at,emitter=True)
+        @lru_cache(maxsize=512)
+        def channels_at(at):
+            ancestors=()if channel_history is None else channel_history(at)
+            node=coordinate_node(data,at,incoming or{},ancestors,birth_channels,
+                np.zeros(3)if extra_angles is None else extra_angles)
+            return (node,)+ancestors
         parent=parent_at(time)
         parent_color=inherited_color*color(data.get('Col'),time)
         particles,emitters=emitter_items(nodes,data)
@@ -425,7 +472,10 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                                 value=value@injection
                             return value
                         if tag=='Emit':
-                            emit(target,age,bound,matrix,tint,stack+(index,),history);continue
+                            def child_channel_history(at,birth=birth,channels_at=channels_at):
+                                return channels_at(birth+at)
+                            emit(target,age,bound,matrix,tint,stack+(index,),history,
+                                child_channel_history,child,channels_at(birth),injection_angles(child,occurrence));continue
                         particle=get(tag,target);particle_data=particle_fields(particle)
                         if not alive(particle_data,age):continue
                         # Geometry/curves depend on source and age, not on
@@ -445,12 +495,20 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                             value.update(local=local_at(age),local_scale=coordinates['Scl'],
                                 local_rotation=rotation(coordinates['Rot'],number(particle_data,'RoOT')),
                                 transform_random_bytes=transform_state)
+                        if value['kind']=='powder'and 'simple_centers'not in value:
+                            coordinates=transform_values(particle,age,transform_state)if transform_state is not None else None
+                            parents=channels_at(time)
+                            node=coordinate_node(particle_data,age,child,parents,channels_at(birth),
+                                injection_angles(child,occurrence),coordinates)
+                            chain=(node,)+parents
+                            value['powder_angles']=inherited_coordinates(chain,z_only=True)
+                            value['powder_scale']=inherited_coordinates(chain,scale=True)*np.linalg.norm(bound[:3,:3],axis=0)
                         if 'simple_centers'in prototype and not prototype['simple_bind_parent']:
                             value['simple_birth_matrices']=np.asarray([
                                 history(float(at))@local_at(float(at))
                                 for at in prototype['simple_birth_age']])
                         from effect_uv import has_random,initialize,uv_nodes
-                        if 'simple_centers'not in prototype and has_random(particle):
+                        if value['kind']!='powder'and has_random(particle):
                             from effect_geometry import uv_matrix
                             states=initialize(particle,seed)
                             value['uv_matrices']=[uv_matrix(uv,age,model=value['kind']=='model',random_state=state)

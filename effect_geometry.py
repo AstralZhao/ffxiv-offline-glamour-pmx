@@ -65,6 +65,12 @@ def sample(effect,node,time,parent,parent_color):
         from effect_simple import geometry as simple_geometry
         if number(d,'RBDT')!=10:raise UnsupportedEffect('Simple 粒子外层朝向')
         geometry=simple_geometry(effect,d.get('Smpl'),time)
+    elif kind==1:
+        # CN3fd53b..3fd6a9: Powder has its own top-left-first packet,
+        # independent of Shape's bottom-left-first quad and UV convention.
+        geometry={'positions':np.array(((-.5,.5,0),(.5,.5,0),(-.5,-.5,0),(.5,-.5,0))),
+            'colors':np.ones((4,4)),'base_uv':np.tile(np.array(((0,0),(1,0),(0,1),(1,1)),dtype='<f4')[:,None,:],(1,4,1)),
+            'indices':np.asarray((3,1,0,0,2,3),dtype='<u4')}
     elif kind==5:geometry=model_geometry(effect,d,time)
     elif kind==12:geometry=disc_geometry(d,time)
     else:
@@ -79,11 +85,10 @@ def sample(effect,node,time,parent,parent_color):
     if not 0<=uv_count<=4 or uv_count!=len(uv_nodes):raise UnsupportedEffect('UV通道数量')
     uv_compute=[number(nested(uv),'CUvT')for uv in uv_nodes]
     if any(uv_compute)and kind in(1,5):raise UnsupportedEffect('模型或粉尘屏幕坐标UV')
-    matrices=[uv_matrix(uv,time,model=kind==5)for uv in uv_nodes];textures={}
-    if simple:
-        # CN3faa60 fills the source atlas UV directly; the fixed Powder VS/PS
-        # route has no generic per-UV transform constant.
-        matrices=[uv_matrix(None,0)for _ in uv_nodes]
+    # Powder writes fixed quad UV (3fd53b) or Simple atlas UV (3faa60)
+    # directly. Its own VS/PS family has no generic UvTransform constant;
+    # the Shape/Model UV updater must not transform these a second time.
+    matrices=[uv_matrix(None,0)if kind==1 else uv_matrix(uv,time,model=kind==5)for uv in uv_nodes];textures={}
     for name in('TC1','TC2','TC3','TC4','TD'):
         channel=nested(d.get(name))
         if not number(channel,'bEna'):continue
@@ -113,6 +118,8 @@ def sample(effect,node,time,parent,parent_color):
     return {**geometry,'kind':'powder'if kind==1 else'model'if kind==5 else'disc'if kind==12 else'quad','frame':frame,'local':transform(d,time),
         'parent':parent,'local_scale':axes(d.get('Scl'),time,1),
         'local_rotation':rotation(axes(d.get('Rot'),time),number(d,'RoOT')),
+        'powder_angles':axes(d.get('Rot'),time),
+        'powder_scale':np.linalg.norm(parent[:3,:3],axis=0)*axes(d.get('Scl'),time,1),
         'coordinate_order':number(d,'CCOT'),'color':color(d.get('Col'),time)*parent_color,'textures':textures,'uv_matrices':matrices,
         'uv_count':uv_count,'uv_compute':uv_compute,'blend':mode,'apply_tone_map':bool(number(d,'bATM')),
         'alpha_channel':not bool(number(nested(d.get('TC1')),'bUSC')),'soft':bool(number(d,'DsSp')),

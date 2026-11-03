@@ -160,7 +160,13 @@ def world_matrix(sample,view,camera_world=None):
     return matrix
 
 
-def simple_world_positions(sample,matrix):
+def geometry_uses_view(sample):
+    # Powder(10) uses the camera's basis in its original VS as well. Its
+    # world centres are attachment-dependent; its quad corners are not.
+    return sample['kind']=='powder' or not(sample['kind']=='model' or sample['frame']in(0,1,2,10))
+
+
+def simple_world_positions(sample,matrix,camera_world=None):
     centers=sample['simple_centers'];gravity=sample['simple_gravity']
     if not len(centers):return np.empty((0,3))
     if sample['simple_bind_parent']:
@@ -177,27 +183,32 @@ def simple_world_positions(sample,matrix):
         velocity=np.einsum('nij,nj->ni',births[:,:3,:3],velocity)
         world+=velocity*sample['simple_motion_factors']
     world+=gravity@matrix[:3,:3].T if sample['simple_bind_parent']else gravity
-    basis=matrix[:3,:3].copy()
-    if not sample['simple_inherit_scale']:
-        lengths=np.linalg.norm(basis,axis=0)
-        if np.any(lengths<1e-8):raise ValueError('Singular Simple attachment scale')
-        basis/=lengths
+    # 3fdcb7 -> 384600 supplies the CAMERA basis to Powder's VS. bSnP
+    # affects the half extents (3fab19..3fab34), never that orientation.
+    basis=np.eye(3)if camera_world is None else np.asarray(camera_world)[:3,:3]
+    scales=np.linalg.norm(matrix[:3,:3],axis=0)[:2]if sample['simple_inherit_scale']else np.ones(2)
     # CN3fc4ad: authored sizes are half extents and pivot is a multiplier.
     corners=np.array(((-1,1),(1,1),(-1,-1),(1,-1)))+sample['simple_pivot']
     # Powder's original VS rotates Z -> X -> Y, independent of the parent's
     # separately composed transform. Preserve that order for resolved corners.
     rotations=np.array([rotation(value,2)for value in sample['simple_angles']])
-    plane=np.pad(corners[None,:,:]*sample['simple_sizes'][:,None,:],((0,0),(0,0),(0,1)))
+    plane=np.pad(corners[None,:,:]*sample['simple_sizes'][:,None,:]*scales,((0,0),(0,0),(0,1)))
     offsets=np.einsum('ij,njk,nvk->nvi',basis,rotations,plane)
     return (world[:,None,:]+offsets).reshape(-1,3)
 
 
-def resolved_world_positions(sample,matrix):
+def resolved_world_positions(sample,matrix,camera_world=None):
     positions=sample['positions']
     if sample.get('disc_parameters',{}).get('scaling',1)<1:
         from effect_disc import geometry as disc_geometry
         positions=disc_geometry(sample['disc_parameters'],np.linalg.norm(matrix[:3,:3],axis=0))['positions']
-    if 'simple_centers'in sample:return simple_world_positions(sample,matrix)
+    if 'simple_centers'in sample:return simple_world_positions(sample,matrix,camera_world)
+    if sample['kind']=='powder':
+        # 3fd4e8 uses the Z-only inherited Euler getter; the original VS
+        # then rotates Z->X->Y before applying the independent camera basis.
+        basis=np.eye(3)if camera_world is None else np.asarray(camera_world)[:3,:3]
+        offsets=(positions*sample['powder_scale'])@rotation(sample['powder_angles'],2).T@basis.T
+        return offsets+matrix[:3,3]
     return (matrix@np.column_stack((positions,np.ones(len(positions)))).T).T[:,:3]
 
 
@@ -443,7 +454,7 @@ class EffectRenderer:
             plan=self.plan(sample);matrix=world_matrix(sample,view,camera_world);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
             cacheable=self.reuse_geometry
-            view_dependent=not(is_model or sample['frame']in(0,1,2,10))
+            view_dependent=geometry_uses_view(sample)
             key=id(sample);cached=self.geometry_cache.get(key)if cacheable else None
             if cached is not None and cached[0]is sample:
                 vertices=cached[1];self.geometry_cache.move_to_end(key)
@@ -451,12 +462,12 @@ class EffectRenderer:
                     # UV/color/distortion packing is independent of the camera.
                     # Recompute every billboard position, keeping its original
                     # VS inputs and triangle order exactly as the uncached path.
-                    vertices=vertices.copy();world_positions=resolved_world_positions(sample,matrix)
+                    vertices=vertices.copy();world_positions=resolved_world_positions(sample,matrix,camera_world)
                     if is_powder:vertices['center']=world_positions
                     else:vertices['position'][:,:3]=world_positions
             else:
                 dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
-                world_positions=resolved_world_positions(sample,matrix)
+                world_positions=resolved_world_positions(sample,matrix,camera_world)
                 if is_powder:
                     # The original VS adds center after rotating the local corner.
                     # Supplying the fully resolved corner as center, with zero
