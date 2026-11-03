@@ -56,6 +56,15 @@ def random_scales(data,random):
     return np.array(values*2 if len(values)==1 else values,dtype=np.float32)
 
 
+def random_atlas(spread,cells,random):
+    # CN3e615c..3e61d6: nonzero UvNR is an INCLUSIVE upper bound;
+    # pick 0..UvNR, then reduce modulo the authored atlas cell count.
+    # Even a one-cell atlas consumes this random word when UvNR is nonzero.
+    if not 0<=spread<=127 or not 1<=cells<=127*127:
+        raise UnsupportedEffect('Simple 初始图集随机范围')
+    return random.integer(spread+1)%cells if spread else 0
+
+
 @lru_cache(maxsize=64)
 def emission_points(effect,index):
     models=[r for r in effect.source_records if r.tag=='Modl']
@@ -111,7 +120,7 @@ def initial(effect,node):
             delta=random.between(-real('RV'+axis),real('RV'+axis))+real('RA'+axis)
             angles[i,j]=np.trunc(base/(2*math.pi)*1024);spin[i,j]=np.trunc(delta/(2*math.pi)*1024)
         scales[i]=random_scales(d,random)
-        spread=integer('UvNR');atlas[i]=random.integer(spread)if spread>0 else 0
+        atlas[i]=random_atlas(integer('UvNR'),cells[0]*cells[1],random)
         reverse[i]=bool(random.integer(2))if integer('bRUV')else False
     result={'positions':positions,'velocity':velocity,'angles':angles,'spin':spin,'scales':scales,'atlas':atlas,
         'delay':np.floor(np.arange(count)/group)*interval,'life':life,'repeat':bool(integer('bCrN')),
