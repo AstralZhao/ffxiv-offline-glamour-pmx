@@ -251,6 +251,10 @@ def simple_world_positions(sample,matrix,camera_world=None):
     if not len(centers):return np.empty((0,3))
     if sample['simple_bind_parent']:
         world=(matrix@np.column_stack((centers,np.ones(len(centers)))).T).T[:,:3]
+    elif sample.get('simple_centers_world'):
+        # Explicit state replay already transformed each birth and integrated
+        # world velocity. Reapplying birth/current matrices would move it twice.
+        world=centers.copy()
     else:
         births=sample.get('simple_birth_matrices')
         if births is None or births.shape!=(len(centers),4,4):

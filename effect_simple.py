@@ -14,7 +14,7 @@ import numpy as np
 
 from effect_sample import nested,number,UnsupportedEffect
 from vfx import records
-from effect_simple_state import Update as StateUpdate,advance as advance_state,replay as replay_state
+from effect_simple_state import PARTICLE,StateInput,Update as StateUpdate,advance as advance_state,replay as replay_state
 
 
 class SourceRandom:
@@ -44,6 +44,34 @@ def packed_direction(values,precision):
 def packed_vector(values,precision):
     value=np.asarray(values,dtype=np.float32);length=np.sqrt(np.sum(value*value,dtype=np.float32))
     return (packed_direction(value,precision)*length).astype(np.float32)
+
+
+def position_state(values):
+    value=np.asarray(values,dtype='<f4');f=np.float32
+    length=f(np.sqrt(f(f(f(value[0]*value[0])+f(value[1]*value[1]))+f(value[2]*value[2]))))
+    return length,np.trunc(value/length*f(32000)).astype('<i2')if length>0 else np.zeros(3,dtype='<i2')
+
+
+def random_direction(random):
+    # Keep float32 source inputs and the UNPACKED normalized direction until
+    # authored speed has been applied. Initializer3e6745..3e686b packs later.
+    f=np.float32;first=f(random.word()&65535);second=f(random.word()&65535)
+    y=f(f(1)-f(f(first+first)/f(65535)));phase=f(f(second*f(2*math.pi))/f(65535))
+    radius=f(math.sin(float(f(math.acos(float(y))))))
+    values=np.array((f(f(math.sin(float(phase)))*radius),y,
+        f(f(math.cos(float(phase)))*radius)),dtype='<f4')
+    length=f(np.sqrt(f(f(f(values[1]*values[1])+f(values[0]*values[0]))+f(values[2]*values[2]))))
+    if length>f(1e-5):values=values*f(f(1)/length)
+    return values
+
+
+def packed_motion(direction,speed):
+    # 3e6745..3e686b: multiply BEFORE packing; save measured float32
+    # magnitude, not the authored speed. Negative speed reverses the bytes.
+    f=np.float32;values=np.asarray(direction,dtype='<f4')*f(speed)
+    length=f(np.sqrt(f(f(f(values[1]*values[1])+f(values[0]*values[0]))+f(values[2]*values[2]))))
+    packed=np.trunc(values/length*f(100)).astype('i1')if length>0 else np.zeros(3,dtype='i1')
+    return length,packed
 
 
 def random_scales(data,random):
@@ -102,7 +130,7 @@ def emission_points(effect,index):
     return result
 
 
-def model_positions(points,area,count,random):
+def model_positions(points,area,count,random,*,state=None):
     """CN3e5510 prepass, supported BlkN=1 / VBMN=-1 / SIPT=1.
 
     All model positions precede the general direction/attribute pass. Source
@@ -117,7 +145,9 @@ def model_positions(points,area,count,random):
     for i in range(count):
         point=points[i%len(points)].copy()
         for axis in(2,1,0):point[axis]=np.float32(point[axis]+random.between(-area[axis],area[axis]))
-        result[i]=packed_vector(point,32000)
+        length,packed=position_state(point)
+        result[i]=(packed.astype('<f4')/np.float32(32000))*length
+        if state is not None:state['length'][i]=length;state['packed_position'][i]=packed
     return result
 
 
@@ -145,40 +175,64 @@ def initial(effect,node):
     if any(not 1<=v<=127 for v in cells)or uv_interval<0:raise UnsupportedEffect('Simple 图集尺寸或间隔')
     positions=np.zeros((count,3),dtype=np.float32);velocity=positions.copy();angles=positions.copy();spin=positions.copy()
     scales=np.ones((count,2));atlas=np.zeros(count,dtype=int);reverse=np.zeros(count,dtype=bool);random=SourceRandom(effect.sha256.encode()+node.data)
-    model=integer('SIPT')==1
-    if model:positions[:]=model_positions(emission_points(effect,integer('IJMN',-1))[0],area,count,random)
+    state=np.zeros(count,dtype=PARTICLE);model=integer('SIPT')==1
+    if model:positions[:]=model_positions(emission_points(effect,integer('IJMN',-1))[0],area,count,random,state=state)
     for i in range(count):
-        if not model:positions[i]=packed_vector([random.between(-a,a)for a in area],32000)
-        y=1-2*random.unit();phi=random.unit()*2*math.pi;r=math.sqrt(max(0,1-y*y))
-        direction=np.array((r*math.sin(phi),y,r*math.cos(phi)),dtype=np.float32)
-        # Native directions are normalized, truncated to signed bytes, then
-        # multiplied by the separately stored authored speed.
-        direction=packed_direction(direction,100)
+        if not model:
+            length,packed=position_state([random.between(-a,a)for a in area])
+            state['length'][i]=length;state['packed_position'][i]=packed
+            positions[i]=(packed.astype('<f4')/np.float32(32000))*length
+        direction=random_direction(random)
         parameters=random_parameters(d,random,cells[0]*cells[1])
-        velocity[i]=direction*parameters['speed'];angles[i]=parameters['angles'];spin[i]=parameters['spin']
+        speed,packed=packed_motion(direction,parameters['speed'])
+        velocity[i]=(packed.astype('<f4')/np.float32(100))*speed
+        angles[i]=parameters['angles'];spin[i]=parameters['spin']
         scales[i]=parameters['scales'];atlas[i]=parameters['atlas']
         reverse[i]=bool(random.integer(2))if integer('bRUV')else False
+        state['speed'][i]=speed;state['packed_velocity'][i]=packed
+        state['angles'][i]=parameters['angles'];state['spin'][i]=parameters['spin']
+        state['scales'][i]=np.rint(parameters['scales']*np.float32(50)).astype('i1')
+        state['atlas'][i]=int(atlas[i])|(int(reverse[i])<<15)
+        state['delay'][i]=((int(i//group)*interval+32768)%65536)-32768
     result={'positions':positions,'velocity':velocity,'angles':angles,'spin':spin,'scales':scales,'atlas':atlas,
         'delay':np.floor(np.arange(count)/group)*interval,'life':life,'repeat':bool(integer('bCrN')),
         'damping':damping,'gravity':gravity,'curve':curve,'start':start,'end':end,'frames':keys,'colors':rgba,
         'cells':cells,'uv_interval':uv_interval,'reverse':reverse,'pivot':np.array((real('PvtX'),real('PvtY'))),
-        'inherit_scale':bool(integer('bSnP')),'bind_parent':bool(integer('bBnP'))}
+        'inherit_scale':bool(integer('bSnP')),'bind_parent':bool(integer('bBnP')),'initial_state':state.tobytes(),
+        'random_state':tuple(random.state)}
     for value in result.values():
         if isinstance(value,np.ndarray):value.flags.writeable=False
     return result
 
 
-def geometry(effect,node,time):
-    source=initial(effect,node);age=time-source['delay'];live=age>=0
-    if source['repeat']:age=np.remainder(age,source['life'])
-    else:live&=age<source['life']
-    age=age[live];count=len(age);steps=np.floor(age*10+1e-6).astype(int)
-    damping=source['damping'];displacement=np.empty((count,3));motion=np.empty((count,3))
-    for axis,d in enumerate(damping):
-        total=steps if d==1 else d*(1-np.power(d,steps))/(1-d)
-        motion[:,axis]=total*.1
-        displacement[:,axis]=source['velocity'][live,axis]*total*.1
-    centers=source['positions'][live]+displacement;gravity=.5*age[:,None]**2*source['gravity']
+def geometry(effect,node,time,*,updates=None):
+    source=initial(effect,node)
+    if updates is None:
+        # Legacy default stays explicit until the caller supplies its actual
+        # update/retention history. Never label this branch as native replay.
+        age=time-source['delay'];live=age>=0
+        if source['repeat']:age=np.remainder(age,source['life'])
+        else:live&=age<source['life']
+        age=age[live];count=len(age);steps=np.floor(age*10+1e-6).astype(int)
+        displacement=np.empty((count,3));motion=np.empty((count,3))
+        for axis,d in enumerate(source['damping']):
+            total=steps if d==1 else d*(1-np.power(d,steps))/(1-d)
+            motion[:,axis]=total*.1
+            displacement[:,axis]=source['velocity'][live,axis]*total*.1
+        centers=source['positions'][live]+displacement
+    else:
+        if isinstance(updates,StateInput):
+            if updates.source!=(effect.sha256,node)or len(updates.packets)!=len(source['initial_state']):
+                raise ValueError('Simple snapshot belongs to another source')
+            packets=updates.packets
+        else:
+            if not isinstance(updates,(tuple,list)):raise ValueError('Simple history requires an explicit ordered sequence')
+            if any(not isinstance(event,StateUpdate)or event.bound!=source['bind_parent']for event in updates):
+                raise ValueError('Simple history binding differs from the original source')
+            packets=replay_state(source['initial_state'],source['damping'],source['life'],source['repeat'],updates)
+        state=np.frombuffer(packets,dtype=PARTICLE);live=state['state']==1
+        age=state['age'][live].copy();centers=state['position'][live].copy();count=len(age)
+    gravity=.5*age[:,None]**2*source['gravity']if updates is None else((age*age)[:,None]*source['gravity'].astype('<f4'))*np.float32(.5)
     angles=(source['angles'][live]+np.trunc(age[:,None]*source['spin'][live])).astype(int)&1023
     angles=angles*(2*np.pi/1024)
     sizes=(source['start']+(source['end']-source['start'])*(age/source['life'])[:,None]**source['curve'])*source['scales'][live]
@@ -191,12 +245,16 @@ def geometry(effect,node,time):
     reversed_rows=source['reverse'][live]
     uv[reversed_rows]=uv[reversed_rows][:,(1,0,3,2)]
     indices=(np.arange(count)[:,None]*4+np.array((0,1,2,2,1,3))).ravel().astype('<u4')
-    return {'positions':np.zeros((count*4,3)),'colors':np.repeat(colors,4,axis=0),'indices':indices,
+    result={'positions':np.zeros((count*4,3)),'colors':np.repeat(colors,4,axis=0),'indices':indices,
         'base_uv':np.tile(uv.reshape(-1,1,2),(1,4,1)),
         'simple_centers':centers,'simple_angles':angles,'simple_sizes':sizes,'simple_pivot':source['pivot'],
-        'simple_initial_positions':source['positions'][live].copy(),
-        'simple_initial_velocity':source['velocity'][live].copy(),'simple_motion_factors':motion,
-        'simple_birth_age':time-age,
         'simple_gravity':gravity,'simple_bind_parent':source['bind_parent'],
         'simple_inherit_scale':source['inherit_scale'],'simple_particle_count':count,
         'random_policy':'native-xorshift128-independent-stable-preview-seed'}
+    if updates is None:
+        result.update(simple_initial_positions=source['positions'][live].copy(),
+            simple_initial_velocity=source['velocity'][live].copy(),simple_motion_factors=motion,simple_birth_age=time-age,
+            simple_state_policy='legacy-age-reconstruction')
+    else:result.update(simple_centers_world=not source['bind_parent'],simple_state_packets=packets,
+        simple_state_policy='explicit-native-update-history')
+    return result

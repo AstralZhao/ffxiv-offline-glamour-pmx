@@ -480,7 +480,12 @@ class DemoEngine:
         if getattr(scene,'effect_frame',None)!=frame:
             self.prepare_effects(scene,enabled=state['effects_visible'],frame=frame)
         self.renderer.zoom=state['zoom'];self.renderer.pitch=state['pitch'];self.renderer.pan=state['pan']
-        image,_=self.renderer.draw_scene(scene,state['yaw'])
+        try:image,_=self.renderer.draw_scene(scene,state['yaw'])
+        except Exception:
+            for history in getattr(scene,'simple_histories',{}).values():history.discard()
+            scene.effect_frame=None
+            raise
+        for history in getattr(scene,'simple_histories',{}).values():history.commit()
         self.effect_frame=frame
         url=self.image_record(image)
         result={'image':url,'state':state,'seconds':round(time.perf_counter()-started,3),
@@ -493,9 +498,11 @@ class DemoEngine:
 
     def prepare_effects(self,scene,*,enabled=True,frame=30.):
         scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
+        for history in getattr(scene,'simple_histories',{}).values():history.discard()
         if not enabled or not self.character.outfit.equipment_effects_enabled:
             scene.effect_frame=frame;return
         from effect_sample import prepare,UnsupportedEffect
+        from effect_simple_history import SimpleHistory
         outfit=self.character.outfit
         worlds=scene.skinning@outfit.bind
         bones={name:worlds[index]for name,index in outfit.names.items()}
@@ -505,7 +512,9 @@ class DemoEngine:
             from effect_binding import EffectBindPoints
             outfit.effect_bind_points=EffectBindPoints(scene.pack,outfit.base.pose['identity']['race_sex_id'])
         for (slot,path),effect in sources.items():
-            samples,pending=prepare(effect,bones,frame,bind_points=outfit.effect_bind_points)
+            if not hasattr(scene,'simple_histories'):scene.simple_histories={}
+            history=scene.simple_histories.setdefault((slot,path),SimpleHistory(effect));history.begin()
+            samples,pending=prepare(effect,bones,frame,bind_points=outfit.effect_bind_points,simple_history=history.sample)
             if samples:
                 from effect_renderer import EffectRenderer
                 if not hasattr(self.renderer,'effect_renderer'):self.renderer.effect_renderer=EffectRenderer(self.renderer,scene.pack)

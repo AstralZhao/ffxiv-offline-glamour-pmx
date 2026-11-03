@@ -33,13 +33,15 @@ def _template_size(value):
     return 0
 
 
-def template_sample(effect,node,time,*,defer_transform=False,defer_uv=False):
+def template_sample(effect,node,time,*,defer_transform=False,defer_uv=False,simple_updates=None):
     """Bounded immutable source prototypes, before attachment/birth overrides.
 
     This never caches resolved parents, camera corners or a finished frame.
     A content SHA identifies the source; every caller owns its mutable arrays.
     """
     global _template_bytes
+    if simple_updates is not None:
+        return sample(effect,node,time,np.eye(4),np.ones(4),simple_updates=simple_updates)
     if not reuse_templates or template_budget<=0:return sample(effect,node,time,np.eye(4),np.ones(4))
     data=particle_fields(node);kind=number(data,'PrVT')
     # Simple and disc geometry have their own time-dependent generators.
@@ -139,7 +141,7 @@ def uv_linear(model,dtype,raw,angle):
     return matrix,center
 
 
-def sample(effect,node,time,parent,parent_color):
+def sample(effect,node,time,parent,parent_color,*,simple_updates=None):
     d=particle_fields(node);kind=number(d,'PrVT');stationary(d,time)
     if kind not in(1,5,8,12):raise UnsupportedEffect('粒子类型 '+str(kind))
     simple=bool(number(d,'bSCt'))
@@ -151,7 +153,7 @@ def sample(effect,node,time,parent,parent_color):
     if simple:
         from effect_simple import geometry as simple_geometry
         if number(d,'RBDT')!=10:raise UnsupportedEffect('Simple 粒子外层朝向')
-        geometry=simple_geometry(effect,d.get('Smpl'),time)
+        geometry=simple_geometry(effect,d.get('Smpl'),time,updates=simple_updates)
     elif kind==1:
         # CN3fd53b..3fd6a9: Powder has its own top-left-first packet,
         # independent of Shape's bottom-left-first quad and UV convention.

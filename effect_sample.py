@@ -361,7 +361,7 @@ def quad(effect,node,time,parent,parent_color):
         'cull':number(data,'CulT'),'depth_offset':number(data,'DpOf',0.,real=True)}
 
 
-def prepare(effect,bones,frame=30.,*,bind_points=None):
+def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
     """Normal equipment scheduler, deterministic frozen source sample.
 
     Independent preview policy: scheduler0, no state-change triggers, stable
@@ -520,19 +520,24 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                                 child_channel_history,child,channels_at(birth),injection_angles(child,occurrence));continue
                         particle=target_node;particle_data=target_data
                         if not alive(particle_data,age):continue
-                        # Geometry/curves depend on source and age, not on
-                        # which crystal attachment spawned this instance.
-                        sample_key=(target,age)
-                        if sample_key not in sampled:
-                            sampled[sample_key]=template_sample(effect,particle,age,
-                                defer_transform=transform_random,defer_uv=uv_random)
-                        prototype=sampled[sample_key]
-                        value={**prototype,'parent':matrix,'color':prototype['color']*tint}
                         seed=(effect.sha256+repr((stack,index,container,ordinal,birth,occurrence))).encode()
                         transform_state=initialize_transform(particle,seed+b':transform')if transform_random else None
                         def local_at(at):
                             coordinates=transform_values(particle,at,transform_state)if transform_state is not None else None
                             return transform(particle_data,at,random_values=coordinates)
+                        # Geometry/curves depend on source and age, not on
+                        # which crystal attachment spawned this instance.
+                        simple_updates=None
+                        if simple and simple_history is not None:
+                            identity=(stack,index,container,ordinal,birth,occurrence)
+                            simple_updates=simple_history(identity,particle,age,lambda at:history(at)@local_at(at))
+                            if simple_updates is None:raise UnsupportedEffect('缺少明确的Simple逐次更新历史')
+                        sample_key=(target,age)if simple_updates is None else(target,age,identity)
+                        if sample_key not in sampled:
+                            sampled[sample_key]=template_sample(effect,particle,age,
+                                defer_transform=transform_random,defer_uv=uv_random,simple_updates=simple_updates)
+                        prototype=sampled[sample_key]
+                        value={**prototype,'parent':matrix,'color':prototype['color']*tint}
                         if transform_state is not None:
                             coordinates,local,rotate=resolved_transform(particle,age,transform_state)
                             value.update(local=local.copy(),local_scale=coordinates['Scl'].copy(),
@@ -546,7 +551,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                             chain=(node,)+parents
                             value['powder_angles']=inherited_coordinates(chain,z_only=True)
                             value['powder_scale']=inherited_coordinates(chain,scale=True)*np.linalg.norm(bound[:3,:3],axis=0)
-                        if 'simple_centers'in prototype and not prototype['simple_bind_parent']:
+                        if 'simple_centers'in prototype and not prototype['simple_bind_parent']and not prototype.get('simple_centers_world'):
                             value['simple_birth_matrices']=np.asarray([
                                 history(float(at))@local_at(float(at))
                                 for at in prototype['simple_birth_age']])

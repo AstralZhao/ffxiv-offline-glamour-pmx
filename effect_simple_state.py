@@ -11,9 +11,9 @@ import math
 import numpy as np
 
 
-PARTICLE=np.dtype({'names':('age','position','birth_position','velocity','speed','length','delay','packed_position','packed_velocity','state'),
-    'formats':('<f4',('<f4',3),('<f4',3),('<f4',3),'<f4','<f4','<i2',('<i2',3),('i1',3),'u1'),
-    'offsets':(0,4,16,28,40,44,52,68,74,79),'itemsize':80})
+PARTICLE=np.dtype({'names':('age','position','draw_position','velocity','speed','length','delay','atlas','angles','spin','packed_position','packed_velocity','scales','state'),
+    'formats':('<f4',('<f4',3),('<f4',3),('<f4',3),'<f4','<f4','<i2','<u2',('<i2',3),('<i2',3),('<i2',3),('i1',3),('i1',2),'u1'),
+    'offsets':(0,4,16,28,40,44,52,54,56,62,68,74,77,79),'itemsize':80})
 
 
 @dataclass(frozen=True)
@@ -24,6 +24,12 @@ class Update:
     bound:bool=True
 
 
+@dataclass(frozen=True)
+class StateInput:
+    source:tuple
+    packets:bytes
+
+
 def _particles(packets):
     if type(packets)is not bytes or len(packets)%80 or len(packets)>512*80:
         raise ValueError('Simple state requires at most 512 complete 80-byte packets')
@@ -31,7 +37,7 @@ def _particles(packets):
     # array copy is not a guarantee that all 80 bytes are retained.
     array=np.frombuffer(bytearray(packets),dtype=PARTICLE)
     if np.any(array['state']>2):raise ValueError('Simple state outside waiting/live/dead branch')
-    for name in('age','position','birth_position','velocity','speed','length'):
+    for name in('age','position','draw_position','velocity','speed','length'):
         if not np.isfinite(array[name]).all():raise ValueError('Non-finite Simple state')
     return array
 
@@ -55,7 +61,7 @@ def _birth(array,selected,matrix,bound):
     position=(array['packed_position'][selected].astype('<f4')/f(32000))*array['length'][selected,None]
     velocity=(array['packed_velocity'][selected].astype('<f4')/f(100))*array['speed'][selected,None]
     if not bound:position=_transform(position,matrix,True);velocity=_transform(velocity,matrix,False)
-    array['position'][selected]=position;array['birth_position'][selected]=position
+    array['position'][selected]=position;array['draw_position'][selected]=position
     array['velocity'][selected]=velocity;array['age'][selected]=0;array['state'][selected]=1
 
 
@@ -101,3 +107,18 @@ def replay(packets,damping,life,repeat,updates):
         if event.advance:result=advance(result,damping,event.delta,life,repeat,matrix=event.matrix,bound=event.bound)
         # The preservation-copy branch does not age, move or birth particles.
     return result
+
+
+def finish_draw(packets,gravity,*,bound=False,matrix=None):
+    """3fa19f..3fa202 ordinary draw-position preparation, then bound matrix.
+
+    Offset16 is scratch DRAW position, not a preserved birth position. This
+    stage never changes age, integrated position, velocity or packed fields.
+    """
+    array=_particles(packets);f=np.float32;gravity=np.asarray(gravity,dtype='<f4')
+    if gravity.shape!=(3,)or not np.isfinite(gravity).all():raise ValueError('Invalid Simple gravity')
+    live=array['state']==1;age=array['age'][live]
+    position=((age*age)[:,None]*gravity)*f(.5)+array['position'][live]
+    if bound:position=_transform(position,_matrix(matrix),True)
+    array['draw_position'][live]=position
+    return array.tobytes()
