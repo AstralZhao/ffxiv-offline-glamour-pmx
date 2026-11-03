@@ -4,8 +4,32 @@ from functools import lru_cache
 
 import numpy as np
 
-from effect_sample import nested,number,curve,rotation,UnsupportedEffect
+from effect_sample import nested,number,curve,curve_source,rotation,UnsupportedEffect
 from effect_simple import emission_points,SourceRandom
+
+
+def motion_step(travel,velocity,delta,resistance):
+    """CN3e72e4..3e7335 then3e7296..3e72d2, explicit delta/ARs.
+
+    ARs scales this step's displacement; it does not decay the initial
+    velocity or multiply the accumulated position a second time.
+    """
+    f=np.float32
+    increment=f(np.asarray(velocity,dtype='<f4')*f(delta))
+    increment=f(increment*f(resistance))
+    return f(np.asarray(travel,dtype='<f4')+increment)
+
+
+def constant_particle_travel(data,age,velocity):
+    """Constant source ARs only; variable update history is explicit pending.
+
+    A direct frozen sample supplies age as one explicit elapsed interval.
+    This fixes the omitted coefficient, not native multi-step float history.
+    """
+    if not np.any(velocity):return np.zeros(3,dtype='<f4')
+    node=data.get('ARs');_,keys=curve_source(node)
+    if keys and len(keys)>1:return None
+    return motion_step(np.zeros(3,dtype='<f4'),velocity,age,curve(node,age,1))
 
 
 def model_injection(effect,data,time,ordinal,identity):

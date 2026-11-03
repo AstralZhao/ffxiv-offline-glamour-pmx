@@ -223,6 +223,29 @@ def geometry_uses_view(sample):
     return sample['kind']=='powder' or not(sample['kind']=='model' or sample['frame']in(0,1,2,10))
 
 
+def batched_shape_world(samples,camera_world,facing):
+    """Same small matrix products as world_matrix, submitted in one batch."""
+    selected=[s for s in samples if s['kind']not in('model','powder')and not s.get('disc_parameters')
+        and s['positions'].shape==(4,3)and s['frame']in(0,1,2,5,6)
+        and s['parent'].dtype==np.float64 and s['local'].dtype==np.float64
+        and(s['frame']!=6 or facing.get(id(s))is not None)]
+    if not selected:return {}
+    parents=np.stack([s['parent']for s in selected]);local=np.stack([s['local']for s in selected])
+    matrices=parents@local
+    indices=[i for i,s in enumerate(selected)if s['frame']in(5,6)]
+    if indices:
+        scales=np.linalg.norm(parents[indices,:3,:3],axis=1)*np.stack([selected[i]['local_scale']for i in indices])
+        rotations=np.stack([selected[i]['local_rotation']for i in indices])
+        scaled=rotations*scales[:,None,:]
+        for j,i in enumerate(indices):
+            if selected[i]['coordinate_order']not in(0,1,4):scaled[j]=scales[j,:,None]*rotations[j]
+        bases=np.stack([camera_world[:3,:3]if selected[i]['frame']==5 else facing[id(selected[i])]for i in indices])
+        matrices[indices,:3,:3]=bases@scaled
+    points=np.ones((len(selected),4,4));points[:,:,:3]=np.stack([s['positions']for s in selected])
+    world=(matrices@points.transpose(0,2,1)).transpose(0,2,1)[:,:,:3]
+    return {id(s):(matrix,positions)for s,matrix,positions in zip(selected,matrices,world)}
+
+
 def simple_world_positions(sample,matrix,camera_world=None):
     centers=sample['simple_centers'];gravity=sample['simple_gravity']
     if not len(centers):return np.empty((0,3))
@@ -280,6 +303,7 @@ class EffectRenderer:
         self.parameter_cache=OrderedDict();self.parameter_bytes=0;self.reuse_parameters=True
         self.batch_billboards=True
         self.batch_shape_packing=True
+        self.batch_world_shapes=True
 
     def constant_inputs(self,sample,plan,matrix,camera_world,width,height,camera_constants):
         """Only evaluate the inputs actually read by the original programs."""
@@ -533,8 +557,10 @@ class EffectRenderer:
                 positions=[(s['parent']@s['local'])[:3,3]for s in selected]
                 bases=camera_facing_bases(positions,camera_world[:3,3],camera_world[:3,1])
                 facing={id(s):basis for s,basis in zip(selected,bases)}
+        shape_world=batched_shape_world(ordered,camera_world,facing)if self.batch_world_shapes else {}
         for sample in ordered:
-            plan=self.plan(sample);matrix=world_matrix(sample,view,camera_world,billboard_basis=facing.get(id(sample)));positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
+            resolved=shape_world.get(id(sample))
+            plan=self.plan(sample);matrix=resolved[0]if resolved is not None else world_matrix(sample,view,camera_world,billboard_basis=facing.get(id(sample)));positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
             cacheable=self.reuse_geometry
             view_dependent=geometry_uses_view(sample)
@@ -545,13 +571,13 @@ class EffectRenderer:
                     # UV/color/distortion packing is independent of the camera.
                     # Recompute every billboard position, keeping its original
                     # VS inputs and triangle order exactly as the uncached path.
-                    vertices=vertices.copy();world_positions=resolved_world_positions(sample,matrix,camera_world)
+                    vertices=vertices.copy();world_positions=resolved[1]if resolved is not None else resolved_world_positions(sample,matrix,camera_world)
                     if is_powder:vertices['center']=world_positions
                     else:vertices['position'][:,:3]=world_positions
             else:
                 dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX
                 prepacked=packed.get(id(sample));vertices=prepacked if prepacked is not None else np.zeros(len(positions),dtype=dtype)
-                world_positions=resolved_world_positions(sample,matrix,camera_world)
+                world_positions=resolved[1]if resolved is not None else resolved_world_positions(sample,matrix,camera_world)
                 if is_powder:
                     # The original VS adds center after rotating the local corner.
                     # Supplying the fully resolved corner as center, with zero

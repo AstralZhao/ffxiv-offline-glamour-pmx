@@ -51,6 +51,26 @@ def values(node,time,packed):
     return result
 
 
+@lru_cache(maxsize=256)
+def constant_transform(node):
+    data=particle_fields(node)
+    return all(constant_random_axes(data.get(name))for name in('Scl','Rot','Pos'))
+
+
+def resolved(node,time,packed):
+    return resolved_value(node,0 if constant_transform(node)else time,packed)
+
+
+@lru_cache(maxsize=4096)
+def resolved_value(node,time,packed):
+    from effect_sample import transform,rotation
+    coordinates=values(node,time,packed);data=particle_fields(node)
+    local=transform(data,time,random_values=coordinates)
+    rotate=rotation(coordinates['Rot'],number(data,'RoOT'))
+    for value in(*coordinates.values(),local,rotate):value.flags.writeable=False
+    return coordinates,local,rotate
+
+
 @lru_cache(maxsize=4096)
 def constant_random_axes(node):
     return constant_axes(node,3)and all(not keys or len(keys)==1

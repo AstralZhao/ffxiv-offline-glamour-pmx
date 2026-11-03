@@ -71,6 +71,16 @@ def values(node,time,packed):
     return result[0],result[1],float(angle)
 
 
+@lru_cache(maxsize=1024)
+def constant_set(node):
+    data=nested(node)
+    return all(constant_random_axes(data.get(name))for name in('Scl','Scr'))and all(
+        not keys or len(keys)==1 for _,keys in(curve_source(data.get(name))for name in('Rot','RotR')))
+
+
+def sample_time(node,time):return 0 if constant_set(node)else time
+
+
 @lru_cache(maxsize=4096)
 def constant_random_axes(node):
     return constant_axes(node,2)and all(not keys or len(keys)==1

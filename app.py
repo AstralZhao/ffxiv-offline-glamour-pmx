@@ -160,7 +160,9 @@ class DemoEngine:
                     if self.material_glow_enabled:
                         if self.material_glow is None:raise ValueError('Original postprocess inputs were not prepared')
                         output=self.material_glow.apply(self.color,*self.post_camera,
-                            draw_layer2=self.pending_effect_draw)
+                            draw_layer2=self.pending_effect_draw,
+                            base_token=(id(self.character_layer),self.character_layer.captures)
+                                if self.reuse_character_layer and self.character_layer.key is not None else None)
                     if self.native_surface:
                         self.native_surface.present(output)
                         return None,None

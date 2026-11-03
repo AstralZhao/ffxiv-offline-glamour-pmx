@@ -33,7 +33,7 @@ def _template_size(value):
     return 0
 
 
-def template_sample(effect,node,time):
+def template_sample(effect,node,time,*,defer_transform=False,defer_uv=False):
     """Bounded immutable source prototypes, before attachment/birth overrides.
 
     This never caches resolved parents, camera corners or a finished frame.
@@ -69,11 +69,12 @@ def template_sample(effect,node,time):
         if curve(fields_.get('TxN'),time):raise UnsupportedEffect('动画贴图索引')
         textures[name]={**channel,'power':curve(fields_.get('DPow'),time)}
     local_scale=axes(data.get('Scl'),time,1);angles=axes(data.get('Rot'),time)
-    value={**source,'parent':np.eye(4),'local':transform(data,time),'local_scale':local_scale,
-        'local_rotation':rotation(angles,number(data,'RoOT')),'powder_angles':angles,
+    value={**source,'parent':np.eye(4),'local':source['local']if defer_transform else transform(data,time),'local_scale':local_scale,
+        'local_rotation':source['local_rotation']if defer_transform else rotation(angles,number(data,'RoOT')),'powder_angles':angles,
         'powder_scale':np.ones(3)*local_scale,'color':color(data.get('Col'),time)*np.ones(4),
-        'textures':textures,'uv_matrices':[uv_matrix(None,0)if kind==1 else uv_matrix(uv,time,model=kind==5)
-            for uv in uv_nodes(node)],'uv_compute':list(source['uv_compute'])}
+        'textures':textures,'uv_matrices':source['uv_matrices']if defer_uv and kind!=1 else[
+            uv_matrix(None,0)if kind==1 else uv_matrix(uv,time,model=kind==5)for uv in uv_nodes(node)],
+        'uv_compute':list(source['uv_compute'])}
     if kind==5:
         model=nested(data.get('Data'))
         value.update(fresnel_power=curve(model.get('FrC'),time,1),

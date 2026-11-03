@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from types import SimpleNamespace
 import sys
+import time
 
 from qt_runtime import enable
 enable()
@@ -46,6 +47,16 @@ class TimerHost:
     def destroy(self):
         for key in list(self.timers):self.after_cancel(key)
         self.window.allow_close=True;self.window.close()
+
+
+class FutureDelivery(C.QObject):
+    """Deliver worker completion on the UI thread without polling gaps."""
+    finished=C.Signal(object)
+    def __init__(self,callback,parent):
+        super().__init__(parent);self.callback=callback
+        self.finished.connect(self.deliver,C.Qt.QueuedConnection)
+    @C.Slot(object)
+    def deliver(self,future):self.callback(future)
 
 
 class NativeView(W.QWidget):
@@ -147,6 +158,7 @@ class QtClient(NativeClient):
         self.closed=False;self.closing=False;self.job=None;self.dirty=False;self.timer=None;self.generation=0
         self.effect_clock=EffectClock();self.effect_future=None;self.effect_deferred=None;self.effect_poll=None
         self.effect_last_frame=30.
+        self.effect_started_at=0.;self.effect_delivery=FutureDelivery(self.effect_completed,window)
         self.effect_timer=C.QTimer(window);self.effect_timer.setInterval(33);self.effect_timer.timeout.connect(self.tick_effects)
         self.session_timer=None;self.accept_baseline=None;self.boot=None;self.ready=False
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
@@ -692,8 +704,12 @@ class QtClient(NativeClient):
             or self.window.isMinimized()or not self.window.isVisible()):return
         if not self.engine.last or not self.engine.last.get('equipment_effects'):return
         frame=self.effect_clock.sample();state=deepcopy(self.state)
+        self.effect_started_at=time.perf_counter()
         self.effect_future=self.engine.pool.submit(self.engine.render,state,effect_frame=frame)
-        self.effect_poll=self.root.after(10,self.poll_effects)
+        self.effect_future.add_done_callback(self.effect_delivery.finished.emit)
+
+    def effect_completed(self,future):
+        if future is self.effect_future:self.poll_effects()
 
     def poll_effects(self):
         self.effect_poll=None
@@ -710,6 +726,11 @@ class QtClient(NativeClient):
             if self.submit(fn,callback,*arguments)and self.job is not None:
                 self.job=(self.job[0],self.job[1],generation,baseline)
         elif self.dirty:self.pump_render()
+        elif self.effect_clock.playing and self.effects_play.isChecked():
+            # Keep the 30Hz presentation cap, but don't wait for another
+            # periodic tick after a slow frame has already exceeded it.
+            elapsed=(time.perf_counter()-self.effect_started_at)*1000
+            self.root.after(max(0,round(1000/30-elapsed)),self.tick_effects)
 
     def select_preset(self,index):
         if index>=0 and self.boot:self.submit(self.engine.run,self.accept_result,'preset',{'id':self.preset_ids[index]})

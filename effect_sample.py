@@ -21,6 +21,9 @@ from vfx import records,integer
 class UnsupportedEffect(NotImplementedError):pass
 
 
+reuse_static_parents=True
+
+
 def fields(nodes):
     result={}
     for node in nodes:
@@ -75,6 +78,7 @@ def curve_source(node):
 
 
 def curve(node,time,default=0,*,rgb=False):
+    if node is None:return np.full(3,default)if rgb else default
     if node is not None:
         source,keys=curve_source(node)
         if keys:
@@ -136,7 +140,8 @@ def constant_color(node):
 
 @lru_cache(maxsize=16384)
 def color_value(node,time):
-    data=nested(node);value=np.r_[curve(data.get('RGB'),time,1,rgb=True),curve(data.get('A'),time,1)]
+    data=nested(node);rgb=curve(data.get('RGB'),time,1,rgb=True);alpha=curve(data.get('A'),time,1)
+    value=np.empty(4,dtype=np.result_type(rgb,alpha));value[:3]=rgb;value[3]=alpha
     value*=np.array([curve(data.get('Scl'+axis),time,1)for axis in'RGBA'])
     value[:3]*=curve(data.get('Bri'),time,1)
     return value
@@ -364,7 +369,10 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
     Initial particle TRS random ranges are evaluated; complete scheduling,
     dynamic random modes and native update history remain separate work.
     """
-    from effect_geometry import template_sample
+    from effect_geometry import template_sample,uv_matrix
+    from effect_emitter import model_injection,sphere_injection,constant_particle_travel
+    from effect_transform_random import has_random as random_transform,initialize as initialize_transform,values as transform_values,resolved as resolved_transform
+    from effect_uv import has_random,initialize,uv_nodes,sample_time
     result=[];pending=[];visits=0;sampled={}
     if effect.missing:return (),('特效来源缺失',)
     groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl','Efct')}
@@ -436,8 +444,11 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
             effector=nested(get('Efct',number(data,'EfNo')))
             pending.append('局部点光源尚未接入'if number(effector,'EfVT')==0 else'发射器效果器尚未接入')
         stationary(data,time)
+        fixed_parent=(inherited@transform(data,0,emitter=True))if reuse_static_parents and inherited_at is None and all(
+            constant_axes(data.get(name),3)for name in('Scl','Rot','Pos'))else None
         @lru_cache(maxsize=512)
         def parent_at(at):
+            if fixed_parent is not None:return fixed_parent
             history=inherited if inherited_at is None else inherited_at(at)
             return history@transform(data,at,emitter=True)
         @lru_cache(maxsize=512)
@@ -457,6 +468,9 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                     target_node=get(tag,target)
                     target_data=particle_fields(target_node)if tag=='Ptcl'else fields(r for r in records(target_node.data)if r.tag not in('ItPr','ItEm'))
                     max_age=number(nested(target_data.get('Life')),'Val',-1.,real=True)
+                    inheritance_mode=number(child,'PICd');simple=bool(number(target_data,'bSCt'))
+                    transform_random=tag=='Ptcl'and random_transform(target_node)
+                    uv_random=tag=='Ptcl'and has_random(target_node)
                     inherited_matrix=None
                     for age,birth,occurrence in births(child,data,time,(stack,index,container,ordinal),max_age):
                         # CN3cbc88..3cbce7 captures the ordinary parent matrix
@@ -464,17 +478,19 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         # snapshot (3e3683), whereas PICd2 reads current parent
                         # +28 (3e3774). Sharing a current matrix across births
                         # incorrectly makes AllCreate children follow motion.
-                        if number(child,'PICd')==3:
+                        if inheritance_mode==3 and fixed_parent is None:
                             inherited_matrix=inherit(child,parent_at(birth),bound)
                         elif inherited_matrix is None:
                             inherited_matrix=inherit(child,parent,bound)
                         injected=np.eye(4);injected[:3,:3]=rotation(injection_angles(child,occurrence),0)
                         matrix=inherited_matrix@injected
                         if emitter_type in(3,5):
-                            from effect_emitter import model_injection,sphere_injection
                             inject=model_injection if emitter_type==5 else sphere_injection
                             position,velocity=inject(effect,data,birth,occurrence,(stack,index,container,ordinal,birth,occurrence))
-                            injection=np.eye(4);injection[:3,3]=position+velocity*age
+                            travel=constant_particle_travel(target_data,age,velocity)if tag=='Ptcl'and not simple else velocity*age
+                            if travel is None:
+                                pending.append('变动粒子位移系数的更新历史尚未接入');travel=velocity*age
+                            injection=np.eye(4);injection[:3,3]=position+travel
                             matrix=matrix@injection
                         tint=parent_color if number(child,'PICo')else np.ones(4)
                         # Keep a source-time transform history, rather than
@@ -484,17 +500,17 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         # Selective inheritance remains pending full Euler/TRS
                         # assembly; never invent its missing historical matrix.
                         def history(at,child=child,birth=birth,occurrence=occurrence,
-                                    identity=(stack,index,container,ordinal),current=time,injected=injected):
+                                    identity=(stack,index,container,ordinal),current=time,injected=injected,target_data=target_data,tag=tag):
                             when=birth+at
                             mode=number(child,'PICd')
                             if when!=current and mode not in(2,3):
                                 raise UnsupportedEffect('非持续继承的粒子出生变换历史')
                             value=inherit(child,parent_at(birth if mode==3 else when),bound)@injected
                             if emitter_type in(3,5):
-                                from effect_emitter import model_injection,sphere_injection
                                 inject=model_injection if emitter_type==5 else sphere_injection
                                 position,velocity=inject(effect,data,birth,occurrence,(*identity,birth,occurrence))
-                                injection=np.eye(4);injection[:3,3]=position+velocity*at
+                                travel=constant_particle_travel(target_data,at,velocity)if tag=='Ptcl'and not number(target_data,'bSCt')else velocity*at
+                                injection=np.eye(4);injection[:3,3]=position+(velocity*at if travel is None else travel)
                                 value=value@injection
                             return value
                         if tag=='Emit':
@@ -502,25 +518,25 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                                 return channels_at(birth+at)
                             emit(target,age,bound,matrix,tint,stack+(index,),history,
                                 child_channel_history,child,channels_at(birth),injection_angles(child,occurrence));continue
-                        particle=get(tag,target);particle_data=particle_fields(particle)
+                        particle=target_node;particle_data=target_data
                         if not alive(particle_data,age):continue
                         # Geometry/curves depend on source and age, not on
                         # which crystal attachment spawned this instance.
                         sample_key=(target,age)
                         if sample_key not in sampled:
-                            sampled[sample_key]=template_sample(effect,particle,age)
+                            sampled[sample_key]=template_sample(effect,particle,age,
+                                defer_transform=transform_random,defer_uv=uv_random)
                         prototype=sampled[sample_key]
                         value={**prototype,'parent':matrix,'color':prototype['color']*tint}
                         seed=(effect.sha256+repr((stack,index,container,ordinal,birth,occurrence))).encode()
-                        from effect_transform_random import has_random as random_transform,initialize as initialize_transform,values as transform_values
-                        transform_state=initialize_transform(particle,seed+b':transform')if random_transform(particle)else None
+                        transform_state=initialize_transform(particle,seed+b':transform')if transform_random else None
                         def local_at(at):
                             coordinates=transform_values(particle,at,transform_state)if transform_state is not None else None
                             return transform(particle_data,at,random_values=coordinates)
                         if transform_state is not None:
-                            coordinates=transform_values(particle,age,transform_state)
-                            value.update(local=transform(particle_data,age,random_values=coordinates),local_scale=coordinates['Scl'],
-                                local_rotation=rotation(coordinates['Rot'],number(particle_data,'RoOT')),
+                            coordinates,local,rotate=resolved_transform(particle,age,transform_state)
+                            value.update(local=local.copy(),local_scale=coordinates['Scl'].copy(),
+                                local_rotation=rotate.copy(),
                                 transform_random_bytes=transform_state)
                         if value['kind']=='powder'and 'simple_centers'not in value:
                             coordinates=coordinates if transform_state is not None else None
@@ -534,11 +550,9 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                             value['simple_birth_matrices']=np.asarray([
                                 history(float(at))@local_at(float(at))
                                 for at in prototype['simple_birth_age']])
-                        from effect_uv import has_random,initialize,uv_nodes
-                        if value['kind']!='powder'and has_random(particle):
-                            from effect_geometry import uv_matrix
+                        if value['kind']!='powder'and uv_random:
                             states=initialize(particle,seed)
-                            value['uv_matrices']=[uv_matrix(uv,age,model=value['kind']=='model',random_state=state)
+                            value['uv_matrices']=[uv_matrix(uv,sample_time(uv,age),model=value['kind']=='model',random_state=state)
                                 for uv,state in zip(uv_nodes(particle),states)]
                             value['uv_random_bytes']=states
                         if not len(value['indices']):continue
