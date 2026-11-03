@@ -381,8 +381,9 @@ class DemoEngine:
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
             self.library.seed(self.default_preset,default=True)
-            from builtin_presets import seed_miqote_examples
+            from builtin_presets import seed_miqote_examples,seed_viera_examples
             seed_miqote_examples(self.library)
+            seed_viera_examples(self.library)
             if not self.library.metadata.get('legacy_migration_complete'):
                 paths=sorted(self.default_preset.parent.glob('FFXIV_CHARA_*.dat'))+sorted((self.data/'presets').glob('*.dat'))
                 for path in paths:
@@ -558,7 +559,7 @@ class DemoEngine:
         if race_for_tribe(tribe)!=p['race']:raise ValueError('部族必须属于当前预设种族')
         return {**record,'id':key,'file_name':path.name,'directory':str(self.library.root),
             'fields':self.appearance_options.fields(tribe),'appearance':self.appearance_state(key),
-            'scope':'国服猫魅族与敖龙族女性；发型列表来自当前创建菜单'}
+            'scope':'国服猫魅族、敖龙族与维埃拉族女性；发型列表来自当前创建菜单'}
 
     def appearance_changes(self,payload):
         from presets import decode,change_bytes,digest
@@ -623,7 +624,7 @@ class DemoEngine:
             return {'application':'ff14-wardrobe-demo','status':self.status,'message':self.message,'error':self.error,'token':self.token,
                 'presets':[r[1]for r in self.presets.values()],'preset_id':getattr(self,'active_preset',None),
                 'last':self.last,'slots':SLOTS,'groups':GROUPS,'counts':counts,'dyes':dyes,'example':EXAMPLE,
-                'scope':'猫魅族/敖龙族女性 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
+                'scope':'猫魅族/敖龙族/维埃拉族女性 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
                 'version':'0.1 Demo','saved':self.saved(),'preset_directory':str(self.preset_directory.resolve()),
                 'appearance':self.appearance_state(),'can_select_preset':self.renderer is not None and bool(self.presets)}
 

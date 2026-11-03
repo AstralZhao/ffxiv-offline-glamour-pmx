@@ -25,9 +25,11 @@ class AppearanceOptions:
         menu,_=self.store.geometry_menu(tribe)
         race=race_for_tribe(tribe)
         result=[{'field':'tribe','label':'部族','kind':'select','mask':255,
-            'choices':[{'value':v,'label':CLANS[v]}for v in((7,8)if race==4 else(11,12))]}]
+            'choices':[{'value':v,'label':CLANS[v]}for v in CLANS if race_for_tribe(v)==race]}]
         for option in menu.options:
-            result.append({'field':option.field,'label':('脸型'if race==4 and option.field=='face'else LABELS[option.field]),'kind':'slider'if option.menu_type==5 else'select',
+            labels={**LABELS,'face':'脸型'if race!=6 else LABELS['face']}
+            if race==8:labels.update(ear_muscle_tail_size='耳朵长度',tail_or_ear_type='耳朵形状')
+            result.append({'field':option.field,'label':labels[option.field],'kind':'slider'if option.menu_type==5 else'select',
                 'mask':option.mask,'choices':[{'value':v,'label':str(v)if option.menu_type==5 else f'样式 {i}'}
                     for i,v in enumerate(option.values,1)]})
         p={'race':race,'gender':1,'body_type':1,'tribe':tribe}
