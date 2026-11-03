@@ -93,6 +93,20 @@ def document_parameters(sample,width,height):
     return result
 
 
+def instance_extra_parameters(sample):
+    # CN3e2346..3e23b9 derives BOOLEAN first-texture arithmetic flags;
+    # ScreenCopy suppresses its alpha calculation. CN37fd2f..37fdd9
+    # also maps RMT to -1/0/1, rather than uploading the RMT enum itself.
+    first=sample['textures'].get('TC1')
+    color=bool(first and first.get('color_mode',0))
+    alpha=bool(first and not first.get('screen_copy')and first.get('alpha_mode',0))
+    mode=sample['blend']
+    if mode not in range(13):raise UnsupportedEffect('未审阅的特效混合常量')
+    blend=-1 if mode in(1,9)else 1 if mode in(2,3,4,10,11,12)else 0
+    return struct.pack('<8f',int(sample.get('fresnel_type',0)==1),color,alpha,
+        bool(sample.get('apply_tone_map',False)),blend,0,0,0)
+
+
 def tree_basis(matrix,camera):
     # CN3e3d68..3e3ff4 reads the ALREADY composed matrix's Y axis.
     # It replaces its orientation with these three independently normalized
@@ -217,8 +231,7 @@ class EffectRenderer:
                 for i,value in enumerate(sample['uv_matrices']):uv[i*2:i*2+2]=value
                 static['g_PS_UvTransform']=uv.tobytes()
             if 'g_PS_InstanceExtraParameters'in required:
-                first=sample['textures'].get('TC1',{})
-                static['g_PS_InstanceExtraParameters']=struct.pack('<8f',int(fresnel==1),first.get('color_mode',1),first.get('alpha_mode',1),0,sample['blend'],0,0,0)
+                static['g_PS_InstanceExtraParameters']=instance_extra_parameters(sample)
             if 'g_PS_DocumentParameters'in required:static['g_PS_DocumentParameters']=document_parameters(sample,width,height).tobytes()
             if 'g_ToneMapParameter'in required:static['g_ToneMapParameter']=struct.pack('<4f',0,0,0,1)
             if 'g_PS_DofCocParam'in required:static['g_PS_DofCocParam']=bytes(16)

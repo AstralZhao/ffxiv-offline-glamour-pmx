@@ -114,7 +114,7 @@ def sample(effect,node,time,parent,parent_color):
         'parent':parent,'local_scale':axes(d.get('Scl'),time,1),
         'local_rotation':rotation(axes(d.get('Rot'),time),number(d,'RoOT')),
         'coordinate_order':number(d,'CCOT'),'color':color(d.get('Col'),time)*parent_color,'textures':textures,'uv_matrices':matrices,
-        'uv_count':uv_count,'uv_compute':uv_compute,'blend':mode,'soft':bool(number(d,'DsSp')),
+        'uv_count':uv_count,'uv_compute':uv_compute,'blend':mode,'apply_tone_map':bool(number(d,'bATM')),'soft':bool(number(d,'DsSp')),
         'soft_range':soft_particle_range(effect)if number(d,'DsSp')else None,'depth_test':bool(number(d,'DsDt',1)),
         'depth_write':bool(number(d,'DsDw')),'cull':number(d,'CulT'),'depth_offset':number(d,'DpOf',0.,real=True),
         'priority':number(d,'DwPr'),'texture':textures.get('TC1',{}).get('path'),
