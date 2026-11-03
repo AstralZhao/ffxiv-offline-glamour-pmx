@@ -386,7 +386,15 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                     max_age=number(nested(target_data.get('Life')),'Val',-1.,real=True)
                     inherited_matrix=None
                     for age,birth,occurrence in births(child,data,time,(stack,index,container,ordinal),max_age):
-                        if inherited_matrix is None:inherited_matrix=inherit(child,parent,bound)
+                        # CN3cbc88..3cbce7 captures the ordinary parent matrix
+                        # separately for EACH birth. PICd3 later consumes that
+                        # snapshot (3e3683), whereas PICd2 reads current parent
+                        # +28 (3e3774). Sharing a current matrix across births
+                        # incorrectly makes AllCreate children follow motion.
+                        if number(child,'PICd')==3:
+                            inherited_matrix=inherit(child,parent_at(birth),bound)
+                        elif inherited_matrix is None:
+                            inherited_matrix=inherit(child,parent,bound)
                         injected=np.eye(4);injected[:3,:3]=rotation(injection_angles(child,occurrence),0)
                         matrix=inherited_matrix@injected
                         if emitter_type in(3,5):
@@ -398,15 +406,17 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         tint=parent_color if number(child,'PICo')else np.ones(4)
                         # Keep a source-time transform history, rather than
                         # rotating already emitted, unbound Simple centers by
-                        # the current parent. Only the reviewed AllAlways
-                        # hierarchy supports history; other modes retain their
-                        # existing current-time path and report missing history.
+                        # the current parent. AllCreate uses its own fixed birth
+                        # snapshot even when descendants request later history.
+                        # Selective inheritance remains pending full Euler/TRS
+                        # assembly; never invent its missing historical matrix.
                         def history(at,child=child,birth=birth,occurrence=occurrence,
                                     identity=(stack,index,container,ordinal),current=time,injected=injected):
                             when=birth+at
-                            if when!=current and number(child,'PICd')!=2:
+                            mode=number(child,'PICd')
+                            if when!=current and mode not in(2,3):
                                 raise UnsupportedEffect('非持续继承的粒子出生变换历史')
-                            value=inherit(child,parent_at(when),bound)@injected
+                            value=inherit(child,parent_at(birth if mode==3 else when),bound)@injected
                             if emitter_type in(3,5):
                                 from effect_emitter import model_injection,sphere_injection
                                 inject=model_injection if emitter_type==5 else sphere_injection
