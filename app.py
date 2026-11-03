@@ -381,9 +381,10 @@ class DemoEngine:
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
             self.library.seed(self.default_preset,default=True)
-            from builtin_presets import seed_miqote_examples,seed_viera_examples
+            from builtin_presets import seed_miqote_examples,seed_viera_examples,seed_viera_male_examples
             seed_miqote_examples(self.library)
             seed_viera_examples(self.library)
+            seed_viera_male_examples(self.library)
             if not self.library.metadata.get('legacy_migration_complete'):
                 paths=sorted(self.default_preset.parent.glob('FFXIV_CHARA_*.dat'))+sorted((self.data/'presets').glob('*.dat'))
                 for path in paths:
@@ -550,6 +551,19 @@ class DemoEngine:
             return {'imported':True,'model_loaded':False,'preset':self.presets[key][1],
                 'preview_error':str(error),'appearance':self.appearance_state()}
 
+    def create_preset(self,payload):
+        from builtin_presets import CREATION_PROFILES,example_dat
+        from cn_character import CLANS
+        if not isinstance(payload,dict)or set(payload)-{'profile','tribe','name'}:raise ValueError('新建预设参数不正确')
+        profile=next((p for p in CREATION_PROFILES if p['id']==payload.get('profile')),None)
+        if profile is None or payload.get('tribe')not in profile['tribes']:raise ValueError('请选择有效的种族、性别与部族')
+        tribe=payload['tribe'];fields=self.appearance_options.fields(tribe,profile['gender'])
+        hair=next(f['choices'][0]['value']for f in fields if f['field']=='hair')
+        raw=example_dat(profile['race'],tribe,hair,profile['label'],profile['gender'])
+        name=payload.get('name')or profile['label']+'-'+CLANS[tribe]+'.dat'
+        if not isinstance(name,str):raise ValueError('预设名称不正确')
+        return {**self.import_dat(raw,name),'created':True}
+
     def describe_appearance(self,key,tribe=None):
         from presets import decode
         if key not in self.presets:raise ValueError('本地预设不存在')
@@ -558,8 +572,8 @@ class DemoEngine:
         from cn_character import race_for_tribe
         if race_for_tribe(tribe)!=p['race']:raise ValueError('部族必须属于当前预设种族')
         return {**record,'id':key,'file_name':path.name,'directory':str(self.library.root),
-            'fields':self.appearance_options.fields(tribe),'appearance':self.appearance_state(key),
-            'scope':'国服猫魅族、敖龙族与维埃拉族女性；发型列表来自当前创建菜单'}
+            'fields':self.appearance_options.fields(tribe,p['gender']),'appearance':self.appearance_state(key),
+            'scope':'国服猫魅族、敖龙族女性及维埃拉族男女角色；发型列表来自当前创建菜单'}
 
     def appearance_changes(self,payload):
         from presets import decode,change_bytes,digest
@@ -602,12 +616,13 @@ class DemoEngine:
             'model_matches_file':bool(entry and rendered==entry[1]['parameters'])}
 
     def run(self,operation,payload):
-        if self.status!='ready'and(operation not in('preset','import','appearance_save','appearance_preview')or self.renderer is None):
+        if self.status!='ready'and(operation not in('preset','import','create','appearance_save','appearance_preview')or self.renderer is None):
             raise ValueError('角色还在准备，请稍后再试')
         try:
             if operation=='render':return self.render(payload)
             if operation=='preset':result=self.load(payload['id'])
             elif operation=='import':result=self.import_dat(base64.b64decode(payload['data'],validate=True),payload.get('name',''))
+            elif operation=='create':result=self.create_preset(payload)
             elif operation=='appearance_preview':result=self.preview_appearance(payload)
             elif operation=='appearance_save':result=self.save_appearance(payload)
             else:raise ValueError('未知操作')
@@ -624,7 +639,7 @@ class DemoEngine:
             return {'application':'ff14-wardrobe-demo','status':self.status,'message':self.message,'error':self.error,'token':self.token,
                 'presets':[r[1]for r in self.presets.values()],'preset_id':getattr(self,'active_preset',None),
                 'last':self.last,'slots':SLOTS,'groups':GROUPS,'counts':counts,'dyes':dyes,'example':EXAMPLE,
-                'scope':'猫魅族/敖龙族/维埃拉族女性 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
+                'scope':'猫魅族/敖龙族女性、维埃拉族男女 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
                 'version':'0.1 Demo','saved':self.saved(),'preset_directory':str(self.preset_directory.resolve()),
                 'appearance':self.appearance_state(),'can_select_preset':self.renderer is not None and bool(self.presets)}
 

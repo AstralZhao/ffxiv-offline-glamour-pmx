@@ -28,7 +28,7 @@ def change_bytes(raw,changes):
     for field,value in changes.items():
         if type(value)is not int or not 0<=value<=255:raise ValueError('捏脸参数必须是有效整数')
         if field in('race','gender','body_type')and value!=data[16+FIELDS.index(field)]:
-            raise ValueError('当前预设编辑保持原种族女性身份')
+            raise ValueError('当前预设编辑保持原种族与性别身份')
         data[16+FIELDS.index(field)]=value
     checksum=0
     for i,value in enumerate(data[16:]):checksum^=value<<(i%24)

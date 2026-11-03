@@ -100,7 +100,7 @@ class Accessories:
         flags=int(flags['flags'],16)
         show={'Ears':bool(flags&(1<<49)),'Neck':bool(flags&(1<<11)and flags&(1<<45)),
             'Wrists':bool(flags&(1<<12)and flags&(1<<28)),'FingerL':bool(flags&(1<<29)),'FingerR':bool(flags&(1<<30))}
-        if self.core.race==1801:
+        if self.core.race in(1701,1801):
             from preset_head import viera_earrings_visible
             show['Ears']=viera_earrings_visible(flags)
         result=copy.copy(scene);result.meshes=list(scene.meshes)

@@ -221,7 +221,8 @@ class QtClient(NativeClient):
         h.addSpacing(15);self.tagline=label('自由搭配，每一种可能。','Muted');h.addWidget(self.tagline);h.addStretch()
         self.preset_combo=ComboBox();self.preset_combo.setMinimumWidth(190);self.preset_combo.setMaximumWidth(255)
         self.preset_combo.setToolTip('角色外观预设');self.preset_combo.activated.connect(self.select_preset);h.addWidget(self.preset_combo)
-        h.addWidget(button('编辑外观',self.open_editor));h.addWidget(button('导入预设',self.import_preset,ghost=True))
+        h.addWidget(button('编辑外观',self.open_editor));h.addWidget(button('新建预设',self.create_preset,ghost=True))
+        h.addWidget(button('导入预设',self.import_preset,ghost=True));self.tagline.hide()
         h.addWidget(button('我的搭配',self.saved_dialog,ghost=True));h.addWidget(button('保存搭配',self.save_outfit,primary=True))
         h.addWidget(button('设置',self.open_settings,ghost=True));outer.addWidget(header)
         body=W.QWidget();body_layout=horizontal(body,18,16);outer.addWidget(body,1)
@@ -360,7 +361,7 @@ class QtClient(NativeClient):
                 self.loading_kind='正在调整视角…'if same_outfit else'正在绘制搭配…'
             else:
                 operation=arguments[0]if arguments and isinstance(arguments[0],str)else''
-                self.loading_kind={'preset':'正在加载角色…','import':'正在导入预设…','appearance_preview':'正在更新模型…',
+                self.loading_kind={'preset':'正在加载角色…','import':'正在导入预设…','create':'正在新建预设…','appearance_preview':'正在更新模型…',
                     'appearance_save':'正在保存预设…'}.get(operation,'正在准备预览…')
             self.sync_loading()
         return accepted
@@ -812,6 +813,32 @@ class QtClient(NativeClient):
             if result['model_loaded']:self.accept_result(result)
             else:self.message.set('预设文件已导入，模型暂时无法加载：'+result['preview_error']);self.open_editor(result['preset']['id'])
         self.submit(self.engine.run,done,'import',{'name':Path(name).name,'data':base64.b64encode(raw).decode()})
+
+    def create_preset(self):
+        if self.engine is None or not self.engine.ready.done():return self.message.set('正在加载角色，请稍候…')
+        if self.job:return self.message.set('请等待当前模型准备完成')
+        from builtin_presets import CREATION_PROFILES
+        from cn_character import CLANS
+        dialog=W.QDialog(self.window);dialog.setWindowTitle('新建角色预设');dialog.setMinimumWidth(420)
+        outer=vertical(dialog,22,14);outer.addWidget(label('新建角色预设','Title'))
+        outer.addWidget(label('种族和性别创建后固定，其他外观可在创建后编辑。','Muted'))
+        form=W.QFormLayout();profile=ComboBox();tribe=ComboBox();name=W.QLineEdit();name.setPlaceholderText('留空使用默认名称')
+        for p in CREATION_PROFILES:profile.addItem(p['label'],p['id'])
+        def update_clans():
+            tribe.clear()
+            for value in CREATION_PROFILES[profile.currentIndex()]['tribes']:tribe.addItem(CLANS[value],value)
+        profile.currentIndexChanged.connect(update_clans);update_clans()
+        form.addRow('角色类型',profile);form.addRow('部族',tribe);form.addRow('预设名称',name);outer.addLayout(form)
+        actions=horizontal(spacing=8);actions.addStretch();actions.addWidget(button('取消',dialog.reject,ghost=True))
+        def create():
+            payload={'profile':profile.currentData(),'tribe':tribe.currentData(),'name':name.text().strip()}
+            dialog.accept()
+            def done(result):
+                self.refresh_boot()
+                if result['model_loaded']:self.accept_result(result)
+                else:self.message.set('预设已新建，模型暂时无法加载：'+result['preview_error']);self.open_editor(result['preset']['id'])
+            self.submit(self.engine.run,done,'create',payload)
+        actions.addWidget(button('创建并预览',create,primary=True));outer.addLayout(actions);dialog.exec()
 
     def palette(self,title,choices,selected,callback):
         parent=self.editor if self.editor and self.editor.isVisible()else self.window

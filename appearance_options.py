@@ -20,9 +20,10 @@ class AppearanceOptions:
         profile=json.loads((Path(root)/'docs/cn-customization-profile.json').read_bytes())
         self.cmp=pack.read(profile['cmp_path'])
 
-    def fields(self,tribe):
-        if tribe in self.cache:return self.cache[tribe]
-        menu,_=self.store.geometry_menu(tribe)
+    def fields(self,tribe,gender=1):
+        key=(tribe,gender)
+        if key in self.cache:return self.cache[key]
+        menu,_=self.store.geometry_menu(tribe,gender)
         race=race_for_tribe(tribe)
         result=[{'field':'tribe','label':'部族','kind':'select','mask':255,
             'choices':[{'value':v,'label':CLANS[v]}for v in CLANS if race_for_tribe(v)==race]}]
@@ -32,16 +33,16 @@ class AppearanceOptions:
             result.append({'field':option.field,'label':labels[option.field],'kind':'slider'if option.menu_type==5 else'select',
                 'mask':option.mask,'choices':[{'value':v,'label':str(v)if option.menu_type==5 else f'样式 {i}'}
                     for i,v in enumerate(option.values,1)]})
-        p={'race':race,'gender':1,'body_type':1,'tribe':tribe}
+        p={'race':race,'gender':gender,'body_type':1,'tribe':tribe}
         hair=hair_menu(self.data,p)
         result.append({'field':'hair','label':'发型','kind':'select','mask':255,
             'choices':[{'value':c['hair_id'],'label':f"发型 {c['hair_id']}",'icon_id':c['icon_id']}for c in hair['choices']]})
-        row=next(r for _,r in self.data.rows('CharaMakeType')if(r['Race'],r['Gender'],r['Tribe'])==(race,1,tribe))
+        row=next(r for _,r in self.data.rows('CharaMakeType')if(r['Race'],r['Gender'],r['Tribe'])==(race,gender,tribe))
         palettes={}
         for i in range(28):
             pre=f'CharaMakeStruct[{i}].'
             if row[pre+'Menu']and row[pre+'SubMenuType']in(2,3):palettes[row[pre+'Customize']]=row[pre+'SubMenuNum']
-        base=18432+((tribe-1)*2+1)*5120
+        base=18432+((tribe-1)*2+gender)*5120
         colors={'skin_color':(base,4,palettes[8]),'hair_color':(base+1024,8,palettes[10]),
             'highlight_color':(1024,4,palettes[10]),'left_eye_color':(0,4,palettes[9]),'right_eye_color':(0,4,palettes[9]),
             'facial_feature_color':(3072,4,palettes[13]),'lip_color_or_fur_pattern':(2048,4,palettes[20]),'face_paint_color':(4096,4,palettes[25])}
@@ -63,10 +64,11 @@ class AppearanceOptions:
                 linked=customs[row[pre+f'SubMenuParam[{j}]']]
                 paints.append({'value':linked['FeatureID'],'label':'无'if linked['FeatureID']==0 else f'彩绘 {j}', 'icon_id':linked['Icon']})
         result.append({'field':'face_paint','label':LABELS['face_paint'],'kind':'select','mask':127,'choices':paints})
-        self.cache[tribe]=result;return result
+        self.cache[key]=result;return result
 
     def validate(self,original,updated):
-        for option in self.fields(updated['tribe']):
+        if not updated['gender']and updated['bust']!=original['bust']:raise ValueError('男性预设没有胸围选项')
+        for option in self.fields(updated['tribe'],updated['gender']):
             field=option['field'];value=updated[field]
             # Keep a valid imported non-menu/unlocked selection when unchanged.
             if value==original[field]and original['tribe']==updated['tribe']:continue
