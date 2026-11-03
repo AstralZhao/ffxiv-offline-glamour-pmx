@@ -4,6 +4,7 @@ from pathlib import Path
 from build_cn_catalog import VerifiedData
 from audit_preset_hair_sources import hair_menu
 from probe_appearance_presets import FIELDS
+from cn_character import race_for_tribe,CLANS
 
 LABELS={'tribe':'部族','hair':'发型','face':'脸型与龙角','height':'身高','bust':'胸围','ear_muscle_tail_size':'尾巴长度',
     'tail_or_ear_type':'尾巴形状','eyebrows':'眉型','eyes':'眼型','nose':'鼻型','jaw':'轮廓','mouth':'嘴型',
@@ -22,17 +23,18 @@ class AppearanceOptions:
     def fields(self,tribe):
         if tribe in self.cache:return self.cache[tribe]
         menu,_=self.store.geometry_menu(tribe)
+        race=race_for_tribe(tribe)
         result=[{'field':'tribe','label':'部族','kind':'select','mask':255,
-            'choices':[{'value':11,'label':'晨曦之民'},{'value':12,'label':'暮晖之民'}]}]
+            'choices':[{'value':v,'label':CLANS[v]}for v in((7,8)if race==4 else(11,12))]}]
         for option in menu.options:
-            result.append({'field':option.field,'label':LABELS[option.field],'kind':'slider'if option.menu_type==5 else'select',
+            result.append({'field':option.field,'label':('脸型'if race==4 and option.field=='face'else LABELS[option.field]),'kind':'slider'if option.menu_type==5 else'select',
                 'mask':option.mask,'choices':[{'value':v,'label':str(v)if option.menu_type==5 else f'样式 {i}'}
                     for i,v in enumerate(option.values,1)]})
-        p={'race':6,'gender':1,'body_type':1,'tribe':tribe}
+        p={'race':race,'gender':1,'body_type':1,'tribe':tribe}
         hair=hair_menu(self.data,p)
         result.append({'field':'hair','label':'发型','kind':'select','mask':255,
             'choices':[{'value':c['hair_id'],'label':f"发型 {c['hair_id']}",'icon_id':c['icon_id']}for c in hair['choices']]})
-        row=next(r for _,r in self.data.rows('CharaMakeType')if(r['Race'],r['Gender'],r['Tribe'])==(6,1,tribe))
+        row=next(r for _,r in self.data.rows('CharaMakeType')if(r['Race'],r['Gender'],r['Tribe'])==(race,1,tribe))
         palettes={}
         for i in range(28):
             pre=f'CharaMakeStruct[{i}].'

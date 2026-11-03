@@ -114,10 +114,10 @@ class DemoEngine:
         path=self.library.path(Path(path).name)
         record=import_preset(path);p=record['parameters'];key=hashlib.sha256(str(path.resolve()).encode()).hexdigest()[:24]
         if identifier is not None:key=identifier
-        if (p['race'],p['gender'],p['body_type'])!=(6,1,1)or p['tribe']not in(11,12):
-            raise ValueError('原型当前支持敖龙族女性的两个部族')
+        from cn_character import reviewed_identity,CLANS
+        reviewed_identity(p)
         entry={'id':key,'name':record.get('comment')or path.stem,'file_name':path.name,
-            'clan':'晨曦之民'if p['tribe']==11 else'暮晖之民','face':p['face'],'hair':p['hair'],
+            'clan':CLANS[p['tribe']],'face':p['face'],'hair':p['hair'],
             'parameters':p,'sha256':record['source_sha256'],'app_owned':True}
         with self.lock:self.presets[key]=(path,entry)
         return entry
@@ -381,6 +381,8 @@ class DemoEngine:
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
             self.library.seed(self.default_preset,default=True)
+            from builtin_presets import seed_miqote_examples
+            seed_miqote_examples(self.library)
             if not self.library.metadata.get('legacy_migration_complete'):
                 paths=sorted(self.default_preset.parent.glob('FFXIV_CHARA_*.dat'))+sorted((self.data/'presets').glob('*.dat'))
                 for path in paths:
@@ -388,7 +390,7 @@ class DemoEngine:
                     except ValueError:continue
                 self.library.metadata['legacy_migration_complete']=True;self.library.save_index()
             self.refresh_presets();self.appearance_options=AppearanceOptions(self.pack,self.store,ROOT)
-            if not self.presets:raise ValueError('没有找到可用的敖龙族女性预设，请导入原生DAT预设')
+            if not self.presets:raise ValueError('没有找到可用的角色预设，请导入原生DAT预设')
             self.restore_startup_session()
             with self.lock:self.status='ready';self.message='可以开始搭配了'
         except Exception as error:
@@ -552,10 +554,11 @@ class DemoEngine:
         if key not in self.presets:raise ValueError('本地预设不存在')
         path,_=self.presets[key];record=decode(path.read_bytes());p=record['parameters']
         tribe=p['tribe']if tribe is None else tribe
-        if tribe not in(11,12):raise ValueError('当前支持敖龙族女性的两个部族')
+        from cn_character import race_for_tribe
+        if race_for_tribe(tribe)!=p['race']:raise ValueError('部族必须属于当前预设种族')
         return {**record,'id':key,'file_name':path.name,'directory':str(self.library.root),
             'fields':self.appearance_options.fields(tribe),'appearance':self.appearance_state(key),
-            'scope':'国服敖龙族女性；发型列表来自当前创建菜单'}
+            'scope':'国服猫魅族与敖龙族女性；发型列表来自当前创建菜单'}
 
     def appearance_changes(self,payload):
         from presets import decode,change_bytes,digest
@@ -620,7 +623,7 @@ class DemoEngine:
             return {'application':'ff14-wardrobe-demo','status':self.status,'message':self.message,'error':self.error,'token':self.token,
                 'presets':[r[1]for r in self.presets.values()],'preset_id':getattr(self,'active_preset',None),
                 'last':self.last,'slots':SLOTS,'groups':GROUPS,'counts':counts,'dyes':dyes,'example':EXAMPLE,
-                'scope':'敖龙族女性 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
+                'scope':'猫魅族/敖龙族女性 · 全量装备目录 · 原生双染色','game_directory':str(self.game),
                 'version':'0.1 Demo','saved':self.saved(),'preset_directory':str(self.preset_directory.resolve()),
                 'appearance':self.appearance_state(),'can_select_preset':self.renderer is not None and bool(self.presets)}
 

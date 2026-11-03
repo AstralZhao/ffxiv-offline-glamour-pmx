@@ -29,7 +29,7 @@ class Accessories:
         self.eqdp={};self.prepared={}
 
     def source(self,model,slot):
-        race=1401;index=PARTS[slot][0]
+        race=self.core.race;index=PARTS[slot][0]
         while race is not None:
             if race not in self.eqdp:
                 self.eqdp[race]=Eqdp(self.pack.read(f'chara/xls/charadb/accessorydeformerparameter/c{race:04}.eqdp'))

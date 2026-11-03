@@ -2,6 +2,7 @@
 import hashlib,json,os,re,struct,time,uuid
 from pathlib import Path
 from probe_appearance_presets import FIELDS
+from cn_character import reviewed_identity,CLANS
 
 
 def digest(raw):return hashlib.sha256(raw).hexdigest()
@@ -15,8 +16,8 @@ def decode(raw):
     if magic!=0x2013ff14 or version!=5 or saved!=(checksum&0xffffffff):
         raise ValueError('预设格式或校验和不正确')
     p=dict(zip(FIELDS,raw[16:42]))
-    if(p['race'],p['gender'],p['body_type'])!=(6,1,1)or p['tribe']not in(11,12):
-        raise ValueError('原型当前支持敖龙族女性的两个部族')
+    try:reviewed_identity(p)
+    except NotImplementedError as error:raise ValueError(str(error))from error
     return {'parameters':p,'comment':raw[48:].split(b'\0',1)[0].decode('utf8',errors='replace'),
         'sha256':digest(raw)}
 
@@ -27,7 +28,7 @@ def change_bytes(raw,changes):
     for field,value in changes.items():
         if type(value)is not int or not 0<=value<=255:raise ValueError('捏脸参数必须是有效整数')
         if field in('race','gender','body_type')and value!=data[16+FIELDS.index(field)]:
-            raise ValueError('当前预设编辑保持敖龙族女性身份')
+            raise ValueError('当前预设编辑保持原种族女性身份')
         data[16+FIELDS.index(field)]=value
     checksum=0
     for i,value in enumerate(data[16:]):checksum^=value<<(i%24)
@@ -101,7 +102,7 @@ class PresetLibrary:
             key=self.metadata['files'].get(path.name,{}).get('id')or digest(str(path).encode())[:24]
             p=record['parameters']
             records.append((key,path,{'id':key,'name':record['comment']or path.stem,'file_name':path.name,
-                'clan':'晨曦之民'if p['tribe']==11 else'暮晖之民','face':p['face'],'hair':p['hair'],
+                'clan':CLANS[p['tribe']],'face':p['face'],'hair':p['hair'],
                 'parameters':p,'sha256':record['sha256'],'app_owned':True}))
         return records
 

@@ -102,7 +102,7 @@ class DemoOutfit(DemoMaterials,PresetOutfit):
                 if key in rows:raise ValueError('装备EST存在重复映射')
                 rows[key]=struct.unpack_from('<H',raw,4+count*4+i*2)[0]
             self.est[table]=rows
-        race=1401
+        race=self.race
         while race is not None:
             skeleton=self.est[table].get((race,item['model_set']))
             if skeleton:
@@ -160,12 +160,12 @@ class DemoOutfit(DemoMaterials,PresetOutfit):
 
     def mesh_deformation(self,source,item):
         race=item['model_race']
-        if race==1401:return None
+        if race==self.race:return None
         missing=set(source.bone_names)-self.names.keys()
         parents=self.attachment(item)['parents']if missing else self.parents
         source_chain=[];node=race
         while node is not None:source_chain.append(node);node=self.pbd.parent(node)
-        target_chain=[];node=1401
+        target_chain=[];node=self.race
         while node is not None:target_chain.append(node);node=self.pbd.parent(node)
         common=next((n for n in source_chain if n in target_chain),None)
         if common is None:raise NotImplementedError('装备与角色没有共用的PBD来源')
