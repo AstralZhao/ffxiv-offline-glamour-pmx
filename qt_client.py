@@ -61,19 +61,34 @@ class FutureDelivery(C.QObject):
 
 class NativeView(W.QWidget):
     def __init__(self,parent=None):
-        super().__init__(parent);self.controller=None
-        self.setAttribute(C.Qt.WA_NativeWindow);self.setAttribute(C.Qt.WA_PaintOnScreen)
-        self.setAttribute(C.Qt.WA_NoSystemBackground);self.setAttribute(C.Qt.WA_OpaquePaintEvent)
+        super().__init__(parent);self.controller=None;self.native_active=False
+        self.setAttribute(C.Qt.WA_NativeWindow);self.setAttribute(C.Qt.WA_OpaquePaintEvent)
         self.setMinimumSize(280,300);self.setMouseTracking(True);self.setCursor(C.Qt.OpenHandCursor)
         self.setSizePolicy(W.QSizePolicy.Expanding,W.QSizePolicy.Expanding)
-    def paintEngine(self):return None
+    def paintEngine(self):return None if self.native_active else super().paintEngine()
     def paintEvent(self,event):
-        # Qt repaint requests (including adjacent spinner ticks) are not
-        # scene edits. DXGI/DWM retains the last native frame independently.
-        pass
+        if not self.native_active:
+            painter=G.QPainter(self);painter.fillRect(self.rect(),G.QColor('#0b0d13'))
+            painter.setPen(G.QColor('#95a1b5'));painter.drawText(self.rect(),C.Qt.AlignCenter,'正在恢复角色预览…')
+            return
+        # Re-present the retained GPU result after exposure, without another
+        # character build, particle update, image conversion or disk read.
+        if self.controller:self.controller.request_present()
+    def activate_native(self):
+        if self.native_active:return
+        self.native_active=True;self.setAttribute(C.Qt.WA_PaintOnScreen);self.setAttribute(C.Qt.WA_NoSystemBackground)
+        self.update()
+    def watch_window(self):
+        self.window().installEventFilter(self)
+        handle=self.window().windowHandle()
+        if handle:handle.installEventFilter(self)
+    def eventFilter(self,watched,event):
+        if event.type()in(C.QEvent.Show,C.QEvent.Expose,C.QEvent.WindowActivate,C.QEvent.WindowStateChange):
+            if self.controller:self.controller.request_present()
+        return super().eventFilter(watched,event)
     def showEvent(self,event):
         super().showEvent(event)
-        if self.controller and self.controller.ready:self.controller.queue_render()
+        if self.controller:self.controller.request_present()
     def resizeEvent(self,event):
         super().resizeEvent(event)
         if self.controller:self.controller.queue_render()
@@ -159,6 +174,10 @@ class QtClient(NativeClient):
         self.effect_clock=EffectClock();self.effect_future=None;self.effect_deferred=None;self.effect_poll=None
         self.effect_last_frame=30.
         self.effect_started_at=0.;self.effect_delivery=FutureDelivery(self.effect_completed,window)
+        self.present_future=None;self.present_timer=None;self.present_requested=False
+        self.present_delivery=FutureDelivery(self.present_completed,window)
+        self.occlusion_timer=C.QTimer(window);self.occlusion_timer.setInterval(250)
+        self.occlusion_timer.timeout.connect(self.request_present)
         self.effect_timer=C.QTimer(window);self.effect_timer.setInterval(33);self.effect_timer.timeout.connect(self.tick_effects)
         self.session_timer=None;self.accept_baseline=None;self.boot=None;self.ready=False
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
@@ -183,7 +202,14 @@ class QtClient(NativeClient):
     def start_engine(self,game,preset,preset_directory):
         if self.closing:return
         try:
-            self.engine=DemoEngine(Path(game),Path(preset),preset_directory=preset_directory,native_hwnd=int(self.viewport.winId()))
+            session=None
+            if self.session_path.is_file():
+                try:
+                    if self.session_path.stat().st_size<=128*1024:session=json.loads(self.session_path.read_bytes())
+                except(ValueError,OSError):pass
+            hwnd=int(self.viewport.winId());self.viewport.watch_window()
+            self.engine=DemoEngine(Path(game),Path(preset),preset_directory=preset_directory,native_hwnd=hwnd,
+                startup_session=session,defer_native_present=True)
         except Exception as error:
             self.message.set('角色未能加载：'+str(error));self.loading_spinner.set_running(False);self.footer_spinner.set_running(False);self.loading_panel.hide();return
         self.poll_startup()
@@ -357,11 +383,13 @@ class QtClient(NativeClient):
                 self.set_catalog_view(self.library.setting('icon_mode','1')=='1',persist=False)
             except Exception as error:self.message.set('装备标签库未能加载：'+str(error));self.loading_spinner.set_running(False);self.footer_spinner.set_running(False);return
         super().poll_startup()
+        if self.ready:self.request_present()
         if not self.closed:self.sync_loading()
 
     def poll_job(self):
         super().poll_job()
         if self.closed:return
+        if self.present_requested:self.request_present()
         self.sync_loading()
         if self.editor and self.job is None:
             self.editor.set_busy(False)
@@ -369,8 +397,13 @@ class QtClient(NativeClient):
                 self.editor.status.setText('操作未完成，已保留原模型和预设。');self.editor.status.setToolTip(self.raw_status)
 
     def close(self):
+        self.occlusion_timer.stop()
         self.effect_timer.stop();self.effect_clock.pause(self.effect_last_frame)
         self.effect_deferred=None
+        if self.present_timer is not None:self.root.after_cancel(self.present_timer);self.present_timer=None
+        self.present_requested=False
+        if self.present_future is not None:
+            self.closing=True;self.ready=False;self.root.after(30,self.close);return
         if self.effect_future is not None:
             self.closing=True;self.ready=False;self.root.after(30,self.close);return
         for spinner in(self.loading_spinner,self.footer_spinner):spinner.set_running(False)
@@ -677,6 +710,37 @@ class QtClient(NativeClient):
         if not checked:self.pause_effects()
         self.state['effects_visible']=checked;self.effects_play.setEnabled(self.ready and checked);self.queue_render()
 
+    def request_present(self):
+        if self.closing or not self.ready or not self.viewport.isVisible()or self.window.isMinimized():return
+        self.present_requested=True
+        if self.present_timer is None and self.present_future is None and self.job is None and self.effect_future is None:
+            self.present_timer=self.root.after(0,self.pump_present)
+
+    def pump_present(self):
+        self.present_timer=None
+        if self.closing or not self.ready or not self.present_requested:return
+        if not self.viewport.isVisible()or self.window.isMinimized():return
+        if self.present_future is not None or self.job is not None or self.effect_future is not None:return
+        self.present_requested=False;self.viewport.activate_native()
+        def present():
+            surface=self.engine.renderer.native_surface
+            surface.present_enabled=True
+            shown=surface.recover()
+            return shown,surface.last_present_status==0x087a0001
+        self.present_future=self.engine.pool.submit(present)
+        self.present_future.add_done_callback(self.present_delivery.finished.emit)
+
+    def present_completed(self,future):
+        if future is not self.present_future:return
+        self.present_future=None
+        try:
+            shown,occluded=future.result()
+            if occluded and not self.closing:self.occlusion_timer.start()
+            else:self.occlusion_timer.stop()
+        except Exception as error:
+            self.occlusion_timer.stop();self.message.set('预览画面未能恢复：'+str(error))
+        if self.present_requested:self.request_present()
+
     def pause_effects(self):
         self.effect_timer.stop();self.effect_clock.pause(self.effect_last_frame)
         self.effects_play.setChecked(False);self.effects_play.setText('▶ 播放特效')
@@ -731,6 +795,7 @@ class QtClient(NativeClient):
             # periodic tick after a slow frame has already exceeded it.
             elapsed=(time.perf_counter()-self.effect_started_at)*1000
             self.root.after(max(0,round(1000/30-elapsed)),self.tick_effects)
+        if self.present_requested:self.request_present()
 
     def select_preset(self,index):
         if index>=0 and self.boot:self.submit(self.engine.run,self.accept_result,'preset',{'id':self.preset_ids[index]})

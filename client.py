@@ -140,7 +140,7 @@ class NativeClient:
         if self.engine.status!='ready':
             self.message.set('初始角色未能加载：'+str(self.engine.error));self.refresh_boot();return
         session=None
-        if self.session_path.is_file():
+        if not getattr(self.engine,'startup_session_prepared',False)and self.session_path.is_file():
             try:session=json.loads(self.session_path.read_bytes())
             except(ValueError,OSError):session=None
         # Read the prior session before accepting the initial frame; accepting

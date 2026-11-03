@@ -27,10 +27,11 @@ float4 ps(Output i):SV_TARGET { return float4(saturate(source.SampleLevel(linear
 
 
 class NativeSurface:
-    def __init__(self,renderer,hwnd):
+    def __init__(self,renderer,hwnd,*,present_enabled=True):
         self.renderer=renderer;self.hwnd=int(hwnd);self.chain=P();self.rtv=None;self.back=None
         self.source=None;self.source_srv=None;self.owned=[];self.present_count=0;self.closed=False
         self.width=self.height=0
+        self.present_enabled=present_enabled;self.needs_present=True;self.last_present_status=None
         device,adapter,factory=P(),P(),P()
         def iid(value):return c.create_string_buffer(uuid.UUID(value).bytes_le)
         method=renderer.probe.method
@@ -70,12 +71,19 @@ class NativeSurface:
         self.release(self.rtv);self.rtv=None;self.renderer.probe.release(self.back);self.back=None
         check(self.renderer.probe.method(self.chain,13,c.c_long,U,U,U,U,U)(self.chain,2,width,height,87,0),'Resize native swap chain')
         self.acquire_backbuffer(width,height)
+        self.needs_present=True
 
     def present(self,texture):
         r=self.renderer
         if self.source is None or self.source.value!=texture.value:
             self.release(self.source_srv)
             self.source_srv=self.create(7,[P,P],texture,None);self.source=texture
+        self.needs_present=True
+        return self.present_last()
+
+    def present_last(self):
+        if self.closed or not self.present_enabled or self.source_srv is None:return False
+        r=self.renderer
         r.context(110,[])
         r.context(33,[U,P,P],1,c.byref(self.rtv),None)
         r.context(44,[U,P],1,c.byref(Viewport(0,0,self.width,self.height,0,1)))
@@ -83,8 +91,23 @@ class NativeSurface:
         r.context(11,[P,P,U],self.vs,None,0);r.context(9,[P,P,U],self.ps,None,0)
         r.context(8,[U,U,P],0,1,c.byref(self.source_srv));r.context(10,[U,U,P],0,1,c.byref(self.sampler))
         r.context(13,[U,U],3,0)
-        check(r.probe.method(self.chain,8,c.c_long,U,U)(self.chain,1,0),'Present native character')
+        status=r.probe.method(self.chain,8,c.c_long,U,U)(self.chain,1,0)
+        check(status,'Present native character')
+        # DXGI_STATUS_OCCLUDED is a positive status, not a displayed frame.
+        # Retain the GPU source so an expose/restore can present it again.
+        self.last_present_status=status&0xffffffff;self.needs_present=status!=0
         self.present_count+=1
+        return status==0
+
+    def recover(self):
+        if self.closed or not self.present_enabled or self.source_srv is None:return False
+        if self.last_present_status==0x087a0001:
+            # Test visibility cheaply while fully covered. Do not repeatedly
+            # draw the full viewport until DXGI can display it again.
+            status=self.renderer.probe.method(self.chain,8,c.c_long,U,U)(self.chain,0,1)
+            check(status,'Test native preview visibility')
+            if status&0xffffffff==0x087a0001:return False
+        return self.present_last()
 
     def close(self):
         if self.closed:return

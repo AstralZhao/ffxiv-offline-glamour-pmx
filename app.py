@@ -87,11 +87,13 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 class DemoEngine:
     """All native GPU and SQLite outfit work stays on one dedicated thread."""
-    def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None):
+    def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None,startup_session=None,defer_native_present=False):
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
         self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
         self.rendered_parameters=None;self.appearance_is_preview=False;self.characters=None
         self.native_hwnd=native_hwnd;self.effect_frame=30.
+        self.startup_session=startup_session;self.startup_session_prepared=False
+        self.defer_native_present=defer_native_present;self.initial_state={}
         self.item_icons=None  # Resource indexes are opened on the worker below.
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
@@ -134,6 +136,7 @@ class DemoEngine:
             from render_preset_materials import PresetMaterialRenderer
             from static_material_inputs import camera_payload
             native_hwnd=self.native_hwnd
+            defer_native_present=self.defer_native_present
             class PreviewRenderer(PresetMaterialRenderer):
                 zoom=1.;pitch=0.;pan=0.
                 reuse_joint_palette=True
@@ -149,7 +152,7 @@ class DemoEngine:
                     self.character_layer=CharacterLayer(self);self.capture_character_layer=False
                     if native_hwnd:
                         from native_surface import NativeSurface
-                        self.native_surface=NativeSurface(self,native_hwnd)
+                        self.native_surface=NativeSurface(self,native_hwnd,present_enabled=not defer_native_present)
 
                 def texture(self,format_,bind,usage=0,cpu=0):
                     if format_==10 and bind==32:bind=40
@@ -386,7 +389,7 @@ class DemoEngine:
                 self.library.metadata['legacy_migration_complete']=True;self.library.save_index()
             self.refresh_presets();self.appearance_options=AppearanceOptions(self.pack,self.store,ROOT)
             if not self.presets:raise ValueError('没有找到可用的敖龙族女性预设，请导入原生DAT预设')
-            self.active_preset=next(iter(self.presets));self.load(self.active_preset)
+            self.restore_startup_session()
             with self.lock:self.status='ready';self.message='可以开始搭配了'
         except Exception as error:
             with self.lock:self.status='error';self.error=str(error);self.message='初始化未完成'
@@ -397,6 +400,31 @@ class DemoEngine:
         with(self.data/'demo.log').open('a',encoding='utf8')as log:
             log.write(time.strftime('%Y-%m-%d %H:%M:%S')+' '+repr(error)+'\n'+traceback.format_exc()+'\n')
 
+    def restore_startup_session(self):
+        # Select the saved character BEFORE the first character preparation.
+        # Native Qt presentation remains held through unsaved appearance
+        # restoration, so no default/intermediate character can flash up.
+        record=self.startup_session if isinstance(self.startup_session,dict)else{}
+        key=record.get('preset_id');valid=key in self.presets if isinstance(key,str)else False
+        try:self.initial_state=parse_state(record.get('state',{}))if valid else{}
+        except ValueError:self.initial_state={}
+        self.active_preset=key if valid else next(iter(self.presets))
+        try:self.load(self.active_preset)
+        except (ValueError,NotImplementedError):
+            if not valid or not self.initial_state:raise
+            self.initial_state={};self.load(self.active_preset)
+            self.last['notices'].append('上次搭配暂时无法恢复，已加载原角色。')
+        if valid:
+            current=self.describe_appearance(key);rendered=record.get('rendered_parameters')
+            if isinstance(rendered,dict)and record.get('saved_preset_sha256')==current['sha256']and rendered!=current['parameters']:
+                try:
+                    self.preview_appearance({'id':key,'sha256':current['sha256'],
+                        'changes':{k:v for k,v in rendered.items()if v!=current['parameters'].get(k)}})
+                except (ValueError,NotImplementedError):
+                    self.render(self.last['state'])
+                    self.last['notices'].append('上次未保存的外观暂时无法恢复，已加载已保存预设。')
+        self.startup_session_prepared=self.defer_native_present
+
     def load(self,key):
         if key not in self.presets:raise ValueError('预设不存在')
         return self.load_preset_path(key,self.presets[key][0])
@@ -406,7 +434,7 @@ class DemoEngine:
         started=time.perf_counter();entry,cache=self.characters.acquire(path);candidate=entry['character']
         previous=self.character;old_accessories=getattr(self,'accessories',None);old_scenes=self.scene_cache
         self.character=candidate;self.accessories=entry['accessories'];self.scene_cache=entry['scenes']
-        retained=self.last['state']if self.last else{}
+        retained=self.last['state']if self.last else self.initial_state
         try:result=self.render(retained)
         except Exception:
             self.character=previous;self.accessories=old_accessories;self.scene_cache=old_scenes;self.characters.trim(previous);raise
