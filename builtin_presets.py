@@ -7,6 +7,7 @@ from probe_appearance_presets import FIELDS
 CREATION_PROFILES=(
     {'id':'au-ra-female','label':'敖龙族女性','race':6,'gender':1,'tribes':(11,12)},
     {'id':'miqote-female','label':'猫魅族女性','race':4,'gender':1,'tribes':(7,8)},
+    {'id':'miqote-male','label':'猫魅族男性','race':4,'gender':0,'tribes':(7,8)},
     {'id':'viera-female','label':'维埃拉族女性','race':8,'gender':1,'tribes':(15,16)},
     {'id':'viera-male','label':'维埃拉族男性','race':8,'gender':0,'tribes':(15,16)},
 )
@@ -15,6 +16,20 @@ CREATION_PROFILES=(
 def miqote_example(tribe):
     if tribe not in(7,8):raise ValueError('Unknown Miqote clan')
     return example_dat(4,tribe,2,'猫魅族')
+
+
+def miqote_male_example(tribe):
+    if tribe not in(7,8):raise ValueError('Unknown Miqote clan')
+    return example_dat(4,tribe,1,'猫魅族男性',gender=0)
+
+
+def seed_miqote_male_examples(library):
+    for tribe in(7,8):
+        key=f'builtin:miqote-male-{tribe}:v1'
+        if key in library.metadata['seeded']:continue
+        path,_=library.add(miqote_male_example(tribe),'猫魅族男性-'+CLANS[tribe]+'.dat')
+        library.metadata['seeded'][key]=path.name
+    library.save_index()
 
 
 def example_dat(race,tribe,hair,label,gender=1):
