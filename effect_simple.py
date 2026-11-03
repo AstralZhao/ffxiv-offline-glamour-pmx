@@ -27,7 +27,9 @@ class SourceRandom:
         self.state=[y,z,w,value];return value
 
     def unit(self):return (self.word()&65535)/65535
-    def between(self,a,b):return np.float32(a+(b-a)*self.unit())
+    def between(self,a,b):
+        f=np.float32;a=f(a);b=f(b)
+        return f(f(f(f(b-a)*f(self.word()&65535))/f(65535))+a)
     def integer(self,count):return ((self.word()&65535)*count)>>16
 
 
@@ -63,6 +65,24 @@ def random_atlas(spread,cells,random):
     if not 0<=spread<=127 or not 1<=cells<=127*127:
         raise UnsupportedEffect('Simple 初始图集随机范围')
     return random.integer(spread+1)%cells if spread else 0
+
+
+def random_parameters(data,random,cells):
+    """Reviewed Simple tail order: atlas, sizes, speed, XYZ angles, XYZ spin.
+
+    Position/direction generation precedes this; optional delay/reverse follow
+    it. The order applies to one supported BlkN=1 particle, not shared game RNG.
+    """
+    f=np.float32;real=lambda key:number(data,key,0.,real=True)
+    atlas=random_atlas(number(data,'UvNR'),cells,random)
+    scales=random_scales(data,random)
+    speed=random.between(real('VMin'),real('VMax'))
+    base=[f(random.between(-real('RB'+a),real('RB'+a))+f(real('RI'+a)))for a in'XYZ']
+    spin=[f(random.between(-real('RV'+a),real('RV'+a))+f(real('RA'+a)))for a in'XYZ']
+    def packed(values):
+        value=np.trunc(f(f(values)*f(1024))/f(2*math.pi)).astype(np.int64)
+        return ((value+32768)%65536-32768).astype('<i2')
+    return {'atlas':atlas,'scales':scales,'speed':speed,'angles':packed(base),'spin':packed(spin)}
 
 
 @lru_cache(maxsize=64)
@@ -114,13 +134,9 @@ def initial(effect,node):
         # Native directions are normalized, truncated to signed bytes, then
         # multiplied by the separately stored authored speed.
         direction=packed_direction(direction,100)
-        velocity[i]=direction*random.between(real('VMin'),real('VMax'))
-        for j,axis in enumerate('XYZ'):
-            base=random.between(-real('RB'+axis),real('RB'+axis))+real('RI'+axis)
-            delta=random.between(-real('RV'+axis),real('RV'+axis))+real('RA'+axis)
-            angles[i,j]=np.trunc(base/(2*math.pi)*1024);spin[i,j]=np.trunc(delta/(2*math.pi)*1024)
-        scales[i]=random_scales(d,random)
-        atlas[i]=random_atlas(integer('UvNR'),cells[0]*cells[1],random)
+        parameters=random_parameters(d,random,cells[0]*cells[1])
+        velocity[i]=direction*parameters['speed'];angles[i]=parameters['angles'];spin[i]=parameters['spin']
+        scales[i]=parameters['scales'];atlas[i]=parameters['atlas']
         reverse[i]=bool(random.integer(2))if integer('bRUV')else False
     result={'positions':positions,'velocity':velocity,'angles':angles,'spin':spin,'scales':scales,'atlas':atlas,
         'delay':np.floor(np.arange(count)/group)*interval,'life':life,'repeat':bool(integer('bCrN')),
