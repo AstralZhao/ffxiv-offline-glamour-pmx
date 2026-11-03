@@ -30,6 +30,7 @@ class AppearanceOptions:
         for option in menu.options:
             labels={**LABELS,'face':'脸型'if race!=6 else LABELS['face']}
             if race==8:labels.update(ear_muscle_tail_size='耳朵长度',tail_or_ear_type='耳朵形状')
+            if race==1:labels.update(ear_muscle_tail_size='肌肉线条')
             result.append({'field':option.field,'label':labels[option.field],'kind':'slider'if option.menu_type==5 else'select',
                 'mask':option.mask,'choices':[{'value':v,'label':str(v)if option.menu_type==5 else f'样式 {i}'}
                     for i,v in enumerate(option.values,1)]})
@@ -68,6 +69,7 @@ class AppearanceOptions:
 
     def validate(self,original,updated):
         if not updated['gender']and updated['bust']!=original['bust']:raise ValueError('男性预设没有胸围选项')
+        if updated['race']==1 and updated['tail_or_ear_type']!=original['tail_or_ear_type']:raise ValueError('人族没有尾型选项')
         for option in self.fields(updated['tribe'],updated['gender']):
             field=option['field'];value=updated[field]
             # Keep a valid imported non-menu/unlocked selection when unchanged.

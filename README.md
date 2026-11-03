@@ -1,6 +1,6 @@
 # 幻衣间 Demo
 
-角色预设支持猫魅族男性/女性（逐日之民、护月之民）、敖龙族女性（晨曦之民、暮晖之民）和维埃拉族男性/女性（密林之民、山林之民）。开发版首次启动会添加独立示例，之后保留你的修改；原有 `test.dat` 继续保留。范围与验证见[猫男适配](../docs/miqote-male-adaptation.md)、[猫娘适配](../docs/miqote-female-adaptation.md)、[兔娘适配](../docs/viera-female-adaptation.md)、[兔男适配](../docs/viera-male-adaptation.md)。
+角色预设支持人族女性（中原之民、高地之民）、猫魅族男性/女性（逐日之民、护月之民）、敖龙族女性（晨曦之民、暮晖之民）和维埃拉族男性/女性（密林之民、山林之民）。开发版首次启动会添加独立示例，之后保留你的修改；原有 `test.dat` 继续保留。范围与验证见[人女适配](../docs/hyur-female-adaptation.md)、[猫男适配](../docs/miqote-male-adaptation.md)、[猫娘适配](../docs/miqote-female-adaptation.md)、[兔娘适配](../docs/viera-female-adaptation.md)、[兔男适配](../docs/viera-male-adaptation.md)。
 
 “新建预设”可选择已支持的角色类型、部族和名称，生成独立DAT并预览。同名自动另存。已有预设的性别固定，编辑和保存接口均禁止改变；其他性别通过新建或导入另一份预设使用。男性不显示胸围选项，菜单和颜色按性别分别缓存。
 
