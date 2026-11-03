@@ -418,7 +418,8 @@ class EffectRenderer:
             r.context(35,[P,P,U],blend,None,0xffffffff);r.context(36,[P,U],depth_state,0)
             r.context(43,[P],raster);r.context(12,[U,U,c.c_int],len(indices),0,0)
             self.last_batches+=1
-        ordered=sorted(samples,key=lambda s:(s['priority'],float((view@s['parent']@np.r_[s['local'][:3,3],1])[2])))
+        from effect_order import ordered_samples
+        ordered=ordered_samples(samples,view)
         for sample in ordered:
             plan=self.plan(sample);matrix=world_matrix(sample,view,camera_world);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)

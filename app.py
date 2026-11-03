@@ -450,7 +450,7 @@ class DemoEngine:
                     except UnsupportedEffect as error:pending.append(str(error))
                     else:accepted.append(sample)
                 samples=accepted;pending=tuple(sorted(set(pending)))
-            scene.effect_samples.extend({**s,'effect_path':path}for s in samples)
+            scene.effect_samples.extend({**s,'effect_path':path,'effect_instance':(slot,path)}for s in samples)
             scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':frame,
                   'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'sampled-normal-scheduler-stable-probability-source-packed-UV-random',
                 'particles_rendered':bool(samples),'effect_complete':False})

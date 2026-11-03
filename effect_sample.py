@@ -4,7 +4,8 @@ The wardrobe starts at a fixed frame, with optional effect-only playback. UV,
 Simple size and initial particle TRS random bytes follow reviewed native math
 with independent stable birth seeds, not a captured native RNG stream.
 It does not animate the character. Unsupported branches are reported, not replaced
-with invented particles. Schema/curve conventions follow pinned VFXEditor.
+with invented particles. Schema names follow pinned VFXEditor; scalar/RGB
+packing, lookup and interpolation follow reviewed CN executable routines.
 """
 import math
 import struct
@@ -88,40 +89,12 @@ def curve_value(node,time,default=0,*,rgb=False):
     if node is None:return np.full(3,default)if rgb else default
     source,keys=curve_source(node)
     if keys is None:return np.full(3,default)if rgb else default
-    value=lambda key:np.array(key[2:])if rgb else key[4]
-    start,end=keys[0][0],keys[-1][0];offset=0
-    if len(keys)>1 and(time<start or time>end):
-        mode=number(source,'BvPr'if time<start else'BvPo')
-        if mode in(1,2):
-            turns=math.floor((time-start)/(end-start));time-=turns*(end-start)
-            if mode==2:offset=turns*(value(keys[-1])-value(keys[0]))
-        elif mode not in(0,-1):raise UnsupportedEffect('曲线边界模式')
-    if time<=start:return value(keys[0])+offset
-    if time>=end:return value(keys[-1])+offset
-    for a,b in zip(keys,keys[1:]):
-        if not a[0]<=time<b[0]:continue
-        x=(time-a[0])/(b[0]-a[0])
-        if rgb or a[1]==1:return value(a)*(1-x)+value(b)*x+offset
-        if a[1]==2:return value(a)+offset
-        if a[1]!=0:raise UnsupportedEffect('曲线插值类型')
-        if value(a)==value(b):return value(a)+offset
-        # VFXEditor uses normalized horizontal Bezier handles (Data.X/Y),
-        # not slope tangents. Solve time on the monotonic cubic first.
-        h1,h2=a[2]/2,1-a[3]/2
-        # Both handles in [0,1] guarantee monotonic time even when they
-        # cross. The extremal crossing h1=1,h2=0 has x'=3*(1-2u)^2;
-        # the other three corners have nonnegative derivatives as well.
-        # Native old armor uses .83/.17, which the old ordered test rejected.
-        if not(0<=h1<=1 and 0<=h2<=1):raise UnsupportedEffect('非单调样条时间')
-        lo,hi=0.,1.
-        for _ in range(32):
-            u=(lo+hi)/2;v=1-u
-            at=3*v*v*u*h1+3*v*u*u*h2+u*u*u
-            if at<x:lo=u
-            else:hi=u
-        u=(lo+hi)/2;mix=u*u*(3-2*u)
-        return value(a)*(1-mix)+value(b)*mix+offset
-    raise ValueError('Unresolved AVFX curve interval')
+    from effect_curve import scalar_value,rgb_value
+    pre,post=number(source,'BvPr'),number(source,'BvPo')
+    if any(k[1]not in(0,1,2)for k in keys[1:]):raise UnsupportedEffect('曲线插值类型')
+    if len(keys)>1 and(time<=keys[0][0]and pre not in(-1,0,1,2)or time>=keys[-1][0]and post not in(-1,0,1,2)):
+        raise UnsupportedEffect('曲线边界模式')
+    return rgb_value(keys,time,pre,post)if rgb else float(scalar_value(keys,time,pre,post))
 
 
 def axes(node,time,default=0,dimensions=3):
@@ -329,6 +302,8 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
     result=[];pending=[];visits=0;sampled={}
     if effect.missing:return (),('特效来源缺失',)
     groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl','Efct')}
+    draw_order=number(fields(r for r in effect.source_records if r.tag=='DwOT'),'DwOT')
+    if draw_order not in(0,1,2):return (),('未审阅的特效绘制顺序',)
     def get(tag,index):
         if not 0<=index<len(groups[tag]):raise ValueError('AVFX graph index out of range: '+tag)
         return groups[tag][index]
@@ -471,7 +446,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                                 for uv,state in zip(uv_nodes(particle),states)]
                             value['uv_random_bytes']=states
                         if not len(value['indices']):continue
-                        value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth)
+                        value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth,draw_order=draw_order)
                         if len(result)>=512:raise UnsupportedEffect('粒子预算')
                         result.append(value)
                 except UnsupportedEffect as error:pending.append(str(error))
