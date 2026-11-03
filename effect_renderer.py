@@ -59,6 +59,38 @@ def shape_uv_coordinates(value,matrix):
     return uv[:,0:1]*rows[:,0]+uv[:,1:2]*rows[:,1]+offset
 
 
+def packed_shapes(samples):
+    """Pack shape attributes together; keep each particle's triangle order.
+
+    Only the packing/validation is batched, with the original float32
+    expression for every UV. Resolved positions remain camera dependent.
+    """
+    if not samples:return ()
+    counts=[len(s['positions'])for s in samples];ends=np.cumsum([0]+counts)
+    vertices=np.zeros(int(ends[-1]),dtype=VERTEX)
+    uv=np.concatenate([np.asarray(s['base_uv'],dtype='<f4')for s in samples])
+    for layer in range(4):
+        selected=[i for i,s in enumerate(samples)if len(s['uv_matrices'])>layer]
+        if not selected:continue
+        indices=np.concatenate([np.arange(ends[i],ends[i+1])for i in selected])
+        matrices=np.concatenate([np.broadcast_to(samples[i]['uv_matrices'][layer],(counts[i],2,4))for i in selected])
+        rows=matrices.astype('<f4');values=uv[indices,layer]-np.float32(.5)
+        offset=np.asarray(matrices[:,:,3]+(matrices[:,:,:2]@np.full(2,.5)),dtype='<f4')
+        uv[indices,layer]=values[:,0:1]*rows[:,:,0]+values[:,1:2]*rows[:,:,1]+offset
+    colors=np.concatenate([s['colors']*s['color']for s in samples])
+    vertices['color']=quantize_vertex(colors,color=True)
+    vertices['uv']=quantize_vertex(uv[:,:2].reshape(-1,4))
+    vertices['uv2']=quantize_vertex(uv[:,2:].reshape(-1,4))
+    result=[]
+    for i,sample in enumerate(samples):
+        value=vertices[ends[i]:ends[i+1]].copy()
+        value['position'][:,3]=sample['depth_offset']
+        distortion=sample['textures'].get('TD',{})
+        value['extra']=shape_extra(distortion.get('power',0),distortion.get('distort_uv',[False]*4))
+        result.append(value)
+    return result
+
+
 def shader_settings(sample):
     # Original Powder VS has one fixed float2 UV input; all 75 CN nodes use
     # UvSetCount_0. This key is not the source particle's UvSN field.
@@ -132,7 +164,32 @@ def look_basis(position,target,up):
     return np.column_stack((right,np.cross(forward,right),forward))
 
 
-def world_matrix(sample,view,camera_world=None):
+def camera_facing_bases(positions,target,up):
+    """Batch independent float32 crosses, retaining scalar reduction order.
+
+    None entries use the existing scalar/fallback branch; no degenerate
+    particle is discarded or given a different camera policy.
+    """
+    positions=np.asarray(positions,dtype='<f4');target=np.asarray(target,dtype='<f4');up=np.asarray(up,dtype='<f4')
+    if not len(positions):return ()
+    if not np.isfinite(positions).all()or not np.isfinite(target).all():return (None,)*len(positions)
+    delta=target-positions;square=np.sum(delta*delta,axis=1,dtype=np.float32)
+    good=square>=np.float32(.0001)
+    with np.errstate(divide='ignore',invalid='ignore'):
+        forward=delta*(np.float32(1)/np.sqrt(square))[:,None]
+        up=up/np.sqrt(np.sum(up*up,dtype=np.float32))
+        good&=np.abs(np.sum(forward*up,axis=1,dtype=np.float32))<=np.float32(.99)
+    if not np.isfinite(up).all():return (None,)*len(positions)
+    result=[None]*len(positions);selected=np.flatnonzero(good)
+    if len(selected):
+        forward=forward[selected];right=np.ascontiguousarray(np.cross(np.broadcast_to(up,forward.shape),forward))
+        right/=np.sqrt(np.sum(right*right,axis=1,dtype=np.float32))[:,None]
+        bases=np.stack((right,np.cross(forward,right),forward),axis=2)
+        for index,basis in zip(selected,bases):result[index]=basis
+    return result
+
+
+def world_matrix(sample,view,camera_world=None,*,billboard_basis=None):
     parent,local=sample['parent'],sample['local'];matrix=parent@local
     if sample['frame']in(4,5,6):
         camera_world=np.linalg.inv(view)if camera_world is None else camera_world
@@ -144,7 +201,7 @@ def world_matrix(sample,view,camera_world=None):
         elif sample['frame']==6:
             # ScreenBillboard(5) uses the view basis; CameraBillboard(6)
             # instead looks from EACH particle position towards the camera.
-            try:basis=look_basis(matrix[:3,3],camera_world[:3,3],camera_world[:3,1])
+            try:basis=billboard_basis if billboard_basis is not None else look_basis(matrix[:3,3],camera_world[:3,3],camera_world[:3,1])
             except UnsupportedEffect:
                 # Original 3e3c98 retries a +Z target with the same up vector.
                 basis=look_basis(matrix[:3,3],matrix[:3,3]+(0,0,1),camera_world[:3,1])
@@ -215,11 +272,14 @@ def resolved_world_positions(sample,matrix,camera_world=None):
 class EffectRenderer:
     def __init__(self,renderer,pack):
         self.renderer=renderer;self.pack=pack;self.packages={};self.plans={};self.samplers={};self.depth_copy=None;self.depth_size=None
+        self.source_plans=OrderedDict()
         self.color_copy=None;self.color_size=None
         self.uploads=[];self.upload_cursor=0;self.frame_constants={};self.reuse_uploads=True;self.batch_draws=True
         self.upload_bytes=0;self.upload_budget=64*1024*1024
         self.geometry_cache=OrderedDict();self.geometry_bytes=0;self.reuse_geometry=True
         self.parameter_cache=OrderedDict();self.parameter_bytes=0;self.reuse_parameters=True
+        self.batch_billboards=True
+        self.batch_shape_packing=True
 
     def constant_inputs(self,sample,plan,matrix,camera_world,width,height,camera_constants):
         """Only evaluate the inputs actually read by the original programs."""
@@ -298,6 +358,17 @@ class EffectRenderer:
         return pointer
 
     def plan(self,sample):
+        source=sample.get('_shader_source')
+        if source is not None and source in self.source_plans:
+            self.source_plans.move_to_end(source)
+            return self.source_plans[source]
+        result=self._plan(sample)
+        if source is not None:
+            self.source_plans[source]=result
+            while len(self.source_plans)>256:self.source_plans.popitem(last=False)
+        return result
+
+    def _plan(self,sample):
         kind=sample['kind']if sample['kind']in('model','powder')else'shape';settings=shader_settings(sample)
         key=(kind,tuple(sorted(settings.items())))
         if key in self.plans:return self.plans[key]
@@ -450,8 +521,20 @@ class EffectRenderer:
             self.last_batches+=1
         from effect_order import ordered_samples
         ordered=ordered_samples(samples,view)
+        packed={}
+        if self.batch_shape_packing:
+            selected=[s for s in ordered if s['kind']not in('model','powder')and not(
+                self.reuse_geometry and (entry:=self.geometry_cache.get(id(s)))is not None and entry[0]is s)]
+            packed={id(s):v for s,v in zip(selected,packed_shapes(selected))}
+        facing={}
+        if self.batch_billboards:
+            selected=[s for s in ordered if s['frame']==6]
+            if selected:
+                positions=[(s['parent']@s['local'])[:3,3]for s in selected]
+                bases=camera_facing_bases(positions,camera_world[:3,3],camera_world[:3,1])
+                facing={id(s):basis for s,basis in zip(selected,bases)}
         for sample in ordered:
-            plan=self.plan(sample);matrix=world_matrix(sample,view,camera_world);positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
+            plan=self.plan(sample);matrix=world_matrix(sample,view,camera_world,billboard_basis=facing.get(id(sample)));positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
             cacheable=self.reuse_geometry
             view_dependent=geometry_uses_view(sample)
@@ -466,7 +549,8 @@ class EffectRenderer:
                     if is_powder:vertices['center']=world_positions
                     else:vertices['position'][:,:3]=world_positions
             else:
-                dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX;vertices=np.zeros(len(positions),dtype=dtype)
+                dtype=MODEL_VERTEX if is_model else POWDER_VERTEX if is_powder else VERTEX
+                prepacked=packed.get(id(sample));vertices=prepacked if prepacked is not None else np.zeros(len(positions),dtype=dtype)
                 world_positions=resolved_world_positions(sample,matrix,camera_world)
                 if is_powder:
                     # The original VS adds center after rotating the local corner.
@@ -479,17 +563,18 @@ class EffectRenderer:
                 # UV curves and per-birth offsets are fractional. A template's
                 # integer corner literals must never truncate these results
                 # before the native signed-short packing step below.
-                uv=np.array(sample['base_uv'],dtype='<f4',copy=True)
-                if not is_model:
-                    for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=shape_uv_coordinates(uv[:,i],uv_matrix)
-                values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,0]if is_powder else uv[:,:2].reshape(-1,4)}
-                if not is_powder:values['uv2']=uv[:,2:].reshape(-1,4)
-                for name,value in values.items():
-                    if is_model or(is_powder and name=='uv'):vertices[name]=value;continue
-                    vertices[name]=quantize_vertex(value,color=name=='color')
-                if is_model:
-                    vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
-                elif not is_powder:vertices['extra']=shape_extra(power,distortion.get('distort_uv',[False]*4))
+                if prepacked is None:
+                    uv=np.array(sample['base_uv'],dtype='<f4',copy=True)
+                    if not is_model:
+                        for i,uv_matrix in enumerate(sample['uv_matrices']):uv[:,i]=shape_uv_coordinates(uv[:,i],uv_matrix)
+                    values={'color':sample['colors']*(1 if is_model else sample['color']),'uv':uv[:,0]if is_powder else uv[:,:2].reshape(-1,4)}
+                    if not is_powder:values['uv2']=uv[:,2:].reshape(-1,4)
+                    for name,value in values.items():
+                        if is_model or(is_powder and name=='uv'):vertices[name]=value;continue
+                        vertices[name]=quantize_vertex(value,color=name=='color')
+                    if is_model:
+                        vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
+                    elif not is_powder:vertices['extra']=shape_extra(power,distortion.get('distort_uv',[False]*4))
                 if cacheable and vertices.nbytes<=8*1024*1024:
                     vertices.flags.writeable=False
                     if key in self.geometry_cache:self.geometry_bytes-=self.geometry_cache.pop(key)[1].nbytes

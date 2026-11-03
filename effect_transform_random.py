@@ -7,7 +7,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from effect_sample import particle_fields,nested,number,axes,UnsupportedEffect
+from effect_sample import particle_fields,nested,number,axes,constant_axes,curve_source,UnsupportedEffect
 from effect_uv import random_byte,addition
 
 
@@ -46,6 +46,20 @@ def values(node,time,packed):
     if len(packed)!=3 or any(len(v)!=3 for v in packed):raise ValueError('Transform random state needs three XYZ byte sets')
     d=particle_fields(node);result={}
     for (name,default),state in zip((('Scl',1),('Rot',0),('Pos',0)),packed):
-        source=nested(d.get(name));delta=[addition(source.get(axis+'R'),time,value)for axis,value in zip('XYZ',state)]
-        result[name]=linked_addition(axes(d.get(name),time,default),delta,number(source,'ACTR'))
+        source=d.get(name);at=0 if constant_random_axes(source)else time
+        result[name]=axis_values(source,at,default,state).copy()
+    return result
+
+
+@lru_cache(maxsize=4096)
+def constant_random_axes(node):
+    return constant_axes(node,3)and all(not keys or len(keys)==1
+        for _,keys in(curve_source(nested(node).get(axis+'R'))for axis in'XYZ'))
+
+
+@lru_cache(maxsize=16384)
+def axis_values(node,time,default,state):
+    source=nested(node);delta=[addition(source.get(axis+'R'),time,value)for axis,value in zip('XYZ',state)]
+    result=linked_addition(axes(node,time,default),delta,number(source,'ACTR'))
+    result.flags.writeable=False
     return result

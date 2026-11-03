@@ -21,6 +21,7 @@ import threading
 import time
 from urllib.parse import parse_qs,urlparse
 import webbrowser
+import weakref
 
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
@@ -140,6 +141,7 @@ class DemoEngine:
                 reuse_character_layer=True
                 def __init__(self,*args,**kwargs):
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
+                    self.geometry_identities=OrderedDict();self.reuse_geometry_identity=True
                     self.frame_constant_buffers=None;self.frame_constant_pointers=set()
                     self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True;self.pending_effect_draw=None
                     super().__init__(*args,**kwargs)
@@ -242,6 +244,7 @@ class DemoEngine:
                     return self.context_functions[key](self.probe.context,*arguments)
 
                 def buffer(self,array,bind):
+                    import numpy as np
                     if bind==4 and self.reuse_frame_constants and self.frame_constant_buffers is not None:
                         payload=array.tobytes()
                         if payload not in self.frame_constant_buffers:
@@ -252,7 +255,19 @@ class DemoEngine:
                             super().temporary(pointer)
                         return self.frame_constant_buffers[payload]
                     if bind not in(1,2):return super().buffer(array,bind)
+                    immutable=not array.flags.writeable
+                    owner=array
+                    while immutable and isinstance(owner,np.ndarray):
+                        immutable=not owner.flags.writeable;owner=owner.base
+                    immutable=immutable and isinstance(owner,bytes)
+                    identity=(bind,id(array));known=self.geometry_identities.get(identity)if immutable and self.reuse_geometry_identity else None
+                    if known is not None and known[0]()is array and known[1]in self.geometry_buffers:
+                        self.geometry_buffers.move_to_end(known[1]);self.geometry_identities.move_to_end(identity)
+                        return self.geometry_buffers[known[1]][0]
                     key=(bind,array.dtype.str,array.shape,hashlib.sha256(array.tobytes()).digest())
+                    if immutable and self.reuse_geometry_identity:
+                        self.geometry_identities[identity]=(weakref.ref(array),key)
+                        while len(self.geometry_identities)>1024:self.geometry_identities.popitem(last=False)
                     if key in self.geometry_buffers:
                         self.geometry_buffers.move_to_end(key);return self.geometry_buffers[key][0]
                     pointer=super().buffer(array,bind)
@@ -421,6 +436,15 @@ class DemoEngine:
                 visible=mesh['posed_positions'][np.unique(mesh['indices'])]
                 low=np.minimum(low,visible.min(axis=0));high=np.maximum(high,visible.max(axis=0))
             scene.bounds=np.asarray((low,high));self.scene_cache[key]=scene
+            # Final scene geometry is immutable. Own byte-backed copies keep
+            # source/outfit arrays independent, and cannot become writeable
+            # again through a NumPy view. The renderer can safely reuse the
+            # existing content-keyed GPU allocation without rehashing MBs.
+            def freeze(array):
+                value=np.frombuffer(array.tobytes(),dtype=array.dtype)
+                return value if array.ndim==1 else value.reshape(array.shape)
+            scene.meshes=[{**mesh,'vertices':freeze(mesh['vertices']),
+                'indices':freeze(np.ascontiguousarray(mesh['indices'],dtype='<u4'))}for mesh in scene.meshes]
             while len(self.scene_cache)>6:self.scene_cache.popitem(last=False)
         if scene.pending_meshes or scene.omitted:raise NotImplementedError('当前装备含尚未接入的可见部件')
         if getattr(scene,'effect_frame',None)!=frame:

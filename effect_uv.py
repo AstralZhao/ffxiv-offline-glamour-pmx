@@ -3,7 +3,7 @@ from functools import lru_cache
 
 import numpy as np
 
-from effect_sample import nested,number,curve,axes,UnsupportedEffect
+from effect_sample import nested,number,curve,curve_source,axes,constant_axes,UnsupportedEffect
 from vfx import records
 
 
@@ -18,6 +18,7 @@ def random_byte(random,mode):
     return int(np.trunc(np.float32(value*np.float32(100))))
 
 
+@lru_cache(maxsize=256)
 def uv_nodes(node):return tuple(n for n in records(node.data)if n.tag=='UvSt')
 
 
@@ -45,6 +46,13 @@ def initialize(node,seed):
 
 
 def addition(node,time,packed):
+    _,keys=curve_source(node)
+    if not keys or len(keys)==1:time=0
+    return addition_value(node,time,packed)
+
+
+@lru_cache(maxsize=16384)
+def addition_value(node,time,packed):
     d=nested(node);mode=number(d,'RanT')
     if mode not in(0,1,2):
         if node is not None:raise UnsupportedEffect('UV逐次更新随机曲线尚未接入')
@@ -57,12 +65,25 @@ def values(node,time,packed):
     if len(packed)!=5:raise ValueError('UV random state needs five signed bytes')
     d=nested(node);result=[]
     for i,(name,default)in enumerate((('Scl',1),('Scr',0))):
-        data=nested(d.get(name));base=np.asarray(axes(d.get(name),time,default,2),dtype='<f4')
-        delta=np.array([addition(data.get(axis+'R'),time,packed[i*2+j])for j,axis in enumerate('XY')],dtype='<f4')
-        connect=number(data,'ACTR')
-        if connect==1:delta[1]=delta[0]
-        elif connect==2:delta[0]=delta[1]
-        elif connect!=0:raise UnsupportedEffect('UV随机坐标轴连接类型')
-        result.append(base+delta)
+        child=d.get(name);at=0 if constant_random_axes(child)else time
+        result.append(axis_values(child,at,default,packed[i*2:i*2+2]).copy())
     angle=np.float32(curve(d.get('Rot'),time))+addition(d.get('RotR'),time,packed[4])
     return result[0],result[1],float(angle)
+
+
+@lru_cache(maxsize=4096)
+def constant_random_axes(node):
+    return constant_axes(node,2)and all(not keys or len(keys)==1
+        for _,keys in(curve_source(nested(node).get(axis+'R'))for axis in'XY'))
+
+
+@lru_cache(maxsize=16384)
+def axis_values(node,time,default,packed):
+    data=nested(node);base=np.asarray(axes(node,time,default,2),dtype='<f4')
+    delta=np.array([addition(data.get(axis+'R'),time,value)for axis,value in zip('XY',packed)],dtype='<f4')
+    connect=number(data,'ACTR')
+    if connect==1:delta[1]=delta[0]
+    elif connect==2:delta[0]=delta[1]
+    elif connect!=0:raise UnsupportedEffect('UV随机坐标轴连接类型')
+    value=base+delta;value.flags.writeable=False
+    return value

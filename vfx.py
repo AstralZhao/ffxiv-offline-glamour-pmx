@@ -53,6 +53,12 @@ class Effect:
     particle_types:tuple
     missing:bool=False
 
+    def __hash__(self):
+        # Hash lookup must not traverse the complete AVFX graph for every
+        # cached birth. Equality still compares every dataclass field, so
+        # a malformed/synthetic identity collision cannot alias resources.
+        return hash((self.path,self.sha256))
+
     def summary(self):
         return {'path':self.path,'sha256':self.sha256,'version':self.version,
             'groups':dict(self.groups),'textures':list(self.textures),'particle_types':list(self.particle_types),

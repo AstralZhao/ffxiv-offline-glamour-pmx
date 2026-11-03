@@ -1,8 +1,84 @@
 """Source AVFX model/disc/quad geometry and material channels at fixed time."""
 import numpy as np
+import struct
 from functools import lru_cache
+from collections import OrderedDict
+from threading import RLock
 from effect_sample import fields,nested,number,curve,axes,color,rotation,transform,stationary,particle_fields,soft_particle_range,UnsupportedEffect
 from vfx import records
+
+
+reuse_templates=True
+template_budget=8*1024*1024
+_templates=OrderedDict()
+_template_bytes=0
+_template_lock=RLock()
+
+
+def _template_copy(value,readonly=False):
+    if isinstance(value,np.ndarray):
+        result=value.copy()
+        if readonly:result.flags.writeable=False
+        return result
+    if isinstance(value,dict):return {k:_template_copy(v,readonly)for k,v in value.items()}
+    if isinstance(value,list):return [_template_copy(v,readonly)for v in value]
+    if isinstance(value,tuple):return tuple(_template_copy(v,readonly)for v in value)
+    return value
+
+
+def _template_size(value):
+    if isinstance(value,np.ndarray):return value.nbytes
+    if isinstance(value,dict):return sum(_template_size(v)for v in value.values())
+    if isinstance(value,(list,tuple)):return sum(_template_size(v)for v in value)
+    return 0
+
+
+def template_sample(effect,node,time):
+    """Bounded immutable source prototypes, before attachment/birth overrides.
+
+    This never caches resolved parents, camera corners or a finished frame.
+    A content SHA identifies the source; every caller owns its mutable arrays.
+    """
+    global _template_bytes
+    if not reuse_templates or template_budget<=0:return sample(effect,node,time,np.eye(4),np.ones(4))
+    data=particle_fields(node);kind=number(data,'PrVT')
+    # Simple and disc geometry have their own time-dependent generators.
+    if kind not in(1,5,8)or number(data,'bSCt'):return sample(effect,node,time,np.eye(4),np.ones(4))
+    key=(effect.sha256,node)
+    with _template_lock:
+        found=_templates.get(key)
+        if found is not None:
+            _templates.move_to_end(key)
+            source=found[0]
+        else:
+            try:source=_template_copy(sample(effect,node,0,np.eye(4),np.ones(4)),True)
+            except UnsupportedEffect:
+                # A curve can be unsupported only at t=0. Keep the original
+                # per-time validation instead of rejecting its later values.
+                return sample(effect,node,time,np.eye(4),np.ones(4))
+            size=_template_size(source)+len(node.data)
+            if size<=template_budget:
+                _templates[key]=(source,size);_template_bytes+=size
+                while len(_templates)>256 or _template_bytes>template_budget:
+                    _,(_,old)=_templates.popitem(last=False);_template_bytes-=old
+    stationary(data,time)
+    from effect_uv import uv_nodes
+    textures={}
+    for name,channel in source['textures'].items():
+        fields_=nested(data.get(name))
+        if curve(fields_.get('TxN'),time):raise UnsupportedEffect('动画贴图索引')
+        textures[name]={**channel,'power':curve(fields_.get('DPow'),time)}
+    local_scale=axes(data.get('Scl'),time,1);angles=axes(data.get('Rot'),time)
+    value={**source,'parent':np.eye(4),'local':transform(data,time),'local_scale':local_scale,
+        'local_rotation':rotation(angles,number(data,'RoOT')),'powder_angles':angles,
+        'powder_scale':np.ones(3)*local_scale,'color':color(data.get('Col'),time)*np.ones(4),
+        'textures':textures,'uv_matrices':[uv_matrix(None,0)if kind==1 else uv_matrix(uv,time,model=kind==5)
+            for uv in uv_nodes(node)],'uv_compute':list(source['uv_compute'])}
+    if kind==5:
+        model=nested(data.get('Data'))
+        value.update(fresnel_power=curve(model.get('FrC'),time,1),
+            fresnel_begin=color(model.get('ColB'),time),fresnel_end=color(model.get('ColE'),time))
+    return value
 
 
 def model_geometry(effect,data,time):
@@ -40,16 +116,26 @@ def uv_matrix(node,time,*,model=False,random_state=None):
     else:
         from effect_uv import values
         scale,offset,angle=values(node,time,random_state)
-    c,s=np.cos(angle),np.sin(angle)
+    matrix,center=uv_linear(model,scale.dtype.str,scale.tobytes(),struct.pack('<d',float(angle)))
     # CN 3e4db0 builds the model's two original PS rows from centered
     # VDrw UVs. 3e4a90 instead emits shape corner UVs after rotating them.
     # Scroll is added AFTER rotation, never rotated with the coordinates.
     if model:
-        matrix=np.array(((c,s),(-s,c)))@np.diag(scale);translation=offset+.5
+        translation=offset+.5
     else:
-        matrix=np.diag(scale)@np.array(((c,-s),(s,c)));translation=offset+.5-matrix@np.full(2,.5)
-    result=np.column_stack((matrix,np.zeros(2),translation));result.flags.writeable=False
+        translation=offset+.5-center
+    result=np.empty((2,4));result[:,:2]=matrix;result[:,2]=0;result[:,3]=translation;result.flags.writeable=False
     return result
+
+
+@lru_cache(maxsize=4096)
+def uv_linear(model,dtype,raw,angle):
+    scale=np.frombuffer(raw,dtype=dtype);angle=struct.unpack('<d',angle)[0];c,s=np.cos(angle),np.sin(angle)
+    matrix=(np.array(((c,s),(-s,c)))@np.diag(scale)if model else
+        np.diag(scale)@np.array(((c,-s),(s,c))))
+    center=matrix@np.full(2,.5)
+    matrix.flags.writeable=False;center.flags.writeable=False
+    return matrix,center
 
 
 def sample(effect,node,time,parent,parent_color):

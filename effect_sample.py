@@ -11,6 +11,7 @@ import math
 import struct
 import hashlib
 from functools import lru_cache
+from types import MappingProxyType
 
 import numpy as np
 
@@ -32,7 +33,8 @@ def fields(nodes):
 def nested(node):return fields(records(node.data))if node else{}
 
 
-def particle_fields(node):return fields(r for r in records(node.data)if r.tag!='UvSt')
+@lru_cache(maxsize=4096)
+def particle_fields(node):return MappingProxyType(fields(r for r in records(node.data)if r.tag!='UvSt'))
 
 
 def number(data,name,default=0,*,real=False):
@@ -98,7 +100,14 @@ def curve_value(node,time,default=0,*,rgb=False):
 
 
 def axes(node,time,default=0,dimensions=3):
+    if constant_axes(node,dimensions):time=0
     return axes_value(node,time,default,dimensions).copy()
+
+
+@lru_cache(maxsize=4096)
+def constant_axes(node,dimensions):
+    source=nested(node)
+    return all(not keys or len(keys)==1 for _,keys in(curve_source(source.get(axis))for axis in'XYZ'[:dimensions]))
 
 
 @lru_cache(maxsize=16384)
@@ -114,7 +123,15 @@ def axes_value(node,time,default=0,dimensions=3):
 
 
 def color(node,time):
+    if constant_color(node):time=0
     return color_value(node,time).copy()
+
+
+@lru_cache(maxsize=4096)
+def constant_color(node):
+    source=nested(node)
+    return all(not keys or len(keys)==1 for _,keys in(curve_source(source.get(name))
+        for name in('RGB','A','SclR','SclG','SclB','SclA','Bri')))
 
 
 @lru_cache(maxsize=16384)
@@ -145,10 +162,19 @@ def transform(data,time,*,emitter=False,random_values=None):
     order=number(data,'CCOT')
     if not 0<=order<6:raise UnsupportedEffect('坐标计算顺序')
     coordinate=lambda name,default=0:random_values[name]if random_values is not None else axes(data.get(name),time,default)
-    rotate=np.eye(4);rotate[:3,:3]=rotation(coordinate('Rot'),number(data,'ROT'if emitter else'RoOT'))
-    scale=np.diag(np.r_[coordinate('Scl',1),1]);translate=np.eye(4);translate[:3,3]=coordinate('Pos')
+    values=[np.asarray(coordinate(name,default))for name,default in(('Scl',1),('Rot',0),('Pos',0))]
+    return transform_value(order,number(data,'ROT'if emitter else'RoOT'),
+        tuple((v.dtype.str,v.tobytes())for v in values)).copy()
+
+
+@lru_cache(maxsize=4096)
+def transform_value(order,rotation_order,coordinates):
+    scales,angles,position=(np.frombuffer(raw,dtype=dtype)for dtype,raw in coordinates)
+    rotate=np.eye(4);rotate[:3,:3]=rotation(angles,rotation_order)
+    scale=np.diag(np.r_[scales,1]);translate=np.eye(4);translate[:3,3]=position
     matrices={'R':rotate,'S':scale,'T':translate};result=np.eye(4)
     for component in('SRT','TSR','RTS','TRS','STR','RST')[order]:result=matrices[component]@result
+    result.flags.writeable=False
     return result
 
 
@@ -338,7 +364,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
     Initial particle TRS random ranges are evaluated; complete scheduling,
     dynamic random modes and native update history remain separate work.
     """
-    from effect_geometry import sample
+    from effect_geometry import template_sample
     result=[];pending=[];visits=0;sampled={}
     if effect.missing:return (),('特效来源缺失',)
     groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl','Efct')}
@@ -481,7 +507,8 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                         # Geometry/curves depend on source and age, not on
                         # which crystal attachment spawned this instance.
                         sample_key=(target,age)
-                        if sample_key not in sampled:sampled[sample_key]=sample(effect,particle,age,np.eye(4),np.ones(4))
+                        if sample_key not in sampled:
+                            sampled[sample_key]=template_sample(effect,particle,age)
                         prototype=sampled[sample_key]
                         value={**prototype,'parent':matrix,'color':prototype['color']*tint}
                         seed=(effect.sha256+repr((stack,index,container,ordinal,birth,occurrence))).encode()
@@ -492,11 +519,11 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                             return transform(particle_data,at,random_values=coordinates)
                         if transform_state is not None:
                             coordinates=transform_values(particle,age,transform_state)
-                            value.update(local=local_at(age),local_scale=coordinates['Scl'],
+                            value.update(local=transform(particle_data,age,random_values=coordinates),local_scale=coordinates['Scl'],
                                 local_rotation=rotation(coordinates['Rot'],number(particle_data,'RoOT')),
                                 transform_random_bytes=transform_state)
                         if value['kind']=='powder'and 'simple_centers'not in value:
-                            coordinates=transform_values(particle,age,transform_state)if transform_state is not None else None
+                            coordinates=coordinates if transform_state is not None else None
                             parents=channels_at(time)
                             node=coordinate_node(particle_data,age,child,parents,channels_at(birth),
                                 injection_angles(child,occurrence),coordinates)
@@ -516,7 +543,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None):
                             value['uv_random_bytes']=states
                         if not len(value['indices']):continue
                         value.update(source_particle=target,source_emitter=index,source_age=age,source_birth=birth,
-                            draw_order=draw_order,draw_layer=draw_layer)
+                            draw_order=draw_order,draw_layer=draw_layer,_shader_source=(effect.sha256,particle))
                         if len(result)>=512:raise UnsupportedEffect('粒子预算')
                         result.append(value)
                 except UnsupportedEffect as error:pending.append(str(error))
