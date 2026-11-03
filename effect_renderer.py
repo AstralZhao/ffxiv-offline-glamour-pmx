@@ -190,7 +190,8 @@ def camera_facing_bases(positions,target,up):
 
 
 def world_matrix(sample,view,camera_world=None,*,billboard_basis=None):
-    parent,local=sample['parent'],sample['local'];matrix=parent@local
+    parent,local=sample['parent'],sample['local']
+    matrix=sample['coordinate_matrix'].astype(float).copy()if 'coordinate_matrix'in sample else parent@local
     if sample['frame']in(4,5,6):
         camera_world=np.linalg.inv(view)if camera_world is None else camera_world
         basis=camera_world[:3,:3].copy()
@@ -205,14 +206,16 @@ def world_matrix(sample,view,camera_world=None,*,billboard_basis=None):
             except UnsupportedEffect:
                 # Original 3e3c98 retries a +Z target with the same up vector.
                 basis=look_basis(matrix[:3,3],matrix[:3,3]+(0,0,1),camera_world[:3,1])
-        scales=np.linalg.norm(parent[:3,:3],axis=0)*sample['local_scale']
-        rot=sample['local_rotation'];order=sample['coordinate_order']
+        scales=sample.get('coordinate_scale')
+        if scales is None:scales=np.linalg.norm(parent[:3,:3],axis=0)*sample['local_scale']
+        rot=sample.get('coordinate_billboard_rotation',sample['local_rotation']);order=sample['coordinate_order']
         scaled=rot*scales if order in(0,1,4)else scales[:,None]*rot
         matrix[:3,:3]=basis@scaled
     elif sample['frame']==9:
         camera_world=np.linalg.inv(view)if camera_world is None else camera_world
         basis=tree_basis(matrix,camera_world[:3,3])
-        scales=np.linalg.norm(parent[:3,:3],axis=0)*sample['local_scale']
+        scales=sample.get('coordinate_scale')
+        if scales is None:scales=np.linalg.norm(parent[:3,:3],axis=0)*sample['local_scale']
         matrix[:3,:3]=basis*scales
     return matrix
 
@@ -232,10 +235,13 @@ def batched_shape_world(samples,camera_world,facing):
     if not selected:return {}
     parents=np.stack([s['parent']for s in selected]);local=np.stack([s['local']for s in selected])
     matrices=parents@local
+    for i,sample in enumerate(selected):
+        if 'coordinate_matrix'in sample:matrices[i]=sample['coordinate_matrix']
     indices=[i for i,s in enumerate(selected)if s['frame']in(5,6)]
     if indices:
-        scales=np.linalg.norm(parents[indices,:3,:3],axis=1)*np.stack([selected[i]['local_scale']for i in indices])
-        rotations=np.stack([selected[i]['local_rotation']for i in indices])
+        scales=np.stack([selected[i]['coordinate_scale']if 'coordinate_scale'in selected[i]else
+            np.linalg.norm(parents[i,:3,:3],axis=0)*selected[i]['local_scale']for i in indices])
+        rotations=np.stack([selected[i].get('coordinate_billboard_rotation',selected[i]['local_rotation'])for i in indices])
         scaled=rotations*scales[:,None,:]
         for j,i in enumerate(indices):
             if selected[i]['coordinate_order']not in(0,1,4):scaled[j]=scales[j,:,None]*rotations[j]
@@ -558,7 +564,7 @@ class EffectRenderer:
         if self.batch_billboards:
             selected=[s for s in ordered if s['frame']==6]
             if selected:
-                positions=[(s['parent']@s['local'])[:3,3]for s in selected]
+                positions=[(s['coordinate_matrix']if 'coordinate_matrix'in s else s['parent']@s['local'])[:3,3]for s in selected]
                 bases=camera_facing_bases(positions,camera_world[:3,3],camera_world[:3,1])
                 facing={id(s):basis for s,basis in zip(selected,bases)}
         shape_world=batched_shape_world(ordered,camera_world,facing)if self.batch_world_shapes else {}

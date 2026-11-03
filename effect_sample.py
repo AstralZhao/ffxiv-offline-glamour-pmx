@@ -272,7 +272,7 @@ def stationary(data,time):
         if curve(data.get(name),time)!=0:raise UnsupportedEffect('非零速度或重力')
 
 
-def binding(node,bones,bind_points=None):
+def binding(node,bones,bind_points=None,*,components=False):
     data=nested(node)
     if number(data,'BnVr')!=0 or number(data,'RoTp')!=0:raise UnsupportedEffect('非固定点绑定')
     source=nested(data.get('PrpS'))
@@ -302,6 +302,12 @@ def binding(node,bones,bind_points=None):
     from effect_binding import attachment_scale
     scales=np.linalg.norm(result[:3,:3],axis=0)
     if np.any(scales<1e-8):raise UnsupportedEffect('退化附着点尺度')
+    auxiliary=np.eye(4,dtype='<f4')
+    if number(data,'bFTO'):
+        # Native Point3c0520 separates normalized orientation into+280.
+        # It adds original constant2135568 (float32 epsilon) to lengths.
+        from effect_coordinates import point_auxiliary
+        auxiliary[:3,:3]=point_auxiliary(result,True)[0][:3,:3]
     source_scales=scales if number(data,'bTSc')else np.ones(3)
     vfx_enabled=bool(number(data,'bVSc'));separate=bool(number(data,'bBET'))
     if vfx_enabled:
@@ -312,7 +318,7 @@ def binding(node,bones,bind_points=None):
     adjusted=(source_scales if not vfx_enabled and(separate or bias==1)else
         attachment_scale(source_scales,vfx,bias,separate))
     result[:3,:3]=result[:3,:3]/scales*adjusted
-    return result
+    return (result,auxiliary)if components else result
 
 
 def quad(effect,node,time,parent,parent_color):
@@ -373,6 +379,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
     from effect_emitter import model_injection,sphere_injection,constant_particle_travel
     from effect_transform_random import has_random as random_transform,initialize as initialize_transform,values as transform_values,resolved as resolved_transform
     from effect_uv import has_random,initialize,uv_nodes,sample_time
+    from effect_coordinates import selective as selective_matrix
     result=[];pending=[];visits=0;sampled={}
     if effect.missing:return (),('特效来源缺失',)
     groups={tag:[r for r in effect.source_records if r.tag==tag]for tag in('Schd','TmLn','Bind','Emit','Ptcl','Efct')}
@@ -395,7 +402,6 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
                 basis=relative/scales if number(child,'ICbR')else np.eye(3)
                 if number(child,'ICbS'):basis=basis@np.diag(scales)
                 result[:3,:3]=bound[:3,:3]@basis
-                if not number(child,'ICbP'):result[:3,3]=bound[:3,3]
         else:raise UnsupportedEffect('继承模式 '+str(mode))
         return result
     def births(child,data,time,identity,max_age):
@@ -430,7 +436,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
                 sequence=i if once else int(round((birth-start)/interval))*count+i
                 yield time-birth,birth,sequence
     def emit(index,time,bound,inherited,inherited_color,stack=(),inherited_at=None,
-             channel_history=None,incoming=None,birth_channels=(),extra_angles=None):
+             channel_history=None,incoming=None,birth_channels=(),extra_angles=None,auxiliary=None):
         nonlocal visits
         visits+=1
         if index in stack or len(stack)>12 or visits>256:raise UnsupportedEffect('发射器循环或预算')
@@ -444,12 +450,17 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
             effector=nested(get('Efct',number(data,'EfNo')))
             pending.append('局部点光源尚未接入'if number(effector,'EfVT')==0 else'发射器效果器尚未接入')
         stationary(data,time)
-        fixed_parent=(inherited@transform(data,0,emitter=True))if reuse_static_parents and inherited_at is None and all(
+        custom=incoming is not None and number(incoming,'PICd')in(0,1)
+        fixed_parent=(inherited@transform(data,0,emitter=True))if not custom and reuse_static_parents and inherited_at is None and all(
             constant_axes(data.get(name),3)for name in('Scl','Rot','Pos'))else None
         @lru_cache(maxsize=512)
         def parent_at(at):
             if fixed_parent is not None:return fixed_parent
             history=inherited if inherited_at is None else inherited_at(at)
+            if custom:
+                chain=channels_at(at);angles=inherited_coordinates(chain);scales=inherited_coordinates(chain,scale=True)
+                return selective_matrix(scales,rotation(angles,number(data,'ROT')),axes(data.get('Pos'),at),number(data,'CCOT'),
+                    auxiliary if number(incoming,'PICd')==1 and number(incoming,'ICbB')else None,history[:3,3])
             return history@transform(data,at,emitter=True)
         @lru_cache(maxsize=512)
         def channels_at(at):
@@ -478,7 +489,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
                         # snapshot (3e3683), whereas PICd2 reads current parent
                         # +28 (3e3774). Sharing a current matrix across births
                         # incorrectly makes AllCreate children follow motion.
-                        if inheritance_mode==3 and fixed_parent is None:
+                        if (inheritance_mode in(0,3)or inheritance_mode==1 and not number(child,'ICbP'))and fixed_parent is None:
                             inherited_matrix=inherit(child,parent_at(birth),bound)
                         elif inherited_matrix is None:
                             inherited_matrix=inherit(child,parent,bound)
@@ -497,15 +508,16 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
                         # rotating already emitted, unbound Simple centers by
                         # the current parent. AllCreate uses its own fixed birth
                         # snapshot even when descendants request later history.
-                        # Selective inheritance remains pending full Euler/TRS
-                        # assembly; never invent its missing historical matrix.
+                        # Selective point links use this carrier's origin only;
+                        # their basis is assembled from explicit channels below.
                         def history(at,child=child,birth=birth,occurrence=occurrence,
                                     identity=(stack,index,container,ordinal),current=time,injected=injected,target_data=target_data,tag=tag):
                             when=birth+at
                             mode=number(child,'PICd')
-                            if when!=current and mode not in(2,3):
+                            if when!=current and mode not in(2,3)and emitter_type!=0:
                                 raise UnsupportedEffect('非持续继承的粒子出生变换历史')
-                            value=inherit(child,parent_at(birth if mode==3 else when),bound)@injected
+                            capture=mode in(0,3)or mode==1 and not number(child,'ICbP')
+                            value=inherit(child,parent_at(birth if capture else when),bound)@injected
                             if emitter_type in(3,5):
                                 inject=model_injection if emitter_type==5 else sphere_injection
                                 position,velocity=inject(effect,data,birth,occurrence,(*identity,birth,occurrence))
@@ -517,7 +529,7 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
                             def child_channel_history(at,birth=birth,channels_at=channels_at):
                                 return channels_at(birth+at)
                             emit(target,age,bound,matrix,tint,stack+(index,),history,
-                                child_channel_history,child,channels_at(birth),injection_angles(child,occurrence));continue
+                                child_channel_history,child,channels_at(birth),injection_angles(child,occurrence),auxiliary);continue
                         particle=target_node;particle_data=target_data
                         if not alive(particle_data,age):continue
                         seed=(effect.sha256+repr((stack,index,container,ordinal,birth,occurrence))).encode()
@@ -551,6 +563,20 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
                             chain=(node,)+parents
                             value['powder_angles']=inherited_coordinates(chain,z_only=True)
                             value['powder_scale']=inherited_coordinates(chain,scale=True)*np.linalg.norm(bound[:3,:3],axis=0)
+                        if not simple and inheritance_mode in(0,1):
+                            if inheritance_mode==1 and emitter_type!=0:
+                                raise UnsupportedEffect('非点发射器的选择继承创建坐标')
+                            coordinates=transform_values(particle,age,transform_state)if transform_state is not None else None
+                            parents=channels_at(time)
+                            node=coordinate_node(particle_data,age,child,parents,channels_at(birth),injection_angles(child,occurrence),coordinates)
+                            chain=(node,)+parents;scales=inherited_coordinates(chain,scale=True)
+                            angles=inherited_coordinates(chain);pos=axes(particle_data.get('Pos'),age)if coordinates is None else coordinates['Pos']
+                            origin=(parent_at(time)[:3,3]if inheritance_mode==1 and number(child,'ICbP')else
+                                parent_at(birth)[:3,3]if emitter_type==0 else matrix[:3,3])
+                            value['coordinate_matrix']=selective_matrix(scales,rotation(angles,number(particle_data,'RoOT')),pos,
+                                number(particle_data,'CCOT'),auxiliary if inheritance_mode==1 and number(child,'ICbB')else None,origin)
+                            value['coordinate_scale']=scales
+                            value['coordinate_billboard_rotation']=rotation(inherited_coordinates(chain,z_only=True),number(particle_data,'RoOT'))
                         if 'simple_centers'in prototype and not prototype['simple_bind_parent']and not prototype.get('simple_centers_world'):
                             value['simple_birth_matrices']=np.asarray([
                                 history(float(at))@local_at(float(at))
@@ -587,8 +613,8 @@ def prepare(effect,bones,frame=30.,*,bind_points=None,simple_history=None):
                 if time<0 or(end>=0 and timeline_time>=end):continue
                 try:
                     if number(item,'EfNo',-1)>=0:raise UnsupportedEffect('后处理效果器')
-                    bound=binding(get('Bind',number(item,'BdNo',-1)),bones,bind_points)
-                    emit(number(item,'EmNo',-1),time,bound,bound,np.ones(4))
+                    bound,auxiliary=binding(get('Bind',number(item,'BdNo',-1)),bones,bind_points,components=True)
+                    emit(number(item,'EmNo',-1),time,bound,bound,np.ones(4),auxiliary=auxiliary)
                 except UnsupportedEffect as error:pending.append(str(error))
     except UnsupportedEffect as error:pending.append(str(error))
     return tuple(result),tuple(sorted(set(pending)))

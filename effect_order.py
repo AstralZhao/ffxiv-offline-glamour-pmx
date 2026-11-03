@@ -38,7 +38,8 @@ def ordered_samples(samples,view):
             elif mode==2:
                 def key(entry):
                     sequence,sample=entry
-                    position=(sample['parent']@np.r_[sample['local'][:3,3],1])[:3]
+                    position=(sample['coordinate_matrix'][:3,3]if 'coordinate_matrix'in sample else
+                        (sample['parent']@np.r_[sample['local'][:3,3],1])[:3])
                     return depth_key(view[2],position,sequence)
                 entries=sorted(entries,key=key)
             result.extend(sample for _,sample in entries)

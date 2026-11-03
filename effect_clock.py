@@ -3,8 +3,8 @@ import time
 
 # CN Framework +16c0 seconds -> 3939a0 uses original constant211bcb0=30,
 # then carries .1-unit quantization remainder. Core config60 preserves that
-# rate. This presentation clock samples elapsed time; it does not fabricate
-# native per-update history for the separate, still-pending Simple simulator.
+# rate. This presentation clock samples elapsed time; the default client's
+# SimpleHistory consumes explicit request deltas separately.
 SOURCE_UNITS_PER_SECOND=30.
 
 
