@@ -14,6 +14,7 @@ import numpy as np
 
 from effect_sample import nested,number,UnsupportedEffect
 from vfx import records
+from effect_simple_state import Update as StateUpdate,advance as advance_state,replay as replay_state
 
 
 class SourceRandom:
@@ -101,6 +102,25 @@ def emission_points(effect,index):
     return result
 
 
+def model_positions(points,area,count,random):
+    """CN3e5510 prepass, supported BlkN=1 / VBMN=-1 / SIPT=1.
+
+    All model positions precede the general direction/attribute pass. Source
+    random area components are consumed Z, Y, X, even for zero extents.
+    """
+    points=np.asarray(points,dtype='<f4');area=np.asarray(area,dtype='<f4')
+    if points.ndim!=2 or points.shape[1]!=3 or not len(points)or not np.isfinite(points).all():
+        raise ValueError('Invalid Simple emission positions')
+    if area.shape!=(3,)or not np.isfinite(area).all()or type(count)is not int or not 1<=count<=512:
+        raise ValueError('Invalid Simple model area/count')
+    result=np.empty((count,3),dtype='<f4')
+    for i in range(count):
+        point=points[i%len(points)].copy()
+        for axis in(2,1,0):point[axis]=np.float32(point[axis]+random.between(-area[axis],area[axis]))
+        result[i]=packed_vector(point,32000)
+    return result
+
+
 @lru_cache(maxsize=128)
 def initial(effect,node):
     d=nested(node);integer=lambda key,default=0:number(d,key,default)
@@ -125,10 +145,10 @@ def initial(effect,node):
     if any(not 1<=v<=127 for v in cells)or uv_interval<0:raise UnsupportedEffect('Simple 图集尺寸或间隔')
     positions=np.zeros((count,3),dtype=np.float32);velocity=positions.copy();angles=positions.copy();spin=positions.copy()
     scales=np.ones((count,2));atlas=np.zeros(count,dtype=int);reverse=np.zeros(count,dtype=bool);random=SourceRandom(effect.sha256.encode()+node.data)
-    points=emission_points(effect,integer('IJMN',-1))[0]if integer('SIPT')==1 else np.zeros((1,3))
+    model=integer('SIPT')==1
+    if model:positions[:]=model_positions(emission_points(effect,integer('IJMN',-1))[0],area,count,random)
     for i in range(count):
-        pos=points[i%len(points)]+[random.between(-a,a)for a in area]
-        positions[i]=packed_vector(pos,32000)
+        if not model:positions[i]=packed_vector([random.between(-a,a)for a in area],32000)
         y=1-2*random.unit();phi=random.unit()*2*math.pi;r=math.sqrt(max(0,1-y*y))
         direction=np.array((r*math.sin(phi),y,r*math.cos(phi)),dtype=np.float32)
         # Native directions are normalized, truncated to signed bytes, then
