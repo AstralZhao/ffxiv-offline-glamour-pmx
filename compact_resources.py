@@ -233,7 +233,16 @@ def wardrobe_icons(pack):
     # the harmless extra small values avoid any current-race assumptions.
     for _,row in data.rows('CharaMakeType'):
         for field,value in row.items():
-            if ('SubMenuParam['in field or'Icon'in field)and type(value)is int and 0<value<=1000000:icons.add(value)
+            if ('SubMenuParam['in field or'Icon'in field or'FacialFeatureOption['in field)and type(value)is int and 0<value<=1000000:icons.add(value)
+    # Barber unlocks are not limited to the creation menu. Resolve the
+    # reviewed CN identity rows and their actual customize links for every
+    # race/clan/sex, including choices not owned by the current player.
+    from cn_barber_hair import BarberHairMenus
+    barber=BarberHairMenus(data);profile=barber.profile
+    for row in barber.rows:
+        identity={name:row.value(column)for name,column in profile['identity_columns'].items()}
+        identity['body_type']=1
+        icons.update(choice['icon_id']for choice in barber.menu(identity)['choices'])
     if any(type(v)is not int or not 0<v<=1000000 for v in icons):raise ValueError('Source icon ID exceeds reviewed range')
     return sorted(icons)
 
