@@ -151,10 +151,11 @@ class OutfitCard(W.QFrame):
         self.clear.setVisible(bool(item));count=item.get('dye_count',0)
         for ch,b in enumerate(self.dyes,1):
             stain=choice['first'if ch==1 else'second'];dye=self.controller.dye_by_id.get(stain)
-            b.setEnabled(count>=ch);name=dye['name']if dye and stain else'原色'
+            name=dye['name']if dye and stain else'原色'
             color='#%06x'%(dye['color']&0xffffff)if dye and stain else'#91a0b4'
             b.setEnabled(count>=ch and not hidden)
-            b.setText(f'{ch}区'if count>=ch else f'{ch}区 /');b.setIcon(swatch_icon(color if count>=ch else'#39404b',unavailable=count<ch));b.setIconSize(C.QSize(12,12))
+            b.setText(f'{ch}区');b.setIcon(swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(14,14))
+            b.setStyleSheet('QPushButton:disabled { background:#38252b; color:#e3aaa3; border:1px dashed #a46367; font-weight:600; }'if count<ch else'')
             b.setToolTip(f'第{ch}染色区 · '+(name if count>=ch else'不可染色'))
 
 

@@ -165,6 +165,28 @@ class PresetComboBox(ComboBox):
         completer.popup().setMinimumWidth(320);completer.popup().setMaximumHeight(360)
         completer.activated[str].connect(self.choose_preset)
         self.lineEdit().returnPressed.connect(lambda:self.choose_preset(self.currentText()))
+        W.QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self,watched,event):
+        if event.type()==C.QEvent.MouseButtonPress and isinstance(watched,W.QWidget):
+            popups=(self.view().window(),self.completer().popup())
+            inside=self is watched or self.isAncestorOf(watched)or any(p is watched or p.isAncestorOf(watched)for p in popups)
+            if not inside and watched.window()is self.window():
+                self.hidePopup();self.completer().popup().hide()
+                self.lineEdit().clearFocus();self.clearFocus();self.restore_selected_text()
+        return super().eventFilter(watched,event)
+
+    def focusOutEvent(self,event):
+        super().focusOutEvent(event)
+        C.QTimer.singleShot(0,self.restore_when_unfocused)
+
+    def restore_when_unfocused(self):
+        if not self.hasFocus()and not self.lineEdit().hasFocus()and not self.completer().popup().isVisible()and not self.view().isVisible():
+            self.restore_selected_text()
+
+    def restore_selected_text(self):
+        self.setEditText(self.itemText(self.currentIndex()))
+        self.lineEdit().deselect();self.lineEdit().setCursorPosition(0)
 
     def choose_preset(self,text):
         index=self.findText(text,C.Qt.MatchExactly)
@@ -178,8 +200,11 @@ def swatch_icon(color,*,unavailable=False):
     painter.setBrush(G.QColor(color));painter.setPen(G.QPen(G.QColor('#778495'),1))
     painter.drawRoundedRect(C.QRectF(1.5,1.5,13,13),3,3)
     if unavailable:
-        painter.setPen(G.QPen(G.QColor('#f1b5aa'),2));painter.drawLine(C.QPointF(2,14),C.QPointF(14,2))
-    painter.end();return G.QIcon(image)
+        painter.setBrush(G.QColor('#38252b'));painter.setPen(G.QPen(G.QColor('#f1aaa1'),1.6))
+        painter.drawEllipse(C.QRectF(1.5,1.5,13,13));painter.drawLine(C.QPointF(3.5,12.5),C.QPointF(12.5,3.5))
+    painter.end();icon=G.QIcon(image)
+    if unavailable:icon.addPixmap(image,G.QIcon.Disabled)
+    return icon
 
 
 def slot_icon(slot):
