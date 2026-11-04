@@ -10,9 +10,20 @@ def query_filter(query):
     return " AND (name LIKE ? ESCAPE '\\' OR CAST(item_id AS TEXT)=?)",['%'+escaped+'%',query]
 
 
-def equipment_rows(conn,slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,preferred_item=0):
+def level_filter(min_level=None,max_level=None,*,column='level'):
+    for value in(min_level,max_level):
+        if value is not None and(type(value)is not int or not 1<=value<=999):raise ValueError('装备等级范围必须为1至999')
+    if min_level is not None and max_level is not None and min_level>max_level:raise ValueError('最低等级不能高于最高等级')
+    clauses=[];args=[]
+    for value,operator in((min_level,'>='),(max_level,'<=')):
+        if value is not None:clauses.append(column+operator+'?');args.append(value)
+    return ''.join(' AND '+clause for clause in clauses),args
+
+
+def equipment_rows(conn,slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,preferred_item=0,min_level=None,max_level=None):
     slot='FingerL'if slot=='FingerR'else slot
     search,args=query_filter(query[:80].strip())
+    levels,level_args=level_filter(min_level,max_level);search+=levels;args+=level_args
     if grouped:
         # Rank over the ENTIRE model group before searching. Searching a
         # one-dye variant must not rename its two-dye representative folder.

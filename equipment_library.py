@@ -164,7 +164,9 @@ class EquipmentLibrary:
                 row['favorite_count']=groups.get(row['model_set'],0);row['favorite']=row['favorite_count']>0
             else:row['favorite']=row['item_id']in favorites
 
-    def equipment_rows(self,conn,slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,preferred_item=0,favorites_only=False,tags=(),favorite_snapshot=None):
+    def equipment_rows(self,conn,slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,preferred_item=0,favorites_only=False,tags=(),favorite_snapshot=None,min_level=None,max_level=None):
+        from catalogue import level_filter
+        levels,level_args=level_filter(min_level,max_level,column='e.level')
         slot='FingerL'if slot=='FingerR'else slot;tags=clean_tags(list(tags));conn.execute('ATTACH DATABASE ? AS notes',(str(self.path),))
         cache_attached=False
         try:
@@ -187,7 +189,7 @@ class EquipmentLibrary:
                 else:
                     predicates.append("(e.name LIKE ? ESCAPE '\\' OR CAST(e.item_id AS TEXT)=? OR "+tag_sql+')')
                     args.extend((like(value),value,like(value)))
-            where=' AND '.join(predicates)
+            where=' AND '.join(predicates)+levels;args+=level_args
             fields='item_id,name,icon_id,dye_count,level,category_name,(model_main & 65535) AS model_set'
             if grouped:
                 # Select representative before filtering; favorite/search can

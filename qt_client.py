@@ -238,25 +238,35 @@ class QtClient(NativeClient):
         h.addWidget(button('设置',self.open_settings,ghost=True));outer.addWidget(header)
         body=W.QWidget();body_layout=horizontal(body,18,16);outer.addWidget(body,1)
         self.browser=W.QFrame();self.browser.setObjectName('Panel');self.browser.setFixedWidth(340);left=vertical(self.browser,16,12)
-        left.addWidget(label('挑选装备','Title'));left.addWidget(label('寻找属于你的下一套搭配','Muted'))
-        groups=horizontal(spacing=6);self.browse_groups=[]
+        groups=horizontal(spacing=6);groups.addWidget(label('挑选装备','Title'));groups.addStretch();self.browse_groups=[]
         for text,parts in(('防具',ARMOR),('饰品',ACCESSORIES)):
-            b=button(text,lambda p=parts:self.switch_group(p));b.setCheckable(True);b.setChecked(parts==ARMOR);groups.addWidget(b);self.browse_groups.append(b)
+            b=button(text,lambda p=parts:self.switch_group(p));b.setFixedWidth(60);b.setCheckable(True);b.setChecked(parts==ARMOR);groups.addWidget(b);self.browse_groups.append(b)
         left.addLayout(groups);self.part_bar=horizontal(spacing=5);self.slot_buttons={};left.addLayout(self.part_bar);self.rebuild_part_tabs()
         self.search=W.QLineEdit();self.search.setClearButtonEnabled(True);self.search.setPlaceholderText('名称、编号、标签 · 支持多词组合')
         self.search.setToolTip('空格分隔多个条件（同时满足）。#标签、标签:礼服 只搜索标签。')
         self.search.textChanged.connect(self.search_changed);left.addWidget(self.search)
         self.search.returnPressed.connect(self.load_catalog)
         self.query.callback=lambda text:self.search.setText(text)if self.search.text()!=text else None
+        self.level_timer=C.QTimer(self.window);self.level_timer.setSingleShot(True);self.level_timer.setInterval(250);self.level_timer.timeout.connect(self.filters_changed)
+        levels=horizontal(spacing=6);levels.addWidget(label('装备等级','Muted'))
+        self.min_level=W.QSpinBox();self.max_level=W.QSpinBox()
+        for control,text in((self.min_level,'最低穿戴等级'),(self.max_level,'最高穿戴等级')):
+            control.setRange(0,999);control.setSpecialValueText('不限');control.setButtonSymbols(W.QAbstractSpinBox.NoButtons)
+            control.setAlignment(C.Qt.AlignCenter);control.setMinimumWidth(58);control.setToolTip(text+'；0表示不限。按穿戴所需等级筛选，不是装备品级。')
+            control.setKeyboardTracking(False);control.valueChanged.connect(lambda _,c=control:self.level_changed(c))
+        levels.addWidget(self.min_level,1);levels.addWidget(label('—','Muted'));levels.addWidget(self.max_level,1)
+        self.reset_filters_button=button('重置',self.reset_filters,ghost=True);self.reset_filters_button.setToolTip('清除搜索、等级、标签与仅收藏筛选')
+        self.reset_filters_button.setStyleSheet('padding:7px 4px');levels.addWidget(self.reset_filters_button);left.addLayout(levels)
         filters=horizontal(spacing=6);self.tag_picker=SearchComboBox();self.tag_picker.setMinimumWidth(90);self.tag_picker.addItem('',None)
         self.tag_picker.setToolTip('输入文字搜索已有标签，选择后加入筛选；下拉列表支持滚轮浏览')
         self.tag_picker.setSizeAdjustPolicy(W.QComboBox.AdjustToMinimumContentsLengthWithIcon);self.tag_picker.setMinimumContentsLength(5)
         self.tag_picker.activated.connect(self.pick_tag);filters.addWidget(self.tag_picker,1)
         self.favorite_filter=button('★ 收藏',self.filters_changed);self.favorite_filter.setCheckable(True);self.favorite_filter.setToolTip('只显示收藏的装备；同模目录匹配任一收藏成员')
-        filters.addWidget(self.favorite_filter);self.view_toggle=button('图标',self.toggle_catalog_view);self.view_toggle.setCheckable(True);filters.addWidget(self.view_toggle);left.addLayout(filters)
+        filters.addWidget(self.favorite_filter);left.addLayout(filters)
         self.active_tags=[];self.tag_summary=button('',self.clear_tag_filters,ghost=True);self.tag_summary.hide();left.addWidget(self.tag_summary)
         nav=horizontal(spacing=4);self.back_button=button('‹',self.back_folder,ghost=True);self.back_button.setFixedWidth(29);nav.addWidget(self.back_button)
         self.breadcrumb=label('全部装备','Muted');nav.addWidget(self.breadcrumb,1)
+        self.view_toggle=button('图标',self.toggle_catalog_view);self.view_toggle.setCheckable(True);self.view_toggle.setStyleSheet('padding:5px 8px');nav.addWidget(self.view_toggle)
         nav.addWidget(button('刷新',self.load_catalog,ghost=True));left.addLayout(nav)
         self.catalog=W.QListWidget();self.catalog.setMouseTracking(True);self.catalog.setItemDelegate(EquipmentDelegate(self.catalog))
         self.catalog.setContextMenuPolicy(C.Qt.CustomContextMenu);self.catalog.customContextMenuRequested.connect(self.catalog_context)
@@ -268,8 +278,9 @@ class QtClient(NativeClient):
         pages.addWidget(self.previous_page);pages.addStretch();self.page_number=W.QSpinBox();self.page_number.setRange(1,1)
         self.page_number.setPrefix('第 ');self.page_number.setSuffix(' 页');self.page_number.setMaximumWidth(90)
         self.page_number.setToolTip('输入页码后按回车跳转');self.page_number.editingFinished.connect(lambda:self.go_page(self.page_number.value()-1))
-        pages.addWidget(self.page_number);self.page_total=label('/ 1','Muted');pages.addWidget(self.page_total);pages.addStretch()
+        pages.addWidget(self.page_number);self.page_total=label('/ 1','Muted');self.page_total.setMinimumWidth(35);pages.addWidget(self.page_total);pages.addStretch()
         self.next_page=button('下一页 ›',lambda:self.go_page(self.page_index+1),ghost=True);pages.addWidget(self.next_page);left.addLayout(pages)
+        for b in(self.previous_page,self.next_page):b.setStyleSheet('padding:7px 2px;font-size:11px')
         self.sync_pagination();self.back_button.hide()
         catalog_status=horizontal();self.catalog_spinner=LoadingSpinner(16);catalog_status.addWidget(self.catalog_spinner)
         self.count_note=label('正在读取装备目录…','Muted');self.count_note.setStyleSheet('font-size:10px');catalog_status.addWidget(self.count_note,1)
@@ -428,6 +439,7 @@ class QtClient(NativeClient):
                 self.editor.status.setText('操作未完成，已保留原模型和预设。');self.editor.status.setToolTip(self.raw_status)
 
     def close(self):
+        self.level_timer.stop()
         self.occlusion_timer.stop()
         self.effect_timer.stop();self.effect_clock.pause(self.effect_last_frame)
         self.effect_deferred=None
@@ -613,7 +625,24 @@ class QtClient(NativeClient):
 
     def clear_tag_filters(self):self.active_tags=[];self.filters_changed()
 
+    def level_bounds(self):return self.min_level.value()or None,self.max_level.value()or None
+
+    def filter_signature(self):return self.favorite_filter.isChecked(),tuple(self.active_tags),self.level_bounds()
+
+    def level_changed(self,control):
+        low,high=self.level_bounds()
+        if low is not None and high is not None and low>high:
+            other=self.max_level if control is self.min_level else self.min_level
+            other.blockSignals(True);other.setValue(control.value());other.blockSignals(False)
+        self.level_timer.start()
+
+    def reset_filters(self):
+        self.level_timer.stop();self.cancel_search();self.search.blockSignals(True);self.query.set('');self.search.clear();self.search.blockSignals(False)
+        for control in(self.min_level,self.max_level):control.blockSignals(True);control.setValue(0);control.blockSignals(False)
+        self.favorite_filter.setChecked(False);self.active_tags=[];self.tag_picker.setCurrentIndex(0);self.tag_picker.clearEditText();self.filters_changed()
+
     def filters_changed(self):
+        self.level_timer.stop()
         self.tag_summary.setVisible(bool(self.active_tags));text=' + '.join(self.active_tags)
         self.tag_summary.setText(G.QFontMetrics(self.tag_summary.font()).elidedText('标签：'+text+'  ×',C.Qt.ElideRight,255))
         self.tag_summary.setToolTip('同时满足：'+text+'\n点击清除标签筛选');self.load_catalog()
@@ -673,6 +702,7 @@ class QtClient(NativeClient):
 
     def load_catalog(self,append=False,*,page=None,restore=None):
         self.cancel_search()
+        self.level_timer.stop()
         if not self.boot or self.closing:return
         new_query=page is None and not append
         page=(restore.get('page',0)if restore else 0)if new_query else self.page_index+1 if append else page
@@ -682,7 +712,8 @@ class QtClient(NativeClient):
         self.count_note.setText('正在检索装备…')
         request={'serial':self.catalog_serial,'slot':self.slot_key(),'query':self.query.get(),'offset':page*60,'page':page,'new_query':new_query,
             'grouped':self.folder is None,'model_set':self.folder,'library':self.library,'favorites_only':self.favorite_filter.isChecked(),
-            'tags':tuple(self.active_tags),'favorite_snapshot':None if new_query else getattr(self,'favorite_snapshot',None),'restore':restore}
+            'tags':tuple(self.active_tags),'min_level':self.level_bounds()[0],'max_level':self.level_bounds()[1],
+            'favorite_snapshot':None if new_query else getattr(self,'favorite_snapshot',None),'restore':restore}
         if self.catalog_job is not None:self.catalog_queued=request
         else:self.start_catalog_request(request)
 
@@ -690,7 +721,8 @@ class QtClient(NativeClient):
         snapshot=request['favorite_snapshot']
         if request['new_query']and request['library']:snapshot=request['library'].favorite_ids()
         result=equipment_rows(request['slot'],request['query'],request['offset'],grouped=request['grouped'],model_set=request['model_set'],
-            library=request['library'],favorites_only=request['favorites_only'],tags=request['tags'],favorite_snapshot=snapshot)
+            library=request['library'],favorites_only=request['favorites_only'],tags=request['tags'],favorite_snapshot=snapshot,
+            min_level=request['min_level'],max_level=request['max_level'])
         return result,snapshot
 
     def start_catalog_request(self,request):
@@ -738,14 +770,14 @@ class QtClient(NativeClient):
         if row.get('is_group')and row.get('group_count',1)>1:
             self.outer={'query':self.query.get(),'rows':list(self.rows),'offset':self.offset,'more':self.more,'scroll':self.catalog.verticalScrollBar().value(),
                 'name':row['name'],'count':self.count_note.text(),'page':self.page_index,'pages':self.page_count,'total':self.catalog_total,
-                'filters':(self.favorite_filter.isChecked(),tuple(self.active_tags)),'favorite_snapshot':self.favorite_snapshot}
+                'filters':self.filter_signature(),'favorite_snapshot':self.favorite_snapshot}
             self.folder=row['model_set'];self.query.set('');self.load_catalog();return
         self.state['equipment'][self.slot_key()]={'item_id':row['item_id'],'first':0,'second':0};self.update_outfit();self.queue_render()
 
     def back_folder(self):
         if self.folder is None or not self.outer:return
         record=self.outer;self.folder=None;self.outer=None;self.query.set(record['query']);self.cancel_search()
-        rebuild=record.get('filters')!=(self.favorite_filter.isChecked(),tuple(self.active_tags))
+        rebuild=record.get('filters')!=self.filter_signature()
         if rebuild:
             self.load_catalog(restore=record);return
         else:
