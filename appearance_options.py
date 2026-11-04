@@ -30,6 +30,7 @@ class AppearanceOptions:
                 and not(race==1 and gender==0 and v==2)]}]
         for option in menu.options:
             labels={**LABELS,'face':'脸型'if race!=6 else LABELS['face']}
+            if race==2:labels.update(ear_muscle_tail_size='耳朵长度',tail_or_ear_type='耳朵形状')
             if race==8:labels.update(ear_muscle_tail_size='耳朵长度',tail_or_ear_type='耳朵形状')
             if race==1:labels.update(ear_muscle_tail_size='肌肉线条')
             result.append({'field':option.field,'label':labels[option.field],'kind':'slider'if option.menu_type==5 else'select',

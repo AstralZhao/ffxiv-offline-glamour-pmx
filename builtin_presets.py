@@ -5,6 +5,8 @@ from cn_character import CLANS
 from probe_appearance_presets import FIELDS
 
 CREATION_PROFILES=(
+    {'id':'elezen-male','label':'精灵族男性','race':2,'gender':0,'tribes':(3,4)},
+    {'id':'elezen-female','label':'精灵族女性','race':2,'gender':1,'tribes':(3,4)},
     {'id':'au-ra-male','label':'敖龙族男性','race':6,'gender':0,'tribes':(11,12)},
     {'id':'hyur-male','label':'人族男性（中原已接入）','race':1,'gender':0,'tribes':(1,)},
     {'id':'hyur-female','label':'人族女性','race':1,'gender':1,'tribes':(1,2)},
@@ -113,4 +115,15 @@ def seed_au_ra_male_examples(library):
         if key in library.metadata["seeded"]:continue
         path,_=library.add(example_dat(6,tribe,1,"敖龙族男性",0),"敖龙族男性-"+CLANS[tribe]+".dat")
         library.metadata["seeded"][key]=path.name
+    library.save_index()
+
+
+def seed_elezen_examples(library):
+    for gender in (0,1):
+        for tribe in (3,4):
+            key=f'builtin:elezen-{gender}-{tribe}:v1'
+            if key in library.metadata['seeded']:continue
+            name='精灵族'+('女性'if gender else'男性')
+            path,_=library.add(example_dat(2,tribe,1,name,gender),name+'-'+CLANS[tribe]+'.dat')
+            library.metadata['seeded'][key]=path.name
     library.save_index()
