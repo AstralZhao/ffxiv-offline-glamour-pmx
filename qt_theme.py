@@ -194,6 +194,21 @@ class PresetComboBox(ComboBox):
             self.setCurrentIndex(index);self.activated.emit(index)
 
 
+def visibility_icon(hidden=False):
+    image=G.QPixmap(40,40);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
+    painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)
+    painter.setPen(G.QPen(G.QColor('#dfbe88'if hidden else'#a3d9ce'),1.5,C.Qt.SolidLine,C.Qt.RoundCap,C.Qt.RoundJoin))
+    path=G.QPainterPath()
+    if hidden:
+        path.moveTo(3,8);path.cubicTo(6,14,14,14,17,8);painter.drawPath(path)
+        for x,y,dx in((5,11,-1.5),(10,13,0),(15,11,1.5)):
+            painter.drawLine(C.QPointF(x,y),C.QPointF(x+dx,y+3))
+    else:
+        path.moveTo(2,10);path.cubicTo(6,3,14,3,18,10);path.cubicTo(14,17,6,17,2,10)
+        painter.drawPath(path);painter.setBrush(G.QColor('#a3d9ce'));painter.drawEllipse(C.QPointF(10,10),2.2,2.2)
+    painter.end();return G.QIcon(image)
+
+
 def swatch_icon(color,*,unavailable=False):
     image=G.QPixmap(32,32);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)

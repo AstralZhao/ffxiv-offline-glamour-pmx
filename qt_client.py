@@ -20,7 +20,7 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
 from effect_clock import EffectClock
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,PresetComboBox,slot_icon,swatch_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,PresetComboBox,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -117,8 +117,8 @@ class OutfitCard(W.QFrame):
         self.icon=label();self.icon.setFixedSize(42,42);self.icon.setAlignment(C.Qt.AlignCenter);outer.addWidget(self.icon)
         content=vertical(spacing=2);outer.addLayout(content,1)
         top=horizontal();self.part=label(SLOTS[slot],'Muted');self.part.setStyleSheet('font-size:10px');top.addWidget(self.part);top.addStretch()
-        self.visibility=button('隐藏',lambda:self.controller.toggle_slot_visibility(self.slot),ghost=True)
-        self.visibility.setFixedHeight(22);self.visibility.setStyleSheet('font-size:11px;padding:2px 6px');top.addWidget(self.visibility)
+        self.visibility=button('',lambda:self.controller.toggle_slot_visibility(self.slot),ghost=True)
+        self.visibility.setFixedSize(26,24);self.visibility.setIconSize(C.QSize(20,20));self.visibility.setStyleSheet('padding:2px');top.addWidget(self.visibility)
         self.clear=button('×',lambda:self.remove());self.clear.setProperty('clear',True);self.clear.setFixedSize(16,16);top.addWidget(self.clear);content.addLayout(top)
         self.name=label('未装备');self.name.setStyleSheet('font-size:12px;font-weight:500');content.addWidget(self.name)
         dyes=horizontal(spacing=5);self.dyes=[]
@@ -139,7 +139,8 @@ class OutfitCard(W.QFrame):
         key=(choice['item_id'],choice['first'],choice['second'],item.get('icon_id'),item.get('name'),item.get('dye_count'),selected,self.width(),tuple(item.get('tags',[])),hidden)
         if getattr(self,'display_key',None)==key:return
         self.display_key=key
-        self.visibility.setVisible(bool(choice['item_id']));self.visibility.setText('显示'if hidden else'隐藏')
+        self.visibility.setVisible(bool(choice['item_id']));self.visibility.setIcon(visibility_icon(hidden))
+        self.visibility.setAccessibleName('显示装备'if hidden else'隐藏装备')
         self.visibility.setToolTip('恢复这件装备及其染色'if hidden else'暂时取消试穿，保留装备与染色以便恢复')
         self.part.setText(SLOTS[self.slot]+(' · 已隐藏'if hidden else''))
         self.setProperty('selected',selected);polish(self)
