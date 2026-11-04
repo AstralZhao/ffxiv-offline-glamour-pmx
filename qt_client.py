@@ -1034,11 +1034,12 @@ class AppearanceDialog(W.QDialog):
         active=self.tabs.currentIndex()
         while self.tabs.count():
             page=self.tabs.widget(0);self.tabs.removeTab(0);page.deleteLater()
-        self.forms={};self.choice_controls={};self.feature_controls={};c=self.c
-        for name in('发型与体型','五官细节','颜色与彩绘'):
+        self.forms={};self.choice_controls={};self.feature_controls={};self.field_controls={};self.toggle_controls={};c=self.c
+        for name in('发型与体型','五官细节','特征与彩绘'):
             scroll=W.QScrollArea();scroll.setWidgetResizable(True);content=W.QWidget();form=W.QFormLayout(content)
             form.setContentsMargins(8,20,16,20);form.setHorizontalSpacing(24);form.setVerticalSpacing(18);form.setFieldGrowthPolicy(W.QFormLayout.AllNonFixedFieldsGrow)
             scroll.setWidget(content);self.tabs.addTab(scroll,name);self.forms[name]=form
+        rows={}
         for option in c.editor_record['fields']:
             field=option['field'];choices=list(option['choices']);value=c.draft[field]&option['mask']
             if field=='hair':
@@ -1046,7 +1047,6 @@ class AppearanceDialog(W.QDialog):
                 choices=[choice for choice in choices if hair_compatible(choice,c.draft)]
             if not any(choice['value']==value for choice in choices):choices.append({'value':value,'label':str(value)+'（当前预设）'})
             if field=='hair':choices.sort(key=lambda choice:choice['value'])
-            group='颜色与彩绘'if option['kind']=='color'or field=='face_paint'else'发型与体型'if field in('tribe','hair','height','bust','tail_or_ear_type','ear_muscle_tail_size')else'五官细节'
             if option['kind']=='color':
                 selected=next(choice for choice in choices if choice['value']==value);color=selected.get('color','#333b48')
                 control=button('颜色 '+str(value));control.setIcon(swatch_icon(color));control.setIconSize(C.QSize(16,16));control.setStyleSheet('QPushButton { text-align:left; }')
@@ -1060,7 +1060,7 @@ class AppearanceDialog(W.QDialog):
                 container=W.QWidget();row=horizontal(container,0);control=W.QSlider(C.Qt.Horizontal);control.setRange(min(x['value']for x in choices),max(x['value']for x in choices));control.setValue(value)
                 number=label(str(value),'Muted');number.setFixedWidth(28);row.addWidget(control,1);row.addWidget(number)
                 control.valueChanged.connect(lambda v,o=option,n=number:(n.setText(str(v)),c.editor_change(o,v)))
-                self.forms[group].addRow(option['label'],container);continue
+                self.field_controls[field]=container;rows[field]=(option['label'],container);continue
             else:
                 control=ComboBox()
                 control.setProperty('appearance_field',field)
@@ -1075,8 +1075,8 @@ class AppearanceDialog(W.QDialog):
                 self.choice_controls[field]=(control,choices)
                 control.setCurrentIndex(next(i for i,x in enumerate(choices)if x['value']==value))
                 control.activated.connect(lambda index,o=option,w=control:c.editor_change(o,w.itemData(index)))
-            self.forms[group].addRow(option['label'],control)
-        toggles=[('highlight_flags',128,'启用挑染'),('mouth',128,'启用唇色'),('eyes',128,'瞳孔形态选项'),('face_paint',128,'镜像彩绘')]+[('facial_features',1<<i,f'面部特征 {i+1}')for i in range(7)]
+            self.field_controls[field]=control;rows[field]=(option['label'],control)
+        toggles=[('highlight_flags',128,'启用挑染'),('mouth',128,'启用唇色'),('eyes',128,'使用小虹膜'),('face_paint',128,'镜像彩绘')]+[('facial_features',1<<i,f'面部特征 {i+1}')for i in range(7)]
         if c.draft['race']==7:toggles=[t for t in toggles if t[:2]!=('mouth',128)]
         for field,bit,text in toggles:
             control=W.QCheckBox(text);control.setChecked(bool(c.draft[field]&bit))
@@ -1084,7 +1084,38 @@ class AppearanceDialog(W.QDialog):
                 control.setIconSize(C.QSize(40,40));control.setMinimumHeight(44);self.feature_controls[bit]=control
             def toggle(checked,f=field,b=bit):
                 c.draft[f]=(c.draft[f]|b)if checked else(c.draft[f]&~b);self.update_status();c.queue_appearance_preview()
-            control.toggled.connect(toggle);self.forms['颜色与彩绘'if field in('highlight_flags','face_paint')else'五官细节'].addRow('',control)
+            control.toggled.connect(toggle)
+            self.toggle_controls[field,bit]=control;rows[field,bit]=('',control)
+        # Place each color and switch beside the appearance it changes. These
+        # are the original controls/callbacks; resource and DAT values are intact.
+        layout=[('发型与体型',[
+            ('身份与肤色',['tribe','skin_color']),
+            ('发型与颜色',['hair','hair_color',('highlight_flags',128),'highlight_color']),
+            ('体型与特征',['height','bust','ear_muscle_tail_size','tail_or_ear_type'])]),
+            ('五官细节',[
+                ('脸部轮廓',['face','jaw']),
+                ('眉眼',['eyebrows','eyes',('eyes',128),'right_eye_color','left_eye_color']),
+                ('鼻与嘴',['nose','mouth',('mouth',128)]+([]if c.draft['race']==7 else['lip_color_or_fur_pattern']))]),
+            ('特征与彩绘',[
+                ('面部特征',[('facial_features',1<<i)for i in range(7)]+['facial_feature_color']),
+                ('毛纹',['lip_color_or_fur_pattern']if c.draft['race']==7 else[]),
+                ('面部彩绘',['face_paint',('face_paint',128),'face_paint_color'])])]
+        for tab,sections in layout:
+            form=self.forms[tab]
+            for title,keys in sections:
+                present=[key for key in keys if key in rows]
+                if not present:continue
+                heading=label(title,'Section');heading.setContentsMargins(0,8,0,2);form.addRow(heading)
+                if title=='面部特征':
+                    grid=W.QWidget();cells=W.QGridLayout(grid);cells.setContentsMargins(0,0,0,0);cells.setHorizontalSpacing(16)
+                    for index,key in enumerate(key for key in present if isinstance(key,tuple)):
+                        cells.addWidget(rows.pop(key)[1],index//2,index%2)
+                    form.addRow(grid)
+                for key in present:
+                    if key in rows:form.addRow(*rows.pop(key))
+        # Retain future source-menu fields even before a dedicated section is
+        # assigned to them; no native option is silently dropped by the layout.
+        for text,control in rows.values():self.forms['特征与彩绘'].addRow(text,control)
         self.refresh_icons()
         if active>=0:self.tabs.setCurrentIndex(active)
 
