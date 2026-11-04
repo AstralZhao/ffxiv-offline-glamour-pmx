@@ -176,7 +176,9 @@ class WardrobeWindow(W.QMainWindow):
 
 
 class QtClient(NativeClient):
-    def __init__(self,window,game=GAME,preset=DEFAULT_PRESET,*,preset_directory=None,session_path=None,settings_handler=None):
+    def __init__(self,window,game=GAME,preset=DEFAULT_PRESET,*,preset_directory=None,session_path=None,settings_handler=None,studio=None):
+        from studio_lighting import options
+        self.studio=options(studio)
         self.window=window;window.controller=self;self.root=TimerHost(window)
         self.settings_handler=settings_handler;self.game=Path(game).resolve()
         self.closed=False;self.closing=False;self.job=None;self.dirty=False;self.timer=None;self.generation=0
@@ -218,7 +220,7 @@ class QtClient(NativeClient):
                 except(ValueError,OSError):pass
             hwnd=int(self.viewport.winId());self.viewport.watch_window()
             self.engine=DemoEngine(Path(game),Path(preset),preset_directory=preset_directory,native_hwnd=hwnd,
-                startup_session=session,defer_native_present=True)
+                startup_session=session,defer_native_present=True,studio=self.studio)
         except Exception as error:
             self.message.set('角色未能加载：'+str(error));self.loading_spinner.set_running(False);self.footer_spinner.set_running(False);self.loading_panel.hide();return
         self.poll_startup()
@@ -345,6 +347,20 @@ class QtClient(NativeClient):
 
     def show_details(self):W.QMessageBox.information(self.window,'操作说明',self.raw_status)
 
+    def apply_studio(self,value):
+        from studio_lighting import options
+        self.studio=options(value)
+        if self.closing:return
+        if not self.ready or self.job is not None or self.effect_future is not None:
+            self.root.after(80,lambda:self.apply_studio(self.studio));return
+        selected=dict(self.studio);state=deepcopy(self.state)
+        def draw():
+            previous=self.engine.studio
+            try:self.engine.studio=selected;return self.engine.render(state)
+            except Exception:
+                self.engine.studio=previous;raise
+        self.submit(draw,self.accept_result)
+
     def open_guide(self):
         from user_guide import GUIDE
         dialog=W.QDialog(self.window);dialog.setWindowTitle('操作说明 · 幻衣间');dialog.resize(680,720)
@@ -446,7 +462,7 @@ class QtClient(NativeClient):
         from settings import SettingsStore
         from qt_settings import SettingsDialog
         dialog=SettingsDialog(SettingsStore(),self.game,parent=self.window)
-        dialog.accepted.connect(lambda:self.message.set('配置已保存，下次启动软件时生效'))
+        dialog.accepted.connect(lambda:self.apply_studio(dialog.saved_studio)if dialog.saved_game==self.game else self.message.set('资源来源已保存，下次启动软件时生效'))
         self.show_dialog(dialog)
 
     def refresh_boot(self):
@@ -1177,7 +1193,7 @@ class DesktopSession(C.QObject):
         self.start(game)
 
     def start(self,game):
-        self.window=WardrobeWindow();self.controller=QtClient(self.window,game,self.preset,settings_handler=self.open_settings);self.window.show()
+        self.window=WardrobeWindow();self.controller=QtClient(self.window,game,self.preset,settings_handler=self.open_settings,studio=self.store.studio());self.window.show()
 
     def open_settings(self):
         if self.settings_dialog:self.settings_dialog.raise_();return
@@ -1187,7 +1203,8 @@ class DesktopSession(C.QObject):
         def finish(result):
             self.settings_dialog=None
             if result==W.QDialog.Accepted:
-                if dialog.saved_game==self.controller.game:self.controller.message.set('资源来源已保存')
+                if dialog.saved_game==self.controller.game:
+                    self.controller.apply_studio(dialog.saved_studio)
                 else:self.next_game=dialog.saved_game;self.controller.close()
             dialog.deleteLater()
         dialog.finished.connect(finish);dialog.show()

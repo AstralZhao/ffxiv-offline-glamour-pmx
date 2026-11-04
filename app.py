@@ -87,7 +87,9 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 class DemoEngine:
     """All native GPU and SQLite outfit work stays on one dedicated thread."""
-    def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None,startup_session=None,defer_native_present=False):
+    def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None,startup_session=None,defer_native_present=False,studio=None):
+        from studio_lighting import options
+        self.studio=options(studio)
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
         self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
         self.rendered_parameters=None;self.appearance_is_preview=False;self.characters=None
@@ -215,7 +217,8 @@ class DemoEngine:
 
                 def character_layer_key(self,camera,view):
                     return (camera.tobytes(),view.tobytes(),self.width,self.height,self.clear_depth,
-                        self.lighting,self.native_fringe_states,self.material_glow_enabled)
+                        self.lighting,self.native_fringe_states,self.material_glow_enabled,
+                        tuple(sorted(getattr(self,'studio_options',{}).items())),getattr(self,'studio_background',None))
 
                 def draw_character_layer(self,scene,camera,view):
                     from d3d11_debug import P,U,Viewport
@@ -465,6 +468,10 @@ class DemoEngine:
         state=parse_state(raw);started=time.perf_counter()
         frame=self.effect_frame if effect_frame is None else effect_frame
         if type(frame)not in(int,float)or not math.isfinite(frame)or not 0<=frame<=1e9:raise ValueError('特效预览帧不正确')
+        from studio_lighting import BACKGROUNDS,options
+        studio=options(getattr(self,'studio',None))
+        self.renderer.studio_options=studio
+        self.renderer.studio_background=BACKGROUNDS[studio['background']][1]
         key=json.dumps([state['equipment'],state['head_visible'],state['effects_visible']],sort_keys=True)
         if key in self.scene_cache:
             scene=self.scene_cache[key];self.scene_cache.move_to_end(key)

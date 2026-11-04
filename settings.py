@@ -52,7 +52,12 @@ class SettingsStore:
             return validate_game(data['game_directory'],self.root,verify_executable=False),''
         except(OSError,ValueError,TypeError,AttributeError)as error:return None,str(error)
 
-    def save(self,game):
+    def studio(self):
+        from studio_lighting import options
+        try:return options(json.loads(self.path.read_bytes()).get('studio'))
+        except(OSError,ValueError,TypeError,AttributeError):return options()
+
+    def save(self,game,*,studio=None):
         # Caller validates fully off the GUI thread immediately before saving.
         path=game_root(game)
         if self.root.is_relative_to(path):raise ValueError('软件不能放在游戏安装目录内')
@@ -60,6 +65,8 @@ class SettingsStore:
             if not path.is_relative_to(self.root/'resources'):raise ValueError('请先通过“导入资源包”将资源包导入软件目录')
             data={'version':2,'source':'resource_pack','resource_directory':path.relative_to(self.root).as_posix()}
         else:data={'version':1,'game_directory':str(path)}
+        from studio_lighting import options
+        data['studio']=self.studio()if studio is None else options(studio)
         temporary=self.root/('.config-'+uuid.uuid4().hex+'.tmp')
         try:
             with temporary.open('x',encoding='utf8')as file:

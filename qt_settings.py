@@ -5,7 +5,8 @@ import threading
 from qt_runtime import enable
 enable()
 from PySide6 import QtCore as C,QtWidgets as W
-from qt_theme import label,button,vertical,horizontal,LoadingSpinner
+from qt_theme import label,button,vertical,horizontal,LoadingSpinner,ComboBox
+from studio_lighting import BACKGROUNDS,LIGHTS,options
 from settings import validate_game
 
 
@@ -14,7 +15,7 @@ class SettingsDialog(W.QDialog):
         super().__init__(parent);self.store=store;self.saved_game=None;self.future=None
         self.cancel_event=threading.Event();self.progress_record=None;self.operation=None
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeConfig')
-        self.setWindowTitle('首次配置'if first else'设置');self.resize(620,400)
+        self.setWindowTitle('首次配置'if first else'设置');self.resize(660,660)
         outer=vertical(self,24,16);outer.addWidget(label('开始使用幻衣间'if first else'软件设置','Title'))
         hint=label('选择资源来源：使用本机国服游戏目录，或导入独立资源包。导入后无需安装游戏，配置会自动记住。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
         modes=horizontal();self.game_mode=W.QRadioButton('使用游戏目录');self.pack_mode=W.QRadioButton('导入资源包')
@@ -27,6 +28,16 @@ class SettingsDialog(W.QDialog):
         exports=horizontal();self.export_button=button('从游戏目录导出资源包',self.export,ghost=True);exports.addWidget(self.export_button);exports.addStretch();outer.addLayout(exports)
         self.game_mode.toggled.connect(self.mode_changed);self.mode_changed()
         note=label('运行环境已随软件提供。预设、收藏和搭配保存在软件目录，无需额外配置。','Muted');note.setWordWrap(True);outer.addWidget(note)
+        outer.addWidget(label('预览摄影棚','Section'));form=W.QFormLayout();self.studio_background=ComboBox();self.studio_light=ComboBox()
+        for key,(text,_)in BACKGROUNDS.items():self.studio_background.addItem(text,key)
+        for key,text in LIGHTS.items():self.studio_light.addItem(text,key)
+        selected=store.studio();self.studio_background.setCurrentIndex(self.studio_background.findData(selected['background']))
+        self.studio_light.setCurrentIndex(self.studio_light.findData(selected['lighting']))
+        self.studio_brightness=W.QSlider(C.Qt.Horizontal);self.studio_brightness.setRange(25,200);self.studio_brightness.setValue(selected['brightness'])
+        intensity=W.QWidget();row=horizontal(intensity,0);row.addWidget(self.studio_brightness,1);self.brightness_label=label(str(selected['brightness'])+'%');self.brightness_label.setMinimumWidth(42);row.addWidget(self.brightness_label)
+        self.studio_brightness.valueChanged.connect(lambda value:self.brightness_label.setText(str(value)+'%'))
+        form.addRow('背景',self.studio_background);form.addRow('打光方式',self.studio_light);form.addRow('灯光亮度',intensity);outer.addLayout(form)
+        outer.addWidget(label('背景与灯光可分别选择。保存后应用到当前预览，并记住下次启动的设置。','Muted'))
         progress=horizontal();self.spinner=LoadingSpinner(18);progress.addWidget(self.spinner)
         self.status=label(error,'Warning');self.status.setWordWrap(True);progress.addWidget(self.status,1);outer.addLayout(progress);outer.addStretch()
         actions=horizontal();self.cancel=button('退出'if first else'取消',self.reject,ghost=True);actions.addWidget(self.cancel);actions.addStretch()
@@ -48,7 +59,7 @@ class SettingsDialog(W.QDialog):
     def progress(self,record):self.progress_record=record
 
     def busy(self,value):
-        for widget in(self.path,self.browse,self.save_button,self.game_mode,self.pack_mode,self.export_button):widget.setEnabled(not value)
+        for widget in(self.path,self.browse,self.save_button,self.game_mode,self.pack_mode,self.export_button,self.studio_background,self.studio_light,self.studio_brightness):widget.setEnabled(not value)
         self.spinner.set_running(value)
 
     def export(self):
@@ -86,7 +97,8 @@ class SettingsDialog(W.QDialog):
             result=future.result()
             if self.operation=='export':
                 self.status.setText('资源包已导出：'+str(result));self.progress_record=None;self.busy(False);return
-            self.saved_game=self.store.save(result)
+            self.saved_studio=options({'background':self.studio_background.currentData(),'lighting':self.studio_light.currentData(),'brightness':self.studio_brightness.value()})
+            self.saved_game=self.store.save(result,studio=self.saved_studio)
         except Exception as error:
             self.status.setText(str(error));self.progress_record=None;self.busy(False);return
         self.accept()
