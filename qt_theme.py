@@ -151,11 +151,35 @@ class SearchComboBox(ComboBox):
         if index>0:self.activated.emit(index)
 
 
-def swatch_icon(color):
+class PresetComboBox(ComboBox):
+    """Search the original preset choices without inserting arbitrary names."""
+    def __init__(self,parent=None):
+        super().__init__(parent);self.setEditable(True);self.setInsertPolicy(W.QComboBox.NoInsert)
+        self.lineEdit().setPlaceholderText('搜索角色预设…');self.setMaxVisibleItems(10)
+        self.setStyleSheet('QComboBox { combobox-popup:0; }')
+        self.currentIndexChanged.connect(lambda _:self.lineEdit().setCursorPosition(0))
+        view=W.QListView(self);view.setMinimumWidth(320);view.setMaximumHeight(360);self.setView(view)
+        view.setVerticalScrollBarPolicy(C.Qt.ScrollBarAsNeeded)
+        completer=self.completer();completer.setCompletionMode(W.QCompleter.PopupCompletion)
+        completer.setFilterMode(C.Qt.MatchContains);completer.setCaseSensitivity(C.Qt.CaseInsensitive);completer.setMaxVisibleItems(10)
+        completer.popup().setMinimumWidth(320);completer.popup().setMaximumHeight(360)
+        completer.activated[str].connect(self.choose_preset)
+        self.lineEdit().returnPressed.connect(lambda:self.choose_preset(self.currentText()))
+
+    def choose_preset(self,text):
+        index=self.findText(text,C.Qt.MatchExactly)
+        if index>=0 and index!=self.currentIndex():
+            self.setCurrentIndex(index);self.activated.emit(index)
+
+
+def swatch_icon(color,*,unavailable=False):
     image=G.QPixmap(32,32);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)
     painter.setBrush(G.QColor(color));painter.setPen(G.QPen(G.QColor('#778495'),1))
-    painter.drawRoundedRect(C.QRectF(1.5,1.5,13,13),3,3);painter.end();return G.QIcon(image)
+    painter.drawRoundedRect(C.QRectF(1.5,1.5,13,13),3,3)
+    if unavailable:
+        painter.setPen(G.QPen(G.QColor('#f1b5aa'),2));painter.drawLine(C.QPointF(2,14),C.QPointF(14,2))
+    painter.end();return G.QIcon(image)
 
 
 def slot_icon(slot):

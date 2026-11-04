@@ -20,7 +20,7 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
 from effect_clock import EffectClock
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,slot_icon,swatch_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,PresetComboBox,slot_icon,swatch_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -112,11 +112,13 @@ class NativeView(W.QWidget):
 class OutfitCard(W.QFrame):
     selected=C.Signal(str)
     def __init__(self,slot,controller):
-        super().__init__();self.slot=slot;self.controller=controller;self.setObjectName('OutfitCard');self.setFixedHeight(78)
+        super().__init__();self.slot=slot;self.controller=controller;self.setObjectName('OutfitCard');self.setFixedHeight(88)
         self.setCursor(C.Qt.PointingHandCursor);outer=horizontal(self,8,9)
         self.icon=label();self.icon.setFixedSize(42,42);self.icon.setAlignment(C.Qt.AlignCenter);outer.addWidget(self.icon)
         content=vertical(spacing=2);outer.addLayout(content,1)
         top=horizontal();self.part=label(SLOTS[slot],'Muted');self.part.setStyleSheet('font-size:10px');top.addWidget(self.part);top.addStretch()
+        self.visibility=button('隐藏',lambda:self.controller.toggle_slot_visibility(self.slot),ghost=True)
+        self.visibility.setFixedHeight(22);self.visibility.setStyleSheet('font-size:11px;padding:2px 6px');top.addWidget(self.visibility)
         self.clear=button('×',lambda:self.remove());self.clear.setProperty('clear',True);self.clear.setFixedSize(16,16);top.addWidget(self.clear);content.addLayout(top)
         self.name=label('未装备');self.name.setStyleSheet('font-size:12px;font-weight:500');content.addWidget(self.name)
         dyes=horizontal(spacing=5);self.dyes=[]
@@ -127,15 +129,19 @@ class OutfitCard(W.QFrame):
         self.icon.setPixmap(slot_icon(slot));self.clear.hide()
         for b in self.dyes:b.setEnabled(False)
     def remove(self):
+        self.controller.hidden_equipment.pop(self.slot,None)
         self.controller.state['equipment'][self.slot]={'item_id':None,'first':0,'second':0}
         self.controller.update_outfit();self.controller.queue_render()
     def mousePressEvent(self,event):
         if event.button()==C.Qt.LeftButton:self.selected.emit(self.slot)
         super().mousePressEvent(event)
-    def display(self,choice,item,selected):
-        key=(choice['item_id'],choice['first'],choice['second'],item.get('icon_id'),item.get('name'),item.get('dye_count'),selected,self.width(),tuple(item.get('tags',[])))
+    def display(self,choice,item,selected,hidden=False):
+        key=(choice['item_id'],choice['first'],choice['second'],item.get('icon_id'),item.get('name'),item.get('dye_count'),selected,self.width(),tuple(item.get('tags',[])),hidden)
         if getattr(self,'display_key',None)==key:return
         self.display_key=key
+        self.visibility.setVisible(bool(choice['item_id']));self.visibility.setText('显示'if hidden else'隐藏')
+        self.visibility.setToolTip('恢复这件装备及其染色'if hidden else'暂时取消试穿，保留装备与染色以便恢复')
+        self.part.setText(SLOTS[self.slot]+(' · 已隐藏'if hidden else''))
         self.setProperty('selected',selected);polish(self)
         text=item.get('name','未装备');tooltip=text+'\n标签：'+(' / '.join(item.get('tags',[]))or'暂无标签')if item else text
         self.setToolTip(tooltip);self.name.setToolTip(tooltip);self.icon.setToolTip(tooltip)
@@ -147,7 +153,8 @@ class OutfitCard(W.QFrame):
             stain=choice['first'if ch==1 else'second'];dye=self.controller.dye_by_id.get(stain)
             b.setEnabled(count>=ch);name=dye['name']if dye and stain else'原色'
             color='#%06x'%(dye['color']&0xffffff)if dye and stain else'#91a0b4'
-            b.setText(f'{ch}区');b.setIcon(swatch_icon(color));b.setIconSize(C.QSize(10,10))
+            b.setEnabled(count>=ch and not hidden)
+            b.setText(f'{ch}区'if count>=ch else f'{ch}区 /');b.setIcon(swatch_icon(color if count>=ch else'#39404b',unavailable=count<ch));b.setIconSize(C.QSize(12,12))
             b.setToolTip(f'第{ch}染色区 · '+(name if count>=ch else'不可染色'))
 
 
@@ -182,7 +189,7 @@ class QtClient(NativeClient):
         self.session_timer=None;self.accept_baseline=None;self.boot=None;self.ready=False
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
         self.catalog_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeSearch')
-        self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict()
+        self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict();self.hidden_equipment={}
         self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
         self.page_index=0;self.page_count=1;self.catalog_total=0
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None;self.group=ARMOR
@@ -219,8 +226,8 @@ class QtClient(NativeClient):
         header=W.QFrame();header.setObjectName('Header');header.setFixedHeight(86);h=horizontal(header,22,14)
         brand=vertical(spacing=0);brand.addWidget(label('GLAMOUR ATELIER','Eyebrow'));brand.addWidget(label('幻衣间','Brand'));h.addLayout(brand)
         h.addSpacing(15);self.tagline=label('自由搭配，每一种可能。','Muted');h.addWidget(self.tagline);h.addStretch()
-        self.preset_combo=ComboBox();self.preset_combo.setMinimumWidth(190);self.preset_combo.setMaximumWidth(255)
-        self.preset_combo.setToolTip('角色外观预设');self.preset_combo.activated.connect(self.select_preset);h.addWidget(self.preset_combo)
+        self.preset_combo=PresetComboBox();self.preset_combo.setMinimumWidth(190);self.preset_combo.setMaximumWidth(280)
+        self.preset_combo.setToolTip('输入名称或文件名搜索预设，选择后切换角色');self.preset_combo.activated.connect(self.select_preset);h.addWidget(self.preset_combo)
         h.addWidget(button('编辑外观',self.open_editor));h.addWidget(button('新建预设',self.create_preset,ghost=True))
         h.addWidget(button('导入预设',self.import_preset,ghost=True));self.tagline.hide()
         h.addWidget(button('我的搭配',self.saved_dialog,ghost=True));h.addWidget(button('保存搭配',self.save_outfit,primary=True))
@@ -354,6 +361,10 @@ class QtClient(NativeClient):
             if self.effect_deferred is not None:return False
             self.effect_deferred=(fn,callback,arguments,deepcopy(self.state),self.generation)
             self.loading_kind='正在准备预览…';self.sync_loading();return True
+        if fn==self.engine.run and arguments and arguments[0]=='outfit':
+            original_callback=callback
+            def callback(result):
+                self.hidden_equipment.clear();original_callback(result)
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
@@ -439,18 +450,38 @@ class QtClient(NativeClient):
     def refresh_boot(self):
         self.boot=self.engine.bootstrap();self.dye_by_id={d['stain_id']:d for d in self.boot['dyes']}
         self.preset_ids=[p['id']for p in self.boot['presets']];self.preset_combo.blockSignals(True);self.preset_combo.clear()
-        for p in self.boot['presets']:self.preset_combo.addItem(p['name'],p['id']);self.preset_combo.setItemData(self.preset_combo.count()-1,p['file_name'],C.Qt.ToolTipRole)
+        for p in self.boot['presets']:
+            text=p['name']+' · '+p['file_name']if p['name']!=p['file_name']else p['name']
+            self.preset_combo.addItem(text,p['id']);self.preset_combo.setItemData(self.preset_combo.count()-1,text,C.Qt.ToolTipRole)
         if self.boot['preset_id']in self.preset_ids:self.preset_combo.setCurrentIndex(self.preset_ids.index(self.boot['preset_id']))
+        self.preset_combo.lineEdit().setCursorPosition(0)
         self.preset_combo.blockSignals(False);mismatch=not self.boot['appearance']['model_matches_file']
         self.appearance_label.setText('模型修改尚未保存到预设'if mismatch else'外观与已保存预设一致')
         self.appearance_label.setStyleSheet('color:'+('#dfbe88'if mismatch else MUTED)+';font-size:11px')
 
+    def toggle_slot_visibility(self,slot):
+        if not self.ready or self.job is not None:return
+        if slot in self.hidden_equipment:
+            self.state['equipment'][slot]=self.hidden_equipment.pop(slot)
+        else:
+            choice=self.state['equipment'][slot]
+            if choice['item_id']is None:return
+            self.hidden_equipment[slot]=deepcopy(choice)
+            self.state['equipment'][slot]={'item_id':None,'first':0,'second':0}
+        self.update_outfit();self.queue_render()
+
+    def clear_outfit(self):
+        self.hidden_equipment.clear();super().clear_outfit()
+
     def update_outfit(self):
         if not self.boot:return
         for slot,choice in self.state['equipment'].items():
+            if choice['item_id']:self.hidden_equipment.pop(slot,None)
+            hidden=slot in self.hidden_equipment
+            choice=self.hidden_equipment.get(slot,choice)
             if choice['item_id']and choice['item_id']not in self.items:
                 result=equipment_rows(slot,str(choice['item_id']),library=self.library);self.items.update({r['item_id']:r for r in result['items']})
-            self.outfit_cards[slot].display(choice,self.items.get(choice['item_id'],{}),slot==self.slot_key())
+            self.outfit_cards[slot].display(choice,self.items.get(choice['item_id'],{}),slot==self.slot_key(),hidden)
         self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values()))+' 件')
         self.head_check.blockSignals(True);self.head_check.setChecked(self.state['head_visible']);self.head_check.blockSignals(False)
         self.effects_check.blockSignals(True);self.effects_check.setChecked(self.state['effects_visible']);self.effects_check.blockSignals(False)
