@@ -381,7 +381,9 @@ class DemoEngine:
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
             self.library.seed(self.default_preset,default=True)
-            from builtin_presets import seed_elezen_examples,seed_au_ra_male_examples,seed_hyur_male_examples,seed_hyur_female_examples,seed_miqote_examples,seed_miqote_male_examples,seed_viera_examples,seed_viera_male_examples
+            from builtin_presets import seed_roegadyn_examples,seed_lalafell_examples,seed_elezen_examples,seed_au_ra_male_examples,seed_hyur_male_examples,seed_hyur_female_examples,seed_miqote_examples,seed_miqote_male_examples,seed_viera_examples,seed_viera_male_examples
+            seed_roegadyn_examples(self.library)
+            seed_lalafell_examples(self.library)
             seed_elezen_examples(self.library)
             seed_au_ra_male_examples(self.library)
             seed_hyur_male_examples(self.library)
@@ -578,7 +580,7 @@ class DemoEngine:
         if race_for_tribe(tribe)!=p['race']:raise ValueError('部族必须属于当前预设种族')
         return {**record,'id':key,'file_name':path.name,'directory':str(self.library.root),
             'fields':self.appearance_options.fields(tribe,p['gender']),'appearance':self.appearance_state(key),
-            'scope':'国服人族、敖龙族女性及猫魅族、维埃拉族男女角色；发型列表来自当前创建菜单'}
+            'scope':'已适配的国服角色预设；发型与捏脸选项来自当前客户端创建菜单'}
 
     def appearance_changes(self,payload):
         from presets import decode,change_bytes,digest
