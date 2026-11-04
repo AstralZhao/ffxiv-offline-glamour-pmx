@@ -115,6 +115,11 @@ class LoadingSpinner(W.QWidget):
 
 
 class ComboBox(W.QComboBox):
+    def wheelEvent(self,event):
+        # Let the surrounding page scroll without changing the selected value.
+        # The popup's item view handles its own wheel scrolling separately.
+        event.ignore()
+
     def paintEvent(self,event):
         super().paintEvent(event);painter=G.QPainter(self);painter.setRenderHint(G.QPainter.Antialiasing)
         painter.setPen(G.QPen(G.QColor('#aab7c8'),1.4));x=self.width()-16;y=self.height()/2
