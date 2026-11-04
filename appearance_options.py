@@ -48,7 +48,8 @@ class AppearanceOptions:
         base=18432+((tribe-1)*2+gender)*5120
         colors={'skin_color':(base,4,palettes[8]),'hair_color':(base+1024,8,palettes[10]),
             'highlight_color':(1024,4,palettes[10]),'left_eye_color':(0,4,palettes[9]),'right_eye_color':(0,4,palettes[9]),
-            'facial_feature_color':(3072,4,palettes[13]),'lip_color_or_fur_pattern':(2048,4,palettes[20]),'face_paint_color':(4096,4,palettes[25])}
+            'facial_feature_color':(3072,4,palettes[13]),'face_paint_color':(4096,4,palettes[25])}
+        if race!=7:colors['lip_color_or_fur_pattern']=(2048,4,palettes[20])
         for field,(offset,stride,count)in colors.items():
             ids=list(range(count))
             if field in('lip_color_or_fur_pattern','face_paint_color'):ids+=list(range(128,128+count))
@@ -57,8 +58,15 @@ class AppearanceOptions:
                 rgb=self.cmp[offset+value*stride:offset+value*stride+3]
                 if len(rgb)!=3:raise ValueError('本机颜色表范围不正确')
                 choices.append({'value':value,'label':str(value),'color':'#'+rgb.hex()})
-            result.append({'field':field,'label':LABELS[field],'kind':'color','mask':255,'choices':choices})
+            text='毛色'if race==7 and field=='hair_color'else LABELS[field]
+            result.append({'field':field,'label':text,'kind':'color','mask':255,'choices':choices})
         customs=dict(self.data.rows('CharaMakeCustomize'))
+        if race==7:
+            i=next(i for i in range(28)if row[f'CharaMakeStruct[{i}].Menu']and row[f'CharaMakeStruct[{i}].Customize']==20)
+            pre=f'CharaMakeStruct[{i}].'
+            if row[pre+'SubMenuType']!=1 or row[pre+'SubMenuNum']!=5:raise ValueError('硌狮族毛纹菜单已变化')
+            result.append({'field':'lip_color_or_fur_pattern','label':'毛纹','kind':'select','mask':255,
+                'choices':[{'value':row[pre+f'SubMenuGraphic[{j}]'],'label':f'毛纹 {j+1}','icon_id':row[pre+f'SubMenuParam[{j}]']}for j in range(5)]})
         paints=[]
         for i in range(28):
             pre=f'CharaMakeStruct[{i}].'

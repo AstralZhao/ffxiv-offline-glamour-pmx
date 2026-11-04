@@ -103,6 +103,9 @@ class Accessories:
         if self.core.race in(1701,1801):
             from preset_head import viera_earrings_visible
             show['Ears']=viera_earrings_visible(flags)
+        if self.core.race in(1501,1601):
+            from preset_head import hrothgar_earrings_visible
+            show['Ears']=hrothgar_earrings_visible(flags)
         result=copy.copy(scene);result.meshes=list(scene.meshes)
         for slot,c in selected.items():
             # Hidden accessories retain valid choices/dyes, but their model,

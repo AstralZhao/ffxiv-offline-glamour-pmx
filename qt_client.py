@@ -1038,6 +1038,7 @@ class AppearanceDialog(W.QDialog):
                 control.activated.connect(lambda index,o=option,w=control:c.editor_change(o,w.itemData(index)))
             self.forms[group].addRow(option['label'],control)
         toggles=[('highlight_flags',128,'启用挑染'),('mouth',128,'启用唇色'),('eyes',128,'瞳孔形态选项'),('face_paint',128,'镜像彩绘')]+[('facial_features',1<<i,f'面部特征 {i+1}')for i in range(7)]
+        if c.draft['race']==7:toggles=[t for t in toggles if t[:2]!=('mouth',128)]
         for field,bit,text in toggles:
             control=W.QCheckBox(text);control.setChecked(bool(c.draft[field]&bit))
             def toggle(checked,f=field,b=bit):

@@ -425,6 +425,7 @@ class NativeClient:
                 combo.current(next(j for j,c in enumerate(choices)if c['value']==value));combo.grid(row=i,column=1,sticky='ew',padx=8)
                 combo.bind('<<ComboboxSelected>>',lambda e,o=option,c=choices,w=combo:self.editor_change(o,c[w.current()]['value']))
         toggles=[('highlight_flags',128,'启用挑染'),('mouth',128,'启用唇色'),('eyes',128,'瞳孔形态选项'),('face_paint',128,'镜像彩绘')]
+        if self.draft['race']==7:toggles=[t for t in toggles if t[:2]!=('mouth',128)]
         toggles += [('facial_features',1<<i,f'面部特征 {i+1}')for i in range(7)]
         for j,(field,bit,label)in enumerate(toggles,len(self.editor_record['fields'])):
             variable=tk.BooleanVar(value=bool(self.draft[field]&bit))

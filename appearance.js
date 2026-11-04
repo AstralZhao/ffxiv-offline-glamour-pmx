@@ -18,7 +18,7 @@ function appearanceFields(){
   else control=`<div class="appearance-select">${selected.icon_id?`<img src="/api/icons/${selected.icon_id}.png" alt="" width="38" height="38">`:''}<select data-appearance-field="${option.field}">${choices.map(c=>`<option value="${c.value}" ${c.value===value?'selected':''}>${esc(c.label)}</option>`).join('')}</select></div>`;
   return `<label class="appearance-field"><span>${esc(option.label)}</span>${control}</label>`;
  }).join('');
- const toggles=[['highlight_flags',128,'启用挑染'],['mouth',128,'启用唇色'],['eyes',128,'瞳孔形态选项'],['face_paint',128,'镜像彩绘']];
+ const toggles=[['highlight_flags',128,'启用挑染'],['mouth',128,'启用唇色'],['eyes',128,'瞳孔形态选项'],['face_paint',128,'镜像彩绘']].filter(([field])=>appearanceDraft.race!==7||field!=='mouth');
  $('#appearance-flags').innerHTML=`<div class="appearance-toggles">${toggles.map(([field,bit,label])=>`<label><input type="checkbox" data-appearance-bit="${field}" data-bit="${bit}" ${appearanceDraft[field]&bit?'checked':''}>${label}</label>`).join('')}</div><strong>面部特征</strong><div class="appearance-toggles">${Array.from({length:7},(_,i)=>`<label><input type="checkbox" data-appearance-bit="facial_features" data-bit="${1<<i}" ${appearanceDraft.facial_features&(1<<i)?'checked':''}>特征 ${i+1}</label>`).join('')}</div>`;
  appearanceChangeStatus();
 }
