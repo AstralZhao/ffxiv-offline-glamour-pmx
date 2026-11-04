@@ -886,7 +886,13 @@ class QtClient(NativeClient):
 
     def editor_change(self,option,value):
         field=option['field'];self.draft[field]=(self.draft[field]&~option['mask'])|value
-        if field=='face'and self.editor:self.editor.refresh_icons()
+        if field=='face'and self.editor:
+            from cn_barber_hair import hair_compatible
+            hair=next(o for o in self.editor_record['fields']if o['field']=='hair')
+            current=next((choice for choice in hair['choices']if choice['value']==self.draft['hair']),None)
+            if current is not None and not hair_compatible(current,self.draft):
+                self.draft['hair']=next(choice['value']for choice in hair['choices']if hair_compatible(choice,self.draft))
+            self.editor.build_fields()
         if field=='tribe':
             self.editor_menu_tribe=value
         self.editor.update_status()
@@ -1035,6 +1041,9 @@ class AppearanceDialog(W.QDialog):
             scroll.setWidget(content);self.tabs.addTab(scroll,name);self.forms[name]=form
         for option in c.editor_record['fields']:
             field=option['field'];choices=list(option['choices']);value=c.draft[field]&option['mask']
+            if field=='hair':
+                from cn_barber_hair import hair_compatible
+                choices=[choice for choice in choices if hair_compatible(choice,c.draft)]
             if not any(choice['value']==value for choice in choices):choices.append({'value':value,'label':str(value)+'（当前预设）'})
             if field=='hair':choices.sort(key=lambda choice:choice['value'])
             group='颜色与彩绘'if option['kind']=='color'or field=='face_paint'else'发型与体型'if field in('tribe','hair','height','bust','tail_or_ear_type','ear_muscle_tail_size')else'五官细节'
@@ -1055,6 +1064,7 @@ class AppearanceDialog(W.QDialog):
             else:
                 control=ComboBox()
                 control.setProperty('appearance_field',field)
+                if field=='hair':control.setToolTip(f'共 {len(choices)} 款；包含理发店解锁发型，无需游戏内已解锁。按当前种族、性别和脸型筛选。')
                 if any(choice.get('icon_id')for choice in choices):
                     control.setIconSize(C.QSize(44,44));control.setMinimumHeight(50);control.setMaxVisibleItems(7)
                     control.setStyleSheet('QComboBox { combobox-popup:0; }')

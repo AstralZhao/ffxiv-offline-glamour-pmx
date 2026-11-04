@@ -585,7 +585,7 @@ class DemoEngine:
         if race_for_tribe(tribe)!=p['race']:raise ValueError('部族必须属于当前预设种族')
         return {**record,'id':key,'file_name':path.name,'directory':str(self.library.root),
             'fields':self.appearance_options.fields(tribe,p['gender']),'appearance':self.appearance_state(key),
-            'scope':'已适配的国服角色预设；发型与捏脸选项来自当前客户端创建菜单'}
+            'scope':'发型列表包含当前角色适用的国服创建和理发店款式，不检查游戏内解锁状态；其他捏脸选项来自当前客户端菜单'}
 
     def appearance_changes(self,payload):
         from presets import decode,change_bytes,digest

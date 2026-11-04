@@ -5,6 +5,7 @@ from build_cn_catalog import VerifiedData
 from audit_preset_hair_sources import hair_menu
 from probe_appearance_presets import FIELDS
 from cn_character import race_for_tribe,CLANS
+from cn_barber_hair import BarberHairMenus,hair_compatible
 
 LABELS={'tribe':'部族','hair':'发型','face':'脸型与龙角','height':'身高','bust':'胸围','ear_muscle_tail_size':'尾巴长度',
     'tail_or_ear_type':'尾巴形状','eyebrows':'眉型','eyes':'眼型','nose':'鼻型','jaw':'轮廓','mouth':'嘴型',
@@ -19,6 +20,7 @@ class AppearanceOptions:
         self.data=VerifiedData(pack,json.loads((Path(root)/'artifacts/cn-data/schema-mapping.json').read_bytes()))
         profile=json.loads((Path(root)/'docs/cn-customization-profile.json').read_bytes())
         self.cmp=pack.read(profile['cmp_path'])
+        self.barber=None
 
     def fields(self,tribe,gender=1):
         key=(tribe,gender)
@@ -53,8 +55,15 @@ class AppearanceOptions:
             result.append(record)
         p={'race':race,'gender':gender,'body_type':1,'tribe':tribe}
         hair=hair_menu(self.data,p)
+        if self.barber is None:self.barber=BarberHairMenus(self.data)
+        barber=self.barber.menu(p);by_id={c['hair_id']:c for c in barber['choices']}
+        creation={c['hair_id']for c in hair['choices']}
+        if not creation<=by_id.keys():raise ValueError('Creation hairstyles absent from CN barber identity')
+        # Preserve reviewed creation defaults; only the UI sorts by numeric ID.
+        order=[c['hair_id']for c in hair['choices']]+[c['hair_id']for c in barber['choices']if c['hair_id']not in creation]
         result.append({'field':'hair','label':'发型','kind':'select','mask':255,
-            'choices':[{'value':c['hair_id'],'label':f"发型 {c['hair_id']}",'icon_id':c['icon_id']}for c in hair['choices']]})
+            'choices':[{'value':identifier,'label':f'发型 {identifier}','icon_id':by_id[identifier]['icon_id'],
+                'required_face':by_id[identifier]['required_face'],'unlock_link':by_id[identifier]['unlock_link']}for identifier in order]})
         palettes={}
         for i in range(28):
             pre=f'CharaMakeStruct[{i}].'
@@ -95,9 +104,15 @@ class AppearanceOptions:
         if updated['race']in(1,5)and updated['tail_or_ear_type']!=original['tail_or_ear_type']:raise ValueError('当前种族没有尾型选项')
         for option in self.fields(updated['tribe'],updated['gender']):
             field=option['field'];value=updated[field]
+            if field=='hair'and updated['face']!=original['face']:
+                choice=next((c for c in option['choices']if c['value']==value),None)
+                if choice is not None and not hair_compatible(choice,updated):raise ValueError('该发型不适用于当前脸型')
             # Keep a valid imported non-menu/unlocked selection when unchanged.
             if value==original[field]and original['tribe']==updated['tribe']:continue
             if value&option['mask']not in{c['value']for c in option['choices']}:
                 raise ValueError(option['label']+'不在当前国服选项中')
+            if field=='hair':
+                choice=next(c for c in option['choices']if c['value']==value)
+                if not hair_compatible(choice,updated):raise ValueError('该发型不适用于当前脸型')
         if(updated['highlight_flags']^original['highlight_flags'])&127:raise ValueError('挑染标记只支持修改启用选项')
         if(updated['facial_features']^original['facial_features'])&128:raise ValueError('面部特征标记范围不正确')
