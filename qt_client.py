@@ -369,7 +369,7 @@ class QtClient(NativeClient):
     def sync_loading(self):
         startup=self.engine is None or not self.engine.ready.done();busy=not self.closing and(startup or self.job is not None or self.effect_deferred is not None)
         text='正在加载角色…'if startup else self.loading_kind
-        prominent=busy and text not in('正在调整视角…','正在保存预设…')
+        prominent=busy and text not in('正在调整视角…','正在保存预设…')and not getattr(self,'live_edit_job',False)
         self.loading_label.setText(text);self.loading_panel.setVisible(prominent)
         self.loading_spinner.set_running(prominent);self.footer_spinner.set_running(busy);self.status_dot.setVisible(not busy)
         if busy:self.status_label.setText(text)
@@ -393,6 +393,7 @@ class QtClient(NativeClient):
         if self.present_requested:self.request_present()
         self.sync_loading()
         if self.editor and self.job is None:
+            self.live_edit_job=False
             self.editor.set_busy(False)
             if '未完成'in self.raw_status:
                 self.editor.status.setText('操作未完成，已保留原模型和预设。');self.editor.status.setToolTip(self.raw_status)
@@ -877,28 +878,54 @@ class QtClient(NativeClient):
         key=key or self.boot['preset_id']
         def done(record):
             self.editor_record=record;self.draft=deepcopy(record['appearance']['rendered_parameters']if record['appearance']['is_preview']else record['parameters'])
+            self.editor_menu_tribe=None
             self.editor=AppearanceDialog(self);self.show_dialog(self.editor)
         self.submit(self.engine.describe_appearance,done,key)
 
     def editor_change(self,option,value):
         field=option['field'];self.draft[field]=(self.draft[field]&~option['mask'])|value
         if field=='tribe':
-            def done(record):self.editor_record['fields']=record['fields'];self.editor.build_fields()
-            self.submit(self.engine.describe_appearance,done,self.editor_record['id'],value)
+            self.editor_menu_tribe=value
         self.editor.update_status()
+        if field=='tribe':self.editor.preview_timer.start(120)
+        else:self.queue_appearance_preview()
 
-    def submit_editor(self,preview):
+    def queue_appearance_preview(self):
+        if self.editor and self.editor.realtime.isChecked():self.editor.preview_timer.start(120)
+
+    def flush_appearance_preview(self):
+        if not self.editor or not self.editor.isVisible():return
+        if self.job is not None:self.editor.preview_timer.start(80);return
+        tribe=getattr(self,'editor_menu_tribe',None)
+        if tribe is not None:
+            self.editor_menu_tribe=None
+            def done(record):
+                if self.editor and self.draft['tribe']==tribe:
+                    self.editor_record['fields']=record['fields'];self.editor.build_fields()
+                self.queue_appearance_preview()
+            self.submit(self.engine.describe_appearance,done,self.editor_record['id'],tribe);return
+        if not self.editor.realtime.isChecked():return
+        if self.engine.active_preset==self.editor_record['id']and self.draft==self.engine.rendered_parameters:return
+        self.submit_editor(True,live=True)
+
+    def submit_editor(self,preview,*,live=False):
         if self.job:return
         record=self.editor_record;draft=deepcopy(self.draft)
         payload={'id':record['id'],'sha256':record['sha256'],'changes':{k:v for k,v in draft.items()if v!=record['parameters'][k]}}
         def done(result):
             self.refresh_boot()
-            if preview:self.accept_result(result);self.editor.accept();self.editor=None
+            if preview:
+                self.accept_result(result)
+                if self.editor:
+                    self.editor.set_busy(False);self.editor.update_status()
+                    if self.draft!=draft:self.queue_appearance_preview()
             else:
                 record['parameters']=deepcopy(result['preset']['parameters']);record['sha256']=result['preset']['sha256']
-                self.editor.update_status();self.schedule_session_save();self.message.set('已保存预设，模型保持原样')
+                self.editor.update_status();self.schedule_session_save()
+                self.message.set('已保存预设，模型保持原样'if result.get('cache_ready',True)else'预设已保存，缓存准备未完成：'+str(result.get('cache_error','')))
         self.editor.status.setText('正在更新角色…'if preview else'正在保存预设…')
-        self.editor.set_busy(True)
+        self.editor.set_busy(True,live=live)
+        self.live_edit_job=live
         self.submit(self.engine.run,done,'appearance_preview'if preview else'appearance_save',payload)
 
     def save_outfit(self):
@@ -991,6 +1018,9 @@ class AppearanceDialog(W.QDialog):
         self.setMinimumSize(590,600);outer=vertical(self,22,14)
         outer.addWidget(label('角色外观','Title'));outer.addWidget(label(controller.editor_record['file_name']+' · 软件预设库','Muted'))
         self.tabs=W.QTabWidget();outer.addWidget(self.tabs,1);self.build_fields()
+        self.preview_timer=C.QTimer(self);self.preview_timer.setSingleShot(True);self.preview_timer.timeout.connect(controller.flush_appearance_preview)
+        self.realtime=W.QCheckBox('实时预览（修改不会自动保存）');self.realtime.setChecked(True);outer.addWidget(self.realtime)
+        self.realtime.toggled.connect(lambda active:controller.queue_appearance_preview()if active else self.preview_timer.stop())
         progress=horizontal();self.spinner=LoadingSpinner(18);progress.addWidget(self.spinner)
         self.status=label('','Warning');progress.addWidget(self.status,1);outer.addLayout(progress)
         actions=horizontal();actions.addWidget(button('关闭',self.reject,ghost=True));actions.addStretch()
@@ -1001,8 +1031,8 @@ class AppearanceDialog(W.QDialog):
     def reject(self):
         if self.c.job is None:super().reject()
 
-    def set_busy(self,busy):
-        self.tabs.setEnabled(not busy);self.save_button.setEnabled(not busy);self.update_button.setEnabled(not busy)
+    def set_busy(self,busy,*,live=False):
+        self.tabs.setEnabled(not busy or live);self.save_button.setEnabled(not busy);self.update_button.setEnabled(not busy)
 
     def build_fields(self):
         active=self.tabs.currentIndex()
@@ -1042,7 +1072,7 @@ class AppearanceDialog(W.QDialog):
         for field,bit,text in toggles:
             control=W.QCheckBox(text);control.setChecked(bool(c.draft[field]&bit))
             def toggle(checked,f=field,b=bit):
-                c.draft[f]=(c.draft[f]|b)if checked else(c.draft[f]&~b);self.update_status()
+                c.draft[f]=(c.draft[f]|b)if checked else(c.draft[f]&~b);self.update_status();c.queue_appearance_preview()
             control.toggled.connect(toggle);self.forms['颜色与彩绘'if field in('highlight_flags','face_paint')else'五官细节'].addRow('',control)
         if active>=0:self.tabs.setCurrentIndex(active)
 

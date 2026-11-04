@@ -333,6 +333,9 @@ class DemoEngine:
                         return super().render_plan(scene,mesh,role)
                     from shader_programs import equipment_pass
                     clip=self.native_material_alpha_clip()if self.native_fringe_states else False
+                    from prepared_programs import selected_plan
+                    prepared=selected_plan(mesh,role,clip)
+                    if prepared is not None:return prepared
                     keys=mesh['material']['shader_keys'];count=mesh['vertices']['weights'].shape[1]
                     key=('demo_gear_plan',mesh['shader_path'],tuple(sorted(keys.items())),count,role,clip)
                     if key not in self.cache:self.cache[key]=equipment_pass(scene.packages[mesh['shader_path']],keys,count,role,alpha_clip=clip)
@@ -372,7 +375,8 @@ class DemoEngine:
                         selected={**mesh,'extra_constants':{**mesh.get('extra_constants',{}),
                             'g_GlassOffscreenParam':struct.pack('<4f',mode,0,0,0)}}
                         self.draw_mesh(scene,selected,shared,view)
-            self.pack=SqPack(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
+            from source_session import SourceSession
+            self.pack=SourceSession(self.game);self.store=PreparedPresetStore(self.pack);self.hair=StaticHairScenes()
             from character_cache import CharacterCache
             self.characters=CharacterCache(self.pack,self.store,self.hair)
             from gpu_selection import preferred_adapter
@@ -614,8 +618,14 @@ class DemoEngine:
     def save_appearance(self,payload):
         key,path,_=self.appearance_changes(payload)
         self.library.replace(path,payload['changes'],payload['sha256']);self.refresh_presets()
-        if key==getattr(self,'active_preset',None):self.appearance_is_preview=False
-        return {'preset':self.presets[key][1],'appearance':self.appearance_state(key),'model_updated':False}
+        cache_ready=True;cache_error=None
+        if key==getattr(self,'active_preset',None):
+            self.appearance_is_preview=False
+            try:self.characters.persist_saved(path,self.character)
+            except Exception as error:
+                cache_ready=False;cache_error=str(error);self.write_error(error)
+        return {'preset':self.presets[key][1],'appearance':self.appearance_state(key),'model_updated':False,
+            'cache_ready':cache_ready,'cache_error':cache_error}
 
     def appearance_state(self,key=None):
         active=getattr(self,'active_preset',None);key=active if key is None else key
