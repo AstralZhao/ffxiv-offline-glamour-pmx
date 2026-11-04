@@ -521,6 +521,7 @@ class QtClient(NativeClient):
                 if getattr(card,'display_key',None)and card.display_key[3]in changed:card.display_key=None
             for dialog in self.dialogs:
                 if getattr(dialog,'icon_id',None)in changed:dialog.icon_label.setPixmap(self.icons[dialog.icon_id].pixmap(60,60))
+                if dialog is not self.editor and hasattr(dialog,'refresh_icons'):dialog.refresh_icons(changed)
             self.update_outfit()
         if self.pending_icons:self.icon_timer=self.root.after(30,self.poll_icons)
 
@@ -939,21 +940,8 @@ class QtClient(NativeClient):
 
     def saved_dialog(self):
         if not self.boot:return
-        dialog=W.QDialog(self.window);dialog.setWindowTitle('我的搭配');dialog.resize(440,560);layout=vertical(dialog,22,14)
-        layout.addWidget(label('我的搭配','Title'));layout.addWidget(label('让喜欢的搭配随时回来','Muted'))
-        scroll=W.QScrollArea();scroll.setWidgetResizable(True);content=W.QWidget();rows=vertical(content,0,10);scroll.setWidget(content);layout.addWidget(scroll,1)
-        saved=self.engine.saved()
-        for record in saved:
-            def choose(r=record):
-                if self.job:return
-                dialog.accept()
-                def load():
-                    if self.engine.active_preset!=r['preset_id']:self.engine.run('preset',{'id':r['preset_id']})
-                    return self.engine.render(r['state'])
-                self.submit(load,self.accept_result)
-            b=button(record['name']+'\n'+record['time'],choose);b.setMinimumHeight(66);rows.addWidget(b)
-        if not saved:rows.addWidget(label('还没有保存的搭配。完成搭配后，点击“保存搭配”。','Muted'))
-        rows.addStretch();self.show_dialog(dialog)
+        from qt_saved_outfits import SavedOutfitsDialog
+        self.show_dialog(SavedOutfitsDialog(self))
 
 
 class EquipmentDetailsDialog(W.QDialog):

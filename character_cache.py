@@ -73,7 +73,7 @@ class CharacterCache:
         self.live_root=self.root/'live'/uuid.uuid4().hex;self.live_directories=set()
         code,profiles=application_files();native=native_static_assets()
         ui_only={'qt_client','qt_theme','qt_runtime','qt_settings','launch','client','settings','catalogue','catalogue_cache',
-            'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection','effect_clock','appearance_options'}
+            'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection','effect_clock','appearance_options','qt_saved_outfits'}
         self.identity={'format':3,'client':(pack.game_root/'game/ffxivgame.ver').read_text().strip(),
             'numpy_version':np.__version__,
             'executable_sha256':digest((pack.game_root/'game/ffxiv_dx11.exe').read_bytes()),

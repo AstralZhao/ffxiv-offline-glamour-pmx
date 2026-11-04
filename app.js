@@ -110,7 +110,7 @@ function installEvents(){
  };
 
  $('#save-open').onclick=()=>{$('#save-name').value='';$('#save-dialog').showModal();$('#save-name').focus()};$('#save-confirm').onclick=async()=>{try{boot.saved=await request('/api/save',{name:$('#save-name').value,state:good});savedList();$('#save-dialog').close();toast('已保存到“我的搭配”')}catch(e){toast(e.detail||e.message)}};
- $('#saved-open').onclick=()=>{savedList();$('#saved-dialog').showModal()};$('#saved-list').onclick=async e=>{const b=e.target.closest('[data-saved]');if(!b||busy)return;const r=boot.saved.find(r=>r.id===b.dataset.saved);$('#saved-dialog').close();if(r.preset_id!==boot.preset_id){await applyPreset(r.preset_id);if(r.preset_id!==boot.preset_id)return}state=clone(r.state);await ensureItems(state.equipment);changed()};
+ $('#saved-open').onclick=()=>{savedList();$('#saved-dialog').showModal()};$('#saved-list').onclick=async e=>{const b=e.target.closest('[data-saved]');if(!b||busy)return;const r=boot.saved.find(r=>r.id===b.dataset.saved);$('#saved-dialog').close();state={...state,equipment:clone(r.state.equipment)};await ensureItems(state.equipment);changed()};
  $('#about-open').onclick=()=>$('#about-dialog').showModal();document.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>document.getElementById(b.dataset.close).close());$('#error-dismiss').onclick=()=>$('#error-bar').hidden=true;
  $('#shutdown').onclick=async()=>{await request('/api/shutdown',{});$('#about-dialog').close();ready=false;$('#loading').hidden=false;$('#loading-message').textContent='试衣服务已关闭';$('#loading p').textContent='可以关闭这个页面了。游戏不受影响。';statusBusy(false)};
 }

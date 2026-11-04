@@ -643,6 +643,7 @@ class DemoEngine:
             elif operation=='create':result=self.create_preset(payload)
             elif operation=='appearance_preview':result=self.preview_appearance(payload)
             elif operation=='appearance_save':result=self.save_appearance(payload)
+            elif operation=='outfit':result=self.apply_saved_outfit(payload)
             else:raise ValueError('未知操作')
             if result.get('model_loaded')is False or self.character is None:return result
             with self.lock:self.status='ready';self.error=None;self.message='可以开始搭配了'
@@ -669,11 +670,39 @@ class DemoEngine:
         name=payload.get('name','').strip()[:32]
         if not name:raise ValueError('请为搭配起个名字')
         state=parse_state(payload['state']);rows=self.saved()
-        row={'id':secrets.token_hex(6),'name':name,'preset_id':self.active_preset,'state':state,
+        row={'id':secrets.token_hex(6),'name':name,'state':{'equipment':state['equipment']},
             'time':time.strftime('%Y-%m-%d %H:%M')}
-        rows=[row,*rows][:30];path=self.data/'outfits.json';temp=path.with_suffix('.tmp')
-        temp.write_text(json.dumps(rows,ensure_ascii=False,indent=2)+'\n',encoding='utf8');temp.replace(path)
+        rows=[row,*rows];self.write_saved(rows)
         return rows
+
+    def write_saved(self,rows):
+        path=self.data/'outfits.json';temp=path.with_name(path.name+'.'+secrets.token_hex(8)+'.tmp')
+        temp.write_text(json.dumps(rows,ensure_ascii=False,indent=2)+'\n',encoding='utf8');temp.replace(path)
+
+    def saved_record(self,identifier):
+        record=next((r for r in self.saved()if r['id']==identifier),None)
+        if record is None:raise ValueError('这套搭配已不存在，请刷新列表')
+        return record
+
+    def apply_saved_outfit(self,payload):
+        record=self.saved_record(payload['id'])
+        current=parse_state(payload.get('state',self.last['state']if self.last else self.initial_state))
+        current['equipment']=parse_state(record['state'])['equipment']
+        # Legacy preset_id/camera fields remain readable but have no effect
+        # when a saved outfit is applied to the currently previewed character.
+        return self.render(current)
+
+    def rename_saved_outfit(self,identifier,name):
+        name=name.strip()[:32]
+        if not name:raise ValueError('请为搭配起个名字')
+        rows=self.saved();record=next((r for r in rows if r['id']==identifier),None)
+        if record is None:raise ValueError('这套搭配已不存在，请刷新列表')
+        record['name']=name;self.write_saved(rows)
+
+    def delete_saved_outfit(self,identifier):
+        rows=self.saved();remaining=[r for r in rows if r['id']!=identifier]
+        if len(rows)==len(remaining):raise ValueError('这套搭配已不存在，请刷新列表')
+        self.write_saved(remaining)
 
     def close_gpu(self):
         if self.characters:self.characters.close()
@@ -738,7 +767,7 @@ class Handler(BaseHTTPRequestHandler):
             if route=='/api/shutdown':
                 self.send(200,{'closed':True});threading.Thread(target=self.server.shutdown,daemon=True).start();return
             operation={'/api/render':'render','/api/preset':'preset','/api/import':'import',
-                '/api/appearance/preview':'appearance_preview','/api/appearance/save':'appearance_save'}.get(route)
+                '/api/appearance/preview':'appearance_preview','/api/appearance/save':'appearance_save','/api/outfit':'outfit'}.get(route)
             if operation is None:return self.send(404,{'error':'操作不存在'})
             result=engine.pool.submit(engine.run,operation,payload).result(timeout=180);self.send(200,result)
         except NotImplementedError as error:

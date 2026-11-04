@@ -474,8 +474,7 @@ class NativeClient:
                 if self.job:return
                 dialog.destroy()
                 def load():
-                    if self.engine.active_preset!=r['preset_id']:self.engine.run('preset',{'id':r['preset_id']})
-                    return self.engine.render(r['state'])
+                    return self.engine.run('outfit',{'id':r['id'],'state':deepcopy(self.good)})
                 self.submit(load,self.accept_result)
             ttk.Button(dialog,text=row['name']+' · '+row['time'],command=choose).pack(fill='x',padx=12,pady=5)
         if not rows:ttk.Label(dialog,text='还没有收藏的搭配').pack(pady=30)
