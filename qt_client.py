@@ -252,9 +252,9 @@ class QtClient(NativeClient):
         self.min_level=W.QSpinBox();self.max_level=W.QSpinBox()
         for control,text in((self.min_level,'最低穿戴等级'),(self.max_level,'最高穿戴等级')):
             control.setRange(0,999);control.setSpecialValueText('不限');control.setButtonSymbols(W.QAbstractSpinBox.NoButtons)
-            control.setAlignment(C.Qt.AlignCenter);control.setMinimumWidth(58);control.setToolTip(text+'；0表示不限。按穿戴所需等级筛选，不是装备品级。')
+            control.setAlignment(C.Qt.AlignCenter);control.setFixedSize(58,30);control.setStyleSheet('padding:4px 6px');control.setToolTip(text+'；0表示不限。按穿戴所需等级筛选，不是装备品级。')
             control.setKeyboardTracking(False);control.valueChanged.connect(lambda _,c=control:self.level_changed(c))
-        levels.addWidget(self.min_level,1);levels.addWidget(label('—','Muted'));levels.addWidget(self.max_level,1)
+        levels.addWidget(self.min_level);levels.addWidget(label('—','Muted'));levels.addWidget(self.max_level);levels.addStretch()
         self.reset_filters_button=button('重置',self.reset_filters,ghost=True);self.reset_filters_button.setToolTip('清除搜索、等级、标签与仅收藏筛选')
         self.reset_filters_button.setStyleSheet('padding:7px 4px');levels.addWidget(self.reset_filters_button);left.addLayout(levels)
         filters=horizontal(spacing=6);self.tag_picker=SearchComboBox();self.tag_picker.setMinimumWidth(90);self.tag_picker.addItem('',None)
