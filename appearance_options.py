@@ -25,6 +25,8 @@ class AppearanceOptions:
         if key in self.cache:return self.cache[key]
         menu,_=self.store.geometry_menu(tribe,gender)
         race=race_for_tribe(tribe)
+        row=next(r for _,r in self.data.rows('CharaMakeType')if(r['Race'],r['Gender'],r['Tribe'])==(race,gender,tribe))
+        customs=dict(self.data.rows('CharaMakeCustomize'))
         result=[{'field':'tribe','label':'部族','kind':'select','mask':255,
             'choices':[{'value':v,'label':CLANS[v]}for v in CLANS if race_for_tribe(v)==race]}]
         for option in menu.options:
@@ -32,14 +34,27 @@ class AppearanceOptions:
             if race in(2,3):labels.update(ear_muscle_tail_size='耳朵长度',tail_or_ear_type='耳朵形状')
             if race==8:labels.update(ear_muscle_tail_size='耳朵长度',tail_or_ear_type='耳朵形状')
             if race in(1,5):labels.update(ear_muscle_tail_size='肌肉线条')
-            result.append({'field':option.field,'label':labels[option.field],'kind':'slider'if option.menu_type==5 else'select',
-                'mask':option.mask,'choices':[{'value':v,'label':str(v)if option.menu_type==5 else f'样式 {i}'}
-                    for i,v in enumerate(option.values,1)]})
+            choices=[]
+            for index,value in enumerate(option.values):
+                choice={'value':value,'label':str(value)if option.menu_type==5 else f'样式 {index+1}'}
+                if option.menu_type in(0,1):
+                    icon=row[f'CharaMakeStruct[{option.menu_index}].SubMenuParam[{index}]']
+                    # Type0 links shared examples that do not depict the
+                    # selected race/sex. Omit them instead of showing another
+                    # character's face (also applies to shared ear examples).
+                    # Type1 geometry choices directly name their own icons.
+                    if option.menu_type==0:icon=0
+                    if icon>0:choice['icon_id']=icon
+                    if option.field=='face':
+                        choice['feature_icons']=[row[f'FacialFeatureOption[{index}].Option{i}']for i in range(1,8)]
+                choices.append(choice)
+            record={'field':option.field,'label':labels[option.field],'kind':'slider'if option.menu_type==5 else'select',
+                'mask':option.mask,'choices':choices}
+            result.append(record)
         p={'race':race,'gender':gender,'body_type':1,'tribe':tribe}
         hair=hair_menu(self.data,p)
         result.append({'field':'hair','label':'发型','kind':'select','mask':255,
             'choices':[{'value':c['hair_id'],'label':f"发型 {c['hair_id']}",'icon_id':c['icon_id']}for c in hair['choices']]})
-        row=next(r for _,r in self.data.rows('CharaMakeType')if(r['Race'],r['Gender'],r['Tribe'])==(race,gender,tribe))
         palettes={}
         for i in range(28):
             pre=f'CharaMakeStruct[{i}].'
@@ -59,7 +74,6 @@ class AppearanceOptions:
                 choices.append({'value':value,'label':str(value),'color':'#'+rgb.hex()})
             text='毛色'if race==7 and field=='hair_color'else LABELS[field]
             result.append({'field':field,'label':text,'kind':'color','mask':255,'choices':choices})
-        customs=dict(self.data.rows('CharaMakeCustomize'))
         if race==7:
             i=next(i for i in range(28)if row[f'CharaMakeStruct[{i}].Menu']and row[f'CharaMakeStruct[{i}].Customize']==20)
             pre=f'CharaMakeStruct[{i}].'

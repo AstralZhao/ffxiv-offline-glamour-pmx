@@ -513,6 +513,7 @@ class QtClient(NativeClient):
             except Exception:self.icons[identifier]=G.QIcon()
             changed.add(identifier)
         if changed:
+            if self.editor:self.editor.refresh_icons(changed)
             for i in range(self.catalog.count()):
                 item=self.catalog.item(i);identifier=item.data(C.Qt.UserRole).get('icon_id')
                 if identifier in changed:item.setIcon(self.icons[identifier])
@@ -884,6 +885,7 @@ class QtClient(NativeClient):
 
     def editor_change(self,option,value):
         field=option['field'];self.draft[field]=(self.draft[field]&~option['mask'])|value
+        if field=='face'and self.editor:self.editor.refresh_icons()
         if field=='tribe':
             self.editor_menu_tribe=value
         self.editor.update_status()
@@ -1038,7 +1040,7 @@ class AppearanceDialog(W.QDialog):
         active=self.tabs.currentIndex()
         while self.tabs.count():
             page=self.tabs.widget(0);self.tabs.removeTab(0);page.deleteLater()
-        self.forms={};c=self.c
+        self.forms={};self.choice_controls={};self.feature_controls={};c=self.c
         for name in('发型与体型','五官细节','颜色与彩绘'):
             scroll=W.QScrollArea();scroll.setWidgetResizable(True);content=W.QWidget();form=W.QFormLayout(content)
             form.setContentsMargins(8,20,16,20);form.setHorizontalSpacing(24);form.setVerticalSpacing(18);form.setFieldGrowthPolicy(W.QFormLayout.AllNonFixedFieldsGrow)
@@ -1063,7 +1065,15 @@ class AppearanceDialog(W.QDialog):
                 self.forms[group].addRow(option['label'],container);continue
             else:
                 control=ComboBox()
-                for choice in choices:control.addItem(choice['label'],choice['value'])
+                control.setProperty('appearance_field',field)
+                if any(choice.get('icon_id')for choice in choices):
+                    control.setIconSize(C.QSize(44,44));control.setMinimumHeight(50);control.setMaxVisibleItems(7)
+                    control.setStyleSheet('QComboBox { combobox-popup:0; }')
+                    view=W.QListView(control);view.setIconSize(C.QSize(44,44));view.setUniformItemSizes(True);view.setMaximumHeight(380)
+                    view.setVerticalScrollBarPolicy(C.Qt.ScrollBarAsNeeded);view.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel)
+                    control.setView(view)
+                for choice in choices:control.addItem(c.icon(choice.get('icon_id')),choice['label'],choice['value'])
+                self.choice_controls[field]=(control,choices)
                 control.setCurrentIndex(next(i for i,x in enumerate(choices)if x['value']==value))
                 control.activated.connect(lambda index,o=option,w=control:c.editor_change(o,w.itemData(index)))
             self.forms[group].addRow(option['label'],control)
@@ -1071,10 +1081,24 @@ class AppearanceDialog(W.QDialog):
         if c.draft['race']==7:toggles=[t for t in toggles if t[:2]!=('mouth',128)]
         for field,bit,text in toggles:
             control=W.QCheckBox(text);control.setChecked(bool(c.draft[field]&bit))
+            if field=='facial_features':
+                control.setIconSize(C.QSize(40,40));control.setMinimumHeight(44);self.feature_controls[bit]=control
             def toggle(checked,f=field,b=bit):
                 c.draft[f]=(c.draft[f]|b)if checked else(c.draft[f]&~b);self.update_status();c.queue_appearance_preview()
             control.toggled.connect(toggle);self.forms['颜色与彩绘'if field in('highlight_flags','face_paint')else'五官细节'].addRow('',control)
+        self.refresh_icons()
         if active>=0:self.tabs.setCurrentIndex(active)
+
+    def refresh_icons(self,changed=None):
+        for control,choices in self.choice_controls.values():
+            for index,choice in enumerate(choices):
+                identifier=choice.get('icon_id')
+                if identifier and(changed is None or identifier in changed):control.setItemIcon(index,self.c.icon(identifier))
+        face=next((o for o in self.c.editor_record['fields']if o['field']=='face'),{})
+        choice=next((o for o in face.get('choices',())if o['value']==self.c.draft['face']),{})
+        for index in range(7):
+            icons=choice.get('feature_icons',());identifier=icons[index]if index<len(icons)else 0
+            if changed is None or identifier in changed:self.feature_controls[1<<index].setIcon(self.c.icon(identifier))
 
     def update_status(self):
         c=self.c;saved=c.draft==c.editor_record['parameters'];updated=c.draft==c.engine.rendered_parameters and c.engine.active_preset==c.editor_record['id']
