@@ -5,6 +5,7 @@ from cn_character import CLANS
 from probe_appearance_presets import FIELDS
 
 CREATION_PROFILES=(
+    {'id':'au-ra-male','label':'敖龙族男性','race':6,'gender':0,'tribes':(11,12)},
     {'id':'hyur-male','label':'人族男性（中原已接入）','race':1,'gender':0,'tribes':(1,)},
     {'id':'hyur-female','label':'人族女性','race':1,'gender':1,'tribes':(1,2)},
     {'id':'au-ra-female','label':'敖龙族女性','race':6,'gender':1,'tribes':(11,12)},
@@ -102,5 +103,14 @@ def seed_hyur_male_examples(library):
         key=f"builtin:hyur-male-{tribe}:v1"
         if key in library.metadata["seeded"]:continue
         path,_=library.add(example_dat(1,tribe,1,"人族男性",0),"人族男性-"+CLANS[tribe]+".dat")
+        library.metadata["seeded"][key]=path.name
+    library.save_index()
+
+
+def seed_au_ra_male_examples(library):
+    for tribe in (11,12):
+        key=f"builtin:au-ra-male-{tribe}:v1"
+        if key in library.metadata["seeded"]:continue
+        path,_=library.add(example_dat(6,tribe,1,"敖龙族男性",0),"敖龙族男性-"+CLANS[tribe]+".dat")
         library.metadata["seeded"][key]=path.name
     library.save_index()
