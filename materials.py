@@ -107,9 +107,11 @@ class DemoMaterials:
             +b''.join(field(name,4)for name in('SheenRate','SheenTintRate','SheenAperture'))
             +field('TileScale',8)+struct.pack('<i',int(struct.unpack('<f',field('TileIndex',4))[0]))+field('TileAlpha',4))
         if len(payload)!=48:raise ValueError('皮肤参数尺寸不正确')
+        from prepared_programs import complete_stage_programs
+        programs=complete_stage_programs(package,'pixel')
         textures={}
         for suffix in('Diffuse','Normal','Mask'):
-            bindings={int(binding['id'],16)for stage in package['stages']['pixel']for binding in stage['bindings']['textures']if binding['name']=='g_Sampler'+suffix}
+            bindings={int(binding['id'],16)for stage in programs for binding in stage['bindings']['textures']if binding['name']=='g_Sampler'+suffix}
             sampler=next((s for s in material['samplers']if s['id']in bindings),None)
             if sampler is None:raise ValueError('原始皮肤材质缺少贴图：'+suffix)
             textures['g_SamplerSkin'+suffix]=material['textures'][sampler['texture_index']]
