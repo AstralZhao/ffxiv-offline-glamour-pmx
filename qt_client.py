@@ -230,10 +230,9 @@ class QtClient(NativeClient):
         header=W.QFrame();header.setObjectName('Header');header.setFixedHeight(86);h=horizontal(header,22,14)
         brand=vertical(spacing=0);brand.addWidget(label('GLAMOUR ATELIER','Eyebrow'));brand.addWidget(label('幻衣间','Brand'));h.addLayout(brand)
         h.addSpacing(15);self.tagline=label('自由搭配，每一种可能。','Muted');h.addWidget(self.tagline);h.addStretch()
-        self.preset_combo=PresetComboBox();self.preset_combo.setMinimumWidth(190);self.preset_combo.setMaximumWidth(280)
-        self.preset_combo.setToolTip('输入名称或文件名搜索预设，选择后切换角色');self.preset_combo.activated.connect(self.select_preset);h.addWidget(self.preset_combo)
-        h.addWidget(button('编辑外观',self.open_editor));h.addWidget(button('新建预设',self.create_preset,ghost=True))
-        h.addWidget(button('导入预设',self.import_preset,ghost=True));self.tagline.hide()
+        self.character_manager=CharacterManagerDialog(self);self.preset_combo=self.character_manager.preset_combo
+        self.character_name_label=label('正在加载角色…','Muted');self.character_name_label.setMaximumWidth(210);h.addWidget(self.character_name_label)
+        self.character_manager_button=button('角色管理',self.open_character_manager);h.addWidget(self.character_manager_button)
         h.addWidget(button('我的搭配',self.saved_dialog,ghost=True));h.addWidget(button('保存搭配',self.save_outfit,primary=True))
         h.addWidget(button('设置',self.open_settings,ghost=True));outer.addWidget(header)
         body=W.QWidget();body_layout=horizontal(body,18,16);outer.addWidget(body,1)
@@ -343,7 +342,7 @@ class QtClient(NativeClient):
         compact=self.window.width()<1300
         if compact==getattr(self,'compact',None):return
         self.compact=compact;self.browser.setFixedWidth(300 if compact else 340);self.dressing.setFixedWidth(264 if compact else 290)
-        self.tagline.setVisible(not compact);self.preset_combo.setMinimumWidth(160 if compact else 190)
+        self.tagline.setVisible(not compact);self.character_name_label.setMaximumWidth(135 if compact else 210)
         self.camera_grid.removeWidget(self.zoom_group)
         if compact:self.camera_grid.addWidget(self.zoom_group,1,0,1,3,C.Qt.AlignCenter)
         else:self.camera_grid.addWidget(self.zoom_group,0,1)
@@ -414,6 +413,7 @@ class QtClient(NativeClient):
         self.loading_spinner.set_running(prominent);self.footer_spinner.set_running(busy);self.status_dot.setVisible(not busy)
         if busy:self.status_label.setText(text)
         if self.editor:self.editor.spinner.set_running(busy)
+        self.character_manager.update_state()
 
     def poll_startup(self):
         if self.engine is None:return
@@ -466,6 +466,7 @@ class QtClient(NativeClient):
         def finished(_result):
             if dialog in self.dialogs:self.dialogs.remove(dialog)
             if self.editor is dialog:self.editor=None
+            self.character_manager.update_state()
             dialog.deleteLater()
         dialog.finished.connect(finished);dialog.show();return dialog
 
@@ -479,15 +480,21 @@ class QtClient(NativeClient):
 
     def refresh_boot(self):
         self.boot=self.engine.bootstrap();self.dye_by_id={d['stain_id']:d for d in self.boot['dyes']}
+        selected=self.preset_combo.currentData()
+        if self.character_manager.last_active!=self.boot['preset_id']:selected=self.boot['preset_id']
         self.preset_ids=[p['id']for p in self.boot['presets']];self.preset_combo.blockSignals(True);self.preset_combo.clear()
         for p in self.boot['presets']:
             text=p['name']+' · '+p['file_name']if p['name']!=p['file_name']else p['name']
             self.preset_combo.addItem(text,p['id']);self.preset_combo.setItemData(self.preset_combo.count()-1,text,C.Qt.ToolTipRole)
-        if self.boot['preset_id']in self.preset_ids:self.preset_combo.setCurrentIndex(self.preset_ids.index(self.boot['preset_id']))
+        selected=selected if selected in self.preset_ids else self.boot['preset_id']
+        if selected in self.preset_ids:self.preset_combo.setCurrentIndex(self.preset_ids.index(selected))
         self.preset_combo.lineEdit().setCursorPosition(0)
         self.preset_combo.blockSignals(False);mismatch=not self.boot['appearance']['model_matches_file']
         self.appearance_label.setText('模型修改尚未保存到预设'if mismatch else'外观与已保存预设一致')
         self.appearance_label.setStyleSheet('color:'+('#dfbe88'if mismatch else MUTED)+';font-size:11px')
+        record=next((p for p in self.boot['presets']if p['id']==self.boot['preset_id']),None)
+        text=(record or{}).get('name','未选择角色');self.character_name_label.setText(G.QFontMetrics(self.character_name_label.font()).elidedText(text,C.Qt.ElideRight,self.character_name_label.maximumWidth()))
+        self.character_name_label.setToolTip(text);self.character_manager.last_active=self.boot['preset_id'];self.character_manager.update_state()
 
     def toggle_slot_visibility(self,slot):
         if not self.ready or self.job is not None:return
@@ -885,10 +892,33 @@ class QtClient(NativeClient):
     def select_preset(self,index):
         if index>=0 and self.boot:self.submit(self.engine.run,self.accept_result,'preset',{'id':self.preset_ids[index]})
 
+    def open_character_manager(self):
+        dialog=self.character_manager;dialog.update_state()
+        if dialog not in self.dialogs:self.dialogs.append(dialog)
+        if self.window.testAttribute(C.Qt.WA_DontShowOnScreen):dialog.setAttribute(C.Qt.WA_DontShowOnScreen)
+        dialog.show();dialog.raise_()
+
+    def delete_selected_preset(self):
+        if not self.boot or self.job is not None:return
+        record=next((p for p in self.boot['presets']if p['id']==self.preset_combo.currentData()),None)
+        if record is None:return
+        if len(self.boot['presets'])<2:return self.message.set('请至少保留一份角色预设')
+        if self.editor:return self.message.set('请先关闭外观编辑窗口，再删除预设')
+        message='删除“'+record['name']+'”（'+record['file_name']+'）？\n只删除软件内的预设副本，原始导入文件不受影响。此操作不可撤销。'
+        if record['id']==self.boot['preset_id']:message+='\n当前角色会先切换到另一份预设；切换失败时不会删除。'
+        if record['id']==self.boot['preset_id']and self.boot.get('appearance',{}).get('is_preview'):message+='\n当前尚未保存的外观修改会随切换丢弃。'
+        if W.QMessageBox.question(self.character_manager,'删除角色预设',message,W.QMessageBox.Yes|W.QMessageBox.No,W.QMessageBox.No)!=W.QMessageBox.Yes:return
+        def done(result):
+            if result['switched']:self.accept_result(result)
+            else:self.refresh_boot();self.schedule_session_save()
+            self.message.set('预设已删除，原始导入文件未改动'if result['deleted']else'已切换角色，但预设未删除：'+result['delete_error'])
+        self.submit(self.engine.run,done,'delete_preset',{'id':record['id'],'sha256':record['sha256']})
+
     def import_preset(self):
         if self.engine is None or not self.engine.ready.done():return self.message.set('正在加载角色，请稍候…')
         if self.job:return self.message.set('请等待当前模型准备完成')
-        name,_=W.QFileDialog.getOpenFileName(self.window,'导入角色外观预设','','角色预设 (*.dat)')
+        parent=self.character_manager if self.character_manager.isVisible()else self.window
+        name,_=W.QFileDialog.getOpenFileName(parent,'导入角色外观预设','','角色预设 (*.dat)')
         if not name:return
         try:raw=Path(name).read_bytes()
         except OSError as error:return self.message.set(str(error))
@@ -903,7 +933,8 @@ class QtClient(NativeClient):
         if self.job:return self.message.set('请等待当前模型准备完成')
         from builtin_presets import CREATION_PROFILES
         from cn_character import CLANS
-        dialog=W.QDialog(self.window);dialog.setWindowTitle('新建角色预设');dialog.setMinimumWidth(420)
+        parent=self.character_manager if self.character_manager.isVisible()else self.window
+        dialog=W.QDialog(parent);dialog.setWindowTitle('新建角色预设');dialog.setMinimumWidth(420);dialog.setWindowModality(C.Qt.WindowModal)
         outer=vertical(dialog,22,14);outer.addWidget(label('新建角色预设','Title'))
         outer.addWidget(label('种族和性别创建后固定，其他外观可在创建后编辑。','Muted'))
         form=W.QFormLayout();profile=ComboBox();tribe=ComboBox();name=W.QLineEdit();name.setPlaceholderText('留空使用默认名称')
@@ -922,7 +953,7 @@ class QtClient(NativeClient):
                 if result['model_loaded']:self.accept_result(result)
                 else:self.message.set('预设已新建，模型暂时无法加载：'+result['preview_error']);self.open_editor(result['preset']['id'])
             self.submit(self.engine.run,done,'create',payload)
-        actions.addWidget(button('创建并预览',create,primary=True));outer.addLayout(actions);dialog.exec()
+        actions.addWidget(button('创建并预览',create,primary=True));outer.addLayout(actions);return self.show_dialog(dialog)
 
     def palette(self,title,choices,selected,callback):
         parent=self.editor if self.editor and self.editor.isVisible()else self.window
@@ -1029,6 +1060,51 @@ class QtClient(NativeClient):
         if not self.boot:return
         from qt_saved_outfits import SavedOutfitsDialog
         self.show_dialog(SavedOutfitsDialog(self))
+
+
+class CharacterManagerDialog(W.QDialog):
+    def __init__(self,controller):
+        super().__init__(controller.window);self.c=controller;self.last_active=None
+        self.setWindowTitle('角色管理');self.resize(560,390);self.setMinimumWidth(480)
+        outer=vertical(self,22,14);heading=horizontal();heading.addWidget(label('角色管理','Title'));heading.addStretch()
+        self.count=label('','Badge');heading.addWidget(self.count);outer.addLayout(heading)
+        self.current=label('正在加载角色…','Muted');self.current.setWordWrap(True);outer.addWidget(self.current)
+        self.preset_combo=PresetComboBox();self.preset_combo.setMinimumWidth(300)
+        self.preset_combo.setToolTip('输入名称或文件名搜索预设，选择后点击“使用此角色”切换')
+        self.preset_combo.activated.connect(self.update_state);outer.addWidget(self.preset_combo)
+        self.info=label('','Muted');self.info.setWordWrap(True);self.info.setMinimumHeight(60);outer.addWidget(self.info)
+        use=horizontal();self.use_button=button('使用此角色',lambda:controller.select_preset(self.preset_combo.currentIndex()),primary=True)
+        self.edit_button=button('编辑外观',lambda:controller.open_editor(self.preset_combo.currentData()))
+        use.addWidget(self.use_button,1);use.addWidget(self.edit_button,1);outer.addLayout(use)
+        actions=horizontal();self.new_button=button('新建预设',controller.create_preset);self.import_button=button('导入预设',controller.import_preset)
+        self.delete_button=button('删除预设',controller.delete_selected_preset)
+        self.delete_button.setStyleSheet('QPushButton {color:#edaaa6;} QPushButton:disabled {color:#586577;}')
+        for b in(self.new_button,self.import_button,self.delete_button):actions.addWidget(b,1)
+        outer.addLayout(actions)
+        self.status=label('','Warning');self.status.setWordWrap(True);outer.addWidget(self.status);outer.addStretch()
+        footer=horizontal();footer.addStretch();footer.addWidget(button('关闭',self.reject,ghost=True));outer.addLayout(footer)
+        def finished(_):
+            if self in controller.dialogs:controller.dialogs.remove(self)
+        self.finished.connect(finished)
+
+    def update_state(self,*_):
+        c=self.c;boot=c.boot or{};records=boot.get('presets',[]);key=self.preset_combo.currentData()
+        selected=next((p for p in records if p['id']==key),None)
+        active=next((p for p in records if p['id']==boot.get('preset_id')),None)
+        self.count.setText(str(len(records))+' 份预设');self.current.setText('当前使用：'+active['name']if active else'正在加载角色…')
+        if selected:
+            p=selected['parameters'];sex='女性'if p['gender']else'男性'
+            self.info.setText(selected['file_name']+'\n'+selected['clan']+' · '+sex+' · 发型 '+str(p['hair'])+(' · 正在使用'if selected is active else''))
+        else:self.info.setText('选择要使用、编辑或删除的角色预设。')
+        engine=getattr(c,'engine',None);available=bool(engine is not None and engine.ready.done()and boot)
+        busy=c.job is not None or c.editor is not None
+        self.preset_combo.setEnabled(available and not busy)
+        for b in(self.new_button,self.import_button):b.setEnabled(available and not busy)
+        for b in(self.use_button,self.edit_button):b.setEnabled(available and not busy and selected is not None)
+        self.delete_button.setEnabled(available and not busy and selected is not None and len(records)>1)
+        self.delete_button.setToolTip('至少保留一份角色预设'if len(records)<2 else'删除软件内的预设副本，原始导入文件不受影响')
+        self.status.setText('请先关闭外观编辑窗口，再切换或删除角色。'if c.editor else'正在处理，请稍候…'if c.job is not None else
+            '当前角色的外观修改尚未保存；请在“编辑外观”中保存。'if boot.get('appearance',{}).get('is_preview')else'')
 
 
 class EquipmentDetailsDialog(W.QDialog):

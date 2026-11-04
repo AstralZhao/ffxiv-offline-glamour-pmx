@@ -1,5 +1,6 @@
 """Application-owned native DAT library. Never writes to imported game files."""
 import hashlib,json,os,re,struct,time,uuid
+from copy import deepcopy
 from pathlib import Path
 from probe_appearance_presets import FIELDS
 from cn_character import reviewed_identity,CLANS
@@ -84,6 +85,7 @@ class PresetLibrary:
 
     def seed(self,source,*,default=False):
         source=Path(source).resolve();origin=str(source)
+        if origin in self.metadata.get('deleted_seeds',[]):return
         if origin in self.metadata['seeded']and self.path(self.metadata['seeded'][origin]).is_file():return
         if not source.is_file():return
         raw=source.read_bytes();decode(raw);key=digest(str(source).encode())[:24]
@@ -115,3 +117,20 @@ class PresetLibrary:
         path=self.path(Path(path).name)
         if path.read_bytes()!=edited:raise ValueError('预设文件已被其他程序修改，未覆盖它的新内容')
         self.atomic(path,old)
+
+    def remove(self,name,expected):
+        path=self.path(name);raw=path.read_bytes()
+        if digest(raw)!=expected:raise ValueError('预设已被其他程序修改，请刷新后再删除')
+        previous=deepcopy(self.metadata);backup=self.root/('.'+uuid.uuid4().hex+'.deleting')
+        path.replace(backup)
+        try:
+            if digest(backup.read_bytes())!=expected:raise ValueError('预设在删除前发生变化，请刷新后重试')
+            self.metadata['files'].pop(name,None)
+            deleted=self.metadata.setdefault('deleted_seeds',[])
+            for origin,seeded in self.metadata['seeded'].items():
+                if seeded==name and origin not in deleted:deleted.append(origin)
+            self.save_index();backup.unlink()
+        except Exception:
+            self.metadata=previous
+            if backup.exists():backup.replace(path)
+            self.save_index();raise

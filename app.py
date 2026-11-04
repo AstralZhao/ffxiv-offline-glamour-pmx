@@ -583,6 +583,25 @@ class DemoEngine:
         if not isinstance(name,str):raise ValueError('预设名称不正确')
         return {**self.import_dat(raw,name),'created':True}
 
+    def delete_preset(self,payload):
+        from presets import digest
+        key=payload['id']
+        if key not in self.presets:raise ValueError('本地预设不存在')
+        if len(self.presets)<2:raise ValueError('请至少保留一份角色预设')
+        path,record=self.presets[key]
+        if not record.get('app_owned')or path.resolve()!=self.library.path(record['file_name']):raise ValueError('只能删除软件预设库内的预设')
+        if digest(path.read_bytes())!=payload['sha256']:raise ValueError('预设已被修改，请刷新后再删除')
+        switched=key==self.active_preset
+        result=self.load(next(k for k in self.presets if k!=key))if switched else{}
+        try:self.library.remove(record['file_name'],payload['sha256'])
+        except Exception as error:
+            if not switched:raise
+            # The fallback is already visible. Report it explicitly instead of
+            # claiming the original character was retained after a file error.
+            return {**result,'deleted':False,'switched':True,'delete_error':str(error)}
+        self.refresh_presets()
+        return {**result,'deleted':True,'deleted_id':key,'switched':switched}
+
     def describe_appearance(self,key,tribe=None):
         from presets import decode
         if key not in self.presets:raise ValueError('本地预设不存在')
@@ -641,13 +660,14 @@ class DemoEngine:
             'model_matches_file':bool(entry and rendered==entry[1]['parameters'])}
 
     def run(self,operation,payload):
-        if self.status!='ready'and(operation not in('preset','import','create','appearance_save','appearance_preview')or self.renderer is None):
+        if self.status!='ready'and(operation not in('preset','import','create','delete_preset','appearance_save','appearance_preview')or self.renderer is None):
             raise ValueError('角色还在准备，请稍后再试')
         try:
             if operation=='render':return self.render(payload)
             if operation=='preset':result=self.load(payload['id'])
             elif operation=='import':result=self.import_dat(base64.b64decode(payload['data'],validate=True),payload.get('name',''))
             elif operation=='create':result=self.create_preset(payload)
+            elif operation=='delete_preset':result=self.delete_preset(payload)
             elif operation=='appearance_preview':result=self.preview_appearance(payload)
             elif operation=='appearance_save':result=self.save_appearance(payload)
             elif operation=='outfit':result=self.apply_saved_outfit(payload)
