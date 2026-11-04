@@ -14,7 +14,7 @@ CREATION_PROFILES=(
     {'id':'elezen-male','label':'精灵族男性','race':2,'gender':0,'tribes':(3,4)},
     {'id':'elezen-female','label':'精灵族女性','race':2,'gender':1,'tribes':(3,4)},
     {'id':'au-ra-male','label':'敖龙族男性','race':6,'gender':0,'tribes':(11,12)},
-    {'id':'hyur-male','label':'人族男性（中原已接入）','race':1,'gender':0,'tribes':(1,)},
+    {'id':'hyur-male','label':'人族男性','race':1,'gender':0,'tribes':(1,2)},
     {'id':'hyur-female','label':'人族女性','race':1,'gender':1,'tribes':(1,2)},
     {'id':'au-ra-female','label':'敖龙族女性','race':6,'gender':1,'tribes':(11,12)},
     {'id':'miqote-female','label':'猫魅族女性','race':4,'gender':1,'tribes':(7,8)},
@@ -108,7 +108,7 @@ def seed_viera_male_examples(library):
 
 
 def seed_hyur_male_examples(library):
-    for tribe in (1,):
+    for tribe in (1,2):
         key=f"builtin:hyur-male-{tribe}:v1"
         if key in library.metadata["seeded"]:continue
         path,_=library.add(example_dat(1,tribe,1,"人族男性",0),"人族男性-"+CLANS[tribe]+".dat")
