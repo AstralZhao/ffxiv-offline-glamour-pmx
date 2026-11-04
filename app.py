@@ -381,7 +381,8 @@ class DemoEngine:
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
             self.library.seed(self.default_preset,default=True)
-            from builtin_presets import seed_hyur_female_examples,seed_miqote_examples,seed_miqote_male_examples,seed_viera_examples,seed_viera_male_examples
+            from builtin_presets import seed_hyur_male_examples,seed_hyur_female_examples,seed_miqote_examples,seed_miqote_male_examples,seed_viera_examples,seed_viera_male_examples
+            seed_hyur_male_examples(self.library)
             seed_hyur_female_examples(self.library)
             seed_miqote_examples(self.library)
             seed_miqote_male_examples(self.library)
