@@ -1036,6 +1036,7 @@ class AppearanceDialog(W.QDialog):
         for option in c.editor_record['fields']:
             field=option['field'];choices=list(option['choices']);value=c.draft[field]&option['mask']
             if not any(choice['value']==value for choice in choices):choices.append({'value':value,'label':str(value)+'（当前预设）'})
+            if field=='hair':choices.sort(key=lambda choice:choice['value'])
             group='颜色与彩绘'if option['kind']=='color'or field=='face_paint'else'发型与体型'if field in('tribe','hair','height','bust','tail_or_ear_type','ear_muscle_tail_size')else'五官细节'
             if option['kind']=='color':
                 selected=next(choice for choice in choices if choice['value']==value);color=selected.get('color','#333b48')
