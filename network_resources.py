@@ -57,6 +57,12 @@ def _atomic(path,raw):
 
 
 def _request(url,*,limit,headers=None,start=None,end=None,total=None,etag=None,cancel=None):
+    from transfer_progress import measured
+    with measured(url)as report:
+        return _request_impl(url,limit=limit,headers=headers,start=start,end=end,total=total,etag=etag,cancel=cancel,report=report)
+
+
+def _request_impl(url,*,limit,headers=None,start=None,end=None,total=None,etag=None,cancel=None,report=None):
     _cancel(cancel);h={'Accept-Encoding':'identity','User-Agent':'HuahuaGui/1'}
     h.update(headers or{})
     if start is not None:h['Range']=f'bytes={start}-{end}'
@@ -73,6 +79,8 @@ def _request(url,*,limit,headers=None,start=None,end=None,total=None,etag=None,c
                 if etag and response.headers.get('ETag')!=etag:raise ValueError('服务器资源版本已变化，请使用新的版本目录重新配置')
             declared=response.headers.get('Content-Length')
             if declared is not None and(int(declared)>limit or start is not None and int(declared)!=end-start+1):raise ValueError('网络资源响应大小不正确')
+            transfer_total=end-start+1 if start is not None else int(declared)if declared is not None else None
+            if report:report(0,transfer_total)
             parts=[];count=0
             while True:
                 _cancel(cancel);chunk=response.read(min(65536,limit-count+1))
@@ -80,6 +88,7 @@ def _request(url,*,limit,headers=None,start=None,end=None,total=None,etag=None,c
                 count+=len(chunk)
                 if count>limit:raise ValueError('网络资源超过大小限制')
                 parts.append(chunk)
+                if report:report(count,transfer_total)
             raw=b''.join(parts)
             if start is not None and len(raw)!=end-start+1:raise ValueError('网络资源分段不完整，请重试')
             return raw,response.headers.get('ETag')

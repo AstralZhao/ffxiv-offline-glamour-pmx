@@ -72,7 +72,9 @@ class ResourceDialog(W.QDialog):
     def __init__(self,store,parent=None):
         super().__init__(parent);self.store=store;self.saved_game=None;self.saved_studio=store.studio();self.future=None
         self.cancel_event=threading.Event();self.progress_record=None;self.operation=None
-        self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeConfig')
+        from transfer_progress import TransferProgress,bind
+        self.transfer_progress=TransferProgress()
+        self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeConfig',initializer=bind,initargs=(self.transfer_progress,))
         self.timer=C.QTimer(self);self.timer.setInterval(30);self.timer.timeout.connect(self.poll)
         self.finished.connect(lambda _:self.pool.shutdown(wait=False,cancel_futures=True))
         if parent and parent.testAttribute(C.Qt.WA_DontShowOnScreen):self.setAttribute(C.Qt.WA_DontShowOnScreen,True)
@@ -83,7 +85,7 @@ class ResourceDialog(W.QDialog):
         if self.export_button:self.export_button.clicked.connect(lambda:self.export())
 
     def add_footer(self,outer,*,first=False,error=''):
-        progress=horizontal();self.spinner=LoadingSpinner(18);progress.addWidget(self.spinner)
+        progress=horizontal();self.spinner=LoadingSpinner(36);progress.addWidget(self.spinner)
         self.status=label(error,'Warning');self.status.setWordWrap(True);progress.addWidget(self.status,1);outer.addLayout(progress)
         actions=horizontal();self.cancel=button('退出'if first else'取消',self.reject,ghost=True);actions.addWidget(self.cancel);actions.addStretch()
         self.save_button=button('保存并开始'if first else'保存并应用',self.save,primary=True);actions.addWidget(self.save_button);outer.addLayout(actions)
@@ -93,6 +95,7 @@ class ResourceDialog(W.QDialog):
     def studio_value(self):return self.store.studio()
 
     def busy(self,value):
+        self.spinner.set_progress()
         self.source_panel.setEnabled(not value);self.save_button.setEnabled(not value);self.spinner.set_running(value);self.extra_busy(value)
 
     def export(self):
@@ -131,9 +134,13 @@ class ResourceDialog(W.QDialog):
         self.timer.start()
 
     def poll(self):
+        transfer=self.transfer_progress.snapshot()
+        fraction=transfer['done']/transfer['total']if transfer and transfer['total']else None
+        self.spinner.set_progress(fraction)
         if self.progress_record:
             record=self.progress_record;total=max(1,record['total'])
             self.status.setText(f"{record['phase']} · {record['done']/total:.0%}")
+        if transfer:self.status.setText('正在下载资源 · '+transfer['kind']+(f' {fraction:.0%}'if fraction is not None else'…'))
         if not self.future or not self.future.done():return
         self.timer.stop();self.spinner.set_running(False);future=self.future;self.future=None
         try:

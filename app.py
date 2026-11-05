@@ -97,7 +97,9 @@ class DemoEngine:
         self.startup_session=startup_session;self.startup_session_prepared=False
         self.defer_native_present=defer_native_present;self.initial_state={}
         self.item_icons=None  # Resource indexes are opened on the worker below.
-        self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU')
+        from transfer_progress import TransferProgress,bind
+        self.transfer_progress=TransferProgress()
+        self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU',initializer=bind,initargs=(self.transfer_progress,))
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
         self.images=OrderedDict();self.presets={};self.last=None;self.error=None;self.scene_cache=OrderedDict()
         self.data=ROOT/'artifacts/demo';self.data.mkdir(parents=True,exist_ok=True)

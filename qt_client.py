@@ -288,7 +288,7 @@ class QtClient(NativeClient):
         scene=W.QFrame();scene.setObjectName('Panel');middle=vertical(scene,1,0)
         title=horizontal(margin=16);title.addWidget(label('试衣预览','Section'));title.addStretch()
         self.loading_panel=W.QWidget();loading=horizontal(self.loading_panel,0,6)
-        self.loading_spinner=LoadingSpinner();loading.addWidget(self.loading_spinner)
+        self.loading_spinner=LoadingSpinner(36 if(Path(self.game)/'network-source.json').is_file()else 20);loading.addWidget(self.loading_spinner)
         self.loading_label=label('正在加载角色…','Muted');loading.addWidget(self.loading_label)
         policy=self.loading_panel.sizePolicy();policy.setRetainSizeWhenHidden(True);self.loading_panel.setSizePolicy(policy)
         title.addWidget(self.loading_panel);title.addWidget(label('默认站姿','Badge'));middle.addLayout(title)
@@ -409,10 +409,16 @@ class QtClient(NativeClient):
         startup=self.engine is None or not self.engine.ready.done();busy=not self.closing and(startup or self.job is not None or self.effect_deferred is not None)
         text='正在加载角色…'if startup else self.loading_kind
         prominent=busy and text not in('正在调整视角…','正在保存预设…')and not getattr(self,'live_edit_job',False)
+        meter=getattr(self.engine,'transfer_progress',None)if self.engine else None
+        transfer=meter.snapshot()if busy and meter else None
+        fraction=transfer['done']/transfer['total']if transfer and transfer['total']else None
+        for spinner in(self.loading_spinner,self.footer_spinner):spinner.set_progress(fraction)
+        if transfer:text='正在下载资源 · '+transfer['kind']+(f' {fraction:.0%}'if fraction is not None else'…')
         self.loading_label.setText(text);self.loading_panel.setVisible(prominent)
         self.loading_spinner.set_running(prominent);self.footer_spinner.set_running(busy);self.status_dot.setVisible(not busy)
         if busy:self.status_label.setText(text)
         if self.editor:self.editor.spinner.set_running(busy)
+        if self.editor:self.editor.spinner.set_progress(fraction)
         self.character_manager.update_state()
 
     def poll_startup(self):

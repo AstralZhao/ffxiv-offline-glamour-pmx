@@ -93,7 +93,7 @@ def polish(widget):widget.style().unpolish(widget);widget.style().polish(widget)
 class LoadingSpinner(W.QWidget):
     """GUI-only animation: never redraws the native character viewport."""
     def __init__(self,size=20,parent=None):
-        super().__init__(parent);self.setFixedSize(size,size);self.angle=0
+        super().__init__(parent);self.setFixedSize(size,size);self.angle=0;self.progress=None
         policy=self.sizePolicy();policy.setRetainSizeWhenHidden(True);self.setSizePolicy(policy)
         self.clock=C.QElapsedTimer();self.timer=C.QTimer(self);self.timer.setInterval(33)
         self.timer.timeout.connect(self.advance);self.setAttribute(C.Qt.WA_TransparentForMouseEvents)
@@ -106,12 +106,22 @@ class LoadingSpinner(W.QWidget):
 
     def advance(self):self.angle=(self.clock.elapsed()*.36)%360;self.update()
 
+    def set_progress(self,value=None):
+        value=None if value is None else max(0.,min(1.,float(value)))
+        if value==self.progress:return
+        self.progress=value;self.setAccessibleName('正在加载'if value is None else f'当前下载进度 {value:.0%}');self.update()
+
     def paintEvent(self,event):
         painter=G.QPainter(self);painter.setRenderHint(G.QPainter.Antialiasing)
         rect=C.QRectF(3,3,self.width()-6,self.height()-6)
         painter.setPen(G.QPen(G.QColor('#344552'),2,C.Qt.SolidLine,C.Qt.RoundCap));painter.drawEllipse(rect)
         painter.setPen(G.QPen(G.QColor(ACCENT),2,C.Qt.SolidLine,C.Qt.RoundCap))
-        painter.drawArc(rect,round(-self.angle*16),100*16)
+        if self.progress is None:painter.drawArc(rect,round(-self.angle*16),100*16)
+        else:
+            painter.drawArc(rect,90*16,-round(360*16*self.progress))
+            if self.width()>=32:
+                font=G.QFont(self.font());font.setPixelSize(10);painter.setFont(font)
+                painter.drawText(self.rect(),C.Qt.AlignCenter,f'{self.progress:.0%}')
 
 
 class ComboBox(W.QComboBox):
