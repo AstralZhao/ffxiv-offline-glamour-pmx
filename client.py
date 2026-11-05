@@ -176,6 +176,7 @@ class NativeClient:
         self.root.after(10,self.poll_job);return True
 
     def poll_job(self):
+        if self.closing:return self.close()
         if self.job is None:return
         future,callback,generation,baseline=self.job
         if not future.done():self.root.after(10,self.poll_job);return
@@ -482,7 +483,9 @@ class NativeClient:
     def close(self):
         if self.closed:return
         self.closing=True;self.ready=False
+        if hasattr(self.engine,'cancel_loading'):self.engine.cancel_loading()
         if self.timer is not None:self.root.after_cancel(self.timer);self.timer=None
+        if self.job is not None and self.job[0].done():self.job=None
         if not self.engine.ready.done()or self.job is not None:
             self.message.set('正在结束当前绘制，请稍候…');self.root.after(50,self.close);return
         if not hasattr(self,'close_future'):

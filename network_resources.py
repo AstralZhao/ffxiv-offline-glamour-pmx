@@ -36,6 +36,8 @@ def host_url(value):
 
 def _sha(raw):return hashlib.sha256(raw).hexdigest()
 def _cancel(event):
+    from network_cancellation import check
+    check()
     if event is not None and event.is_set():raise InterruptedError('网络资源读取已取消')
 
 
@@ -64,6 +66,7 @@ def _request(url,*,limit,headers=None,start=None,end=None,total=None,etag=None,c
     # Waiting requests consume no HTTP response buffers. Cancellation remains
     # responsive while another worker occupies the connection budget.
     slots=_slots
+    _cancel(cancel)
     while not slots.acquire(timeout=.1):_cancel(cancel)
     try:
         with measured(url)as report:
@@ -77,7 +80,10 @@ def _request_impl(url,*,limit,headers=None,start=None,end=None,total=None,etag=N
     if start is not None:h['Range']=f'bytes={start}-{end}'
     if etag:h['If-Match']=etag
     try:
-        with urlopen(Request(url,headers=h),timeout=15)as response:
+        from network_cancellation import current,open_response
+        token=current();request=Request(url,headers=h)
+        context=open_response(request,timeout=15,token=token)if token is not None else urlopen(request,timeout=15)
+        with context as response:
             final=urlsplit(response.url)
             if final.scheme not in('http','https')or urlsplit(url).scheme=='https'and final.scheme!='https':raise ValueError('资源服务器跳转到不受支持的网址')
             if response.headers.get('Content-Encoding','identity').lower()!='identity':raise ValueError('资源服务器不能压缩二进制范围响应')
@@ -99,12 +105,14 @@ def _request_impl(url,*,limit,headers=None,start=None,end=None,total=None,etag=N
                 parts.append(chunk)
                 if report:report(count,transfer_total)
             raw=b''.join(parts)
+            _cancel(cancel)
             if start is not None and len(raw)!=end-start+1:raise ValueError('网络资源分段不完整，请重试')
             return raw,response.headers.get('ETag')
     except HTTPError as error:
         if error.code==412:raise ValueError('服务器资源版本已变化，请使用新的版本目录重新配置')from None
         raise ValueError(f'网络资源读取失败（HTTP {error.code}），请检查根网址和文件访问权限')from None
     except(URLError,TimeoutError,OSError)as error:
+        _cancel(cancel)
         raise ValueError('网络资源连接失败，请检查网络后重试；已下载缓存会保留')from error
 
 

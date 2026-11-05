@@ -181,6 +181,9 @@ class QtClient(NativeClient):
         self.studio=options(studio)
         self.window=window;window.controller=self;self.root=TimerHost(window)
         self.settings_handler=settings_handler;self.game=Path(game).resolve()
+        from network_cancellation import LoadCancellation
+        from transfer_progress import TransferProgress,bind
+        self.load_cancel=LoadCancellation();self.icon_progress=TransferProgress(cancel=self.load_cancel)
         self.closed=False;self.closing=False;self.job=None;self.dirty=False;self.timer=None;self.generation=0
         self.effect_clock=EffectClock();self.effect_future=None;self.effect_deferred=None;self.effect_poll=None
         self.effect_last_frame=30.
@@ -202,7 +205,7 @@ class QtClient(NativeClient):
         self.preset_name=Value('');self.folder_name=Value('全部同模目录');self.appearance_note=Value('');self.selected_note=Value('')
         self.dye_by_id={};self.raw_status='';self.dialogs=[];self.build_ui()
         self.message.callback=self.display_status;self.display_status(self.message.get())
-        self.engine=None;self.icon_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeIcons');self.pending_icons={};self.icon_timer=None
+        self.engine=None;self.icon_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeIcons',initializer=bind,initargs=(self.icon_progress,));self.pending_icons={};self.icon_timer=None
         self.library=None
         from equipment_library import EquipmentLibrary
         self.library_future=self.icon_pool.submit(EquipmentLibrary,self.session_path.parent/'equipment-library.sqlite',ROOT/'artifacts/cn-data/catalog.sqlite',game=game)
@@ -220,7 +223,7 @@ class QtClient(NativeClient):
                 except(ValueError,OSError):pass
             hwnd=int(self.viewport.winId());self.viewport.watch_window()
             self.engine=DemoEngine(Path(game),Path(preset),preset_directory=preset_directory,native_hwnd=hwnd,
-                startup_session=session,defer_native_present=True,studio=self.studio)
+                startup_session=session,defer_native_present=True,studio=self.studio,load_cancel=self.load_cancel)
         except Exception as error:
             self.message.set('角色未能加载：'+str(error));self.loading_spinner.set_running(False);self.footer_spinner.set_running(False);self.loading_panel.hide();return
         self.poll_startup()
@@ -422,6 +425,7 @@ class QtClient(NativeClient):
         self.character_manager.update_state()
 
     def poll_startup(self):
+        if self.closing:return self.close()
         if self.engine is None:return
         if self.library is None:
             if not self.library_future.done():self.root.after(30,self.poll_startup);return
@@ -445,15 +449,18 @@ class QtClient(NativeClient):
                 self.editor.status.setText('操作未完成，已保留原模型和预设。');self.editor.status.setToolTip(self.raw_status)
 
     def close(self):
+        if self.closed:return
+        self.load_cancel.set()
+        if self.engine:self.engine.cancel_loading()
         self.level_timer.stop()
         self.occlusion_timer.stop()
         self.effect_timer.stop();self.effect_clock.pause(self.effect_last_frame)
         self.effect_deferred=None
         if self.present_timer is not None:self.root.after_cancel(self.present_timer);self.present_timer=None
         self.present_requested=False
-        if self.present_future is not None:
+        if self.present_future is not None and not self.present_future.done():
             self.closing=True;self.ready=False;self.root.after(30,self.close);return
-        if self.effect_future is not None:
+        if self.effect_future is not None and not self.effect_future.done():
             self.closing=True;self.ready=False;self.root.after(30,self.close);return
         for spinner in(self.loading_spinner,self.footer_spinner):spinner.set_running(False)
         if self.editor:self.editor.spinner.set_running(False)
@@ -462,6 +469,11 @@ class QtClient(NativeClient):
         self.catalog_queued=None;self.catalog_pool.shutdown(wait=False,cancel_futures=True)
         if self.icon_timer is not None:self.root.after_cancel(self.icon_timer);self.icon_timer=None
         self.icon_pool.shutdown(wait=False,cancel_futures=True)
+        # The icon pool also owns the equipment-library startup job. Let its
+        # cancelled reads/SQLite context unwind before replacing this client.
+        if not self.library_future.done()or any(not f.done()for f in self.pending_icons.values()):
+            self.closing=True;self.ready=False;self.message.set('正在取消旧资源加载，请稍候…')
+            self.root.after(30,self.close);return
         if self.engine is None:
             self.closing=True;self.closed=True;self.root.destroy();return
         super().close()

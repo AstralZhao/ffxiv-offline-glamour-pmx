@@ -13,7 +13,7 @@ _local=threading.local()
 
 
 class TransferProgress:
-    def __init__(self):self.lock=threading.Lock();self.record=None;self.serial=0;self.active={};self.job=None
+    def __init__(self,*,cancel=None):self.lock=threading.Lock();self.record=None;self.serial=0;self.active={};self.job=None;self.cancel=cancel
     def start_job(self):
         with self.lock:
             self.serial+=1;token=self.serial
@@ -92,7 +92,10 @@ def tracked(fn):
     def wrapper(self,*args,**kwargs):
         progress=getattr(self,'transfer_progress',None)
         with operation(progress):
+            from network_cancellation import check
+            check()
             result=fn(self,*args,**kwargs)
+            check()
             if progress is not None and(fn.__name__=='initialize'and getattr(self,'status',None)=='error'
                     or isinstance(result,dict)and result.get('model_loaded')is False):progress.abort()
             return result

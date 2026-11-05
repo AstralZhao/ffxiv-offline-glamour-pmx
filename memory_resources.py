@@ -4,7 +4,7 @@ This controls original downloaded assets, not the existing prepared-character
 library or user presets/templates. Active decoded scenes own their own data.
 """
 from collections import OrderedDict
-from concurrent.futures import Future
+from concurrent.futures import Future,TimeoutError as FutureTimeout
 import io,json,re,threading,weakref
 from pathlib import Path
 from network_resources import BLOCK,BASE,MARKER,_sha,_url,_request,_atomic,_cancel,safe_path,host_url
@@ -138,14 +138,21 @@ class MemorySource:
     def _get(self,key,cached,load,store):
         # Deduplicate identical reads, but never hold the cache lock across
         # network I/O or waiting for another worker's future.
+        from network_cancellation import check
+        check()
         with self.lock:
             old=cached()
             if old is not None:return old
             future=self.inflight.get(key);owner=future is None;epoch=self.epoch
             if owner:future=Future();self.inflight[key]=future
-        if not owner:return future.result()
+        if not owner:
+            while True:
+                check()
+                try:return future.result(timeout=.1)
+                except FutureTimeout:continue
         try:
             raw=load()
+            check()
             with self.lock:
                 if epoch==self.epoch:store(raw)
                 future.set_result(raw);self.inflight.pop(key,None)

@@ -88,7 +88,7 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 class DemoEngine:
     """All native GPU and SQLite outfit work stays on one dedicated thread."""
-    def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None,startup_session=None,defer_native_present=False,studio=None):
+    def __init__(self,game,preset,*,preset_directory=None,native_hwnd=None,startup_session=None,defer_native_present=False,studio=None,load_cancel=None):
         from studio_lighting import options
         self.studio=options(studio)
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
@@ -99,7 +99,9 @@ class DemoEngine:
         self.defer_native_present=defer_native_present;self.initial_state={}
         self.item_icons=None  # Resource indexes are opened on the worker below.
         from transfer_progress import TransferProgress,bind
-        self.transfer_progress=TransferProgress()
+        from network_cancellation import LoadCancellation
+        self.load_cancel=load_cancel if load_cancel is not None else LoadCancellation()
+        self.transfer_progress=TransferProgress(cancel=self.load_cancel)
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU',initializer=bind,initargs=(self.transfer_progress,))
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
         self.images=OrderedDict();self.presets={};self.last=None;self.error=None;self.scene_cache=OrderedDict()
@@ -135,6 +137,7 @@ class DemoEngine:
     @tracked
     def initialize(self):
         try:
+            self.load_cancel.check()
             from icons import ItemIcons
             self.item_icons=ItemIcons(self.game)
             from ff14_readonly import SqPack
@@ -428,6 +431,10 @@ class DemoEngine:
             self.restore_startup_session()
             with self.lock:self.status='ready';self.message='可以开始试衣了'
         except Exception as error:
+            from network_cancellation import LoadCancelled
+            if isinstance(error,LoadCancelled)or self.load_cancel.is_set():
+                with self.lock:self.status='cancelled';self.message='已取消旧资源加载'
+                self.transfer_progress.abort();return
             with self.lock:self.status='error';self.error=str(error);self.message='初始化未完成'
             self.write_error(error)
 
@@ -809,6 +816,10 @@ class DemoEngine:
             release_pending(self.game)
             self.scene_cache.clear();self.character=None;self.characters=None;self.renderer=None
             self.pack=None;self.store=None;self.item_icons=None;self.appearance_options=None;self.accessories=None;self.hair=None
+
+    def cancel_loading(self):
+        """Called by UI; no GPU/resource destruction on this thread."""
+        self.load_cancel.set();self.transfer_progress.abort()
 
 
 class Handler(BaseHTTPRequestHandler):

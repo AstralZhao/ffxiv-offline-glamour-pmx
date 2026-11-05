@@ -64,6 +64,7 @@ def parallel_inputs(pack,paths,*,workers=None,budget=INPUT_BUDGET):
     """
     from network_resources import CONNECTIONS
     workers=CONNECTIONS if workers is None else workers;meter=current()
+    from network_cancellation import check
     def fork():return pack.fork()if hasattr(pack,'fork')else SqPack(pack.game_root)
     def size(path):return input_size(fork(),path)
     def read(path):
@@ -75,6 +76,7 @@ def parallel_inputs(pack,paths,*,workers=None,budget=INPUT_BUDGET):
         pending=deque();index=0;reserved=0
         try:
             while index<len(paths)or pending:
+                check()
                 while index<len(paths)and len(pending)<workers:
                     n=sizes[index]
                     if pending and reserved+n>budget:break
@@ -90,6 +92,8 @@ def prepare_scene_inputs(renderer,scene):
     inputs=selected_inputs(renderer,scene);paths=[r[0]for r in inputs];meter=current()
     with closing(parallel_inputs(scene.pack,paths))as stream:
         for index,raw in stream:
+            from network_cancellation import check
+            check()
             path,kind,effect=inputs[index];previous=getattr(renderer,'_effect_scope',None)
             if effect:renderer._effect_scope=getattr(renderer,'effect_renderer',None)
             try:
