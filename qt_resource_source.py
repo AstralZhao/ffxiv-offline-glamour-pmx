@@ -12,20 +12,29 @@ from settings import validate_game
 class ResourceSourcePanel(W.QWidget):
     def __init__(self,game=None,*,export=False,parent=None):
         super().__init__(parent);outer=vertical(self,0,14)
-        hint=label('使用本机国服游戏目录，或导入独立资源包。配置会自动保存。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
+        hint=label('选择本机游戏、独立资源包或网络资源，配置会自动保存。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
         modes=horizontal();self.game_mode=W.QRadioButton('游戏目录');self.pack_mode=W.QRadioButton('导入资源包')
-        modes.addWidget(self.game_mode);modes.addWidget(self.pack_mode);modes.addStretch();outer.addLayout(modes)
-        packed=bool(game and(Path(game)/'resource-pack.json').is_file());self._mode=packed
-        self._paths={False:''if packed else str(game or''),True:str(game or'')if packed else''}
-        self.game_mode.setChecked(not packed);self.pack_mode.setChecked(packed)
+        self.network_mode=W.QRadioButton('网络资源')
+        modes.addWidget(self.game_mode);modes.addWidget(self.pack_mode);modes.addWidget(self.network_mode);modes.addStretch();outer.addLayout(modes)
+        network=bool(game and(Path(game)/'network-source.json').is_file())
+        self.current_network_path=Path(game)if network else None
+        packed=bool(not network and game and(Path(game)/'resource-pack.json').is_file())
+        self._mode='network'if network else'pack'if packed else'game'
+        host=''
+        if network:
+            from network_resources import NetworkSource
+            host=NetworkSource(game).host
+        self._paths={'game':str(game or'')if not(packed or network)else'','pack':str(game or'')if packed else'','network':host}
+        self.game_mode.setChecked(self._mode=='game');self.pack_mode.setChecked(packed);self.network_mode.setChecked(network)
         self.path_label=label('','Section');outer.addWidget(self.path_label);row=horizontal()
-        self.path=W.QLineEdit(str(game or''));self.path.setClearButtonEnabled(True);row.addWidget(self.path,1)
+        self.path=W.QLineEdit(self._paths[self._mode]);self.path.setClearButtonEnabled(True);row.addWidget(self.path,1)
         self.browse=button('',self.choose);row.addWidget(self.browse);outer.addLayout(row)
         self.note=label('','Muted');self.note.setWordWrap(True);outer.addWidget(self.note)
         self.export_button=None
         if export:
             self.export_button=button('导出精简资源包…',ghost=True);line=horizontal();line.addWidget(self.export_button);line.addStretch();outer.addLayout(line)
-        self.game_mode.toggled.connect(self.mode_changed);self.mode_changed()
+        for control in(self.game_mode,self.pack_mode,self.network_mode):control.toggled.connect(lambda checked:self.mode_changed()if checked else None)
+        self.mode_changed()
 
     def choose(self):
         if self.pack_mode.isChecked():path,_=W.QFileDialog.getOpenFileName(self,'导入幻化柜资源包','','幻化柜资源包 (*.ff14resources *.zip)')
@@ -33,14 +42,15 @@ class ResourceSourcePanel(W.QWidget):
         if path:self.path.setText(path)
 
     def mode_changed(self):
-        packed=self.pack_mode.isChecked()
-        if packed!=self._mode:
-            self._paths[self._mode]=self.path.text();self.path.setText(self._paths[packed]);self._mode=packed
-        self.path_label.setText('幻化柜资源包'if packed else'国服游戏目录')
-        self.path.setPlaceholderText('选择 .ff14resources 文件'if packed else'包含 game 文件夹的安装目录')
+        packed=self.pack_mode.isChecked();network=self.network_mode.isChecked();mode='network'if network else'pack'if packed else'game'
+        if mode!=self._mode:
+            self._paths[self._mode]=self.path.text();self.path.setText(self._paths[mode]);self._mode=mode
+        self.path_label.setText('资源根网址（Host）'if network else'幻化柜资源包'if packed else'国服游戏目录')
+        self.path.setPlaceholderText('https://资源域名/版本目录/'if network else'选择 .ff14resources 文件'if packed else'包含 game 文件夹的安装目录')
+        self.browse.setVisible(not network)
         self.browse.setText('选择资源包'if packed else'选择目录')
-        self.note.setText('导入后保存在软件 resources 目录，无需安装游戏。'if packed else'直接读取本机游戏文件，无需复制资源。')
-        if self.export_button:self.export_button.setVisible(not packed)
+        self.note.setText('网址下需有 resource-pack.json 和保持原目录的 game 文件夹。首次下载基础文件，模型与纹理按需缓存；服务器须支持分段读取。'if network else'导入后保存在软件 resources 目录，无需安装游戏。'if packed else'直接读取本机游戏文件，无需复制资源。')
+        if self.export_button:self.export_button.setVisible(not(packed or network))
 
 
 class ResourceDialog(W.QDialog):
@@ -54,7 +64,7 @@ class ResourceDialog(W.QDialog):
 
     def bind_source(self,panel):
         self.source_panel=panel
-        for name in('path','path_label','game_mode','pack_mode','browse','export_button'):setattr(self,name,getattr(panel,name))
+        for name in('path','path_label','game_mode','pack_mode','network_mode','browse','export_button'):setattr(self,name,getattr(panel,name))
         if self.export_button:self.export_button.clicked.connect(lambda:self.export())
 
     def add_footer(self,outer,*,first=False,error=''):
@@ -79,10 +89,22 @@ class ResourceDialog(W.QDialog):
         self.status.setText('正在扫描全部种族与装备依赖…')
         self.future=self.pool.submit(export_resource_pack,self.path.text(),path,root=self.store.root,callback=self.progress,cancel=self.cancel_event,compact=True);self.timer.start()
 
+    def network_source(self,value):
+        from network_resources import prepare,host_url,NetworkSource
+        current=self.source_panel.current_network_path
+        if current is not None:
+            try:
+                if NetworkSource(current).host==host_url(value):return validate_game(current,self.store.root)
+            except(OSError,ValueError,KeyError,TypeError):pass
+        return prepare(value,self.store.root,callback=self.progress,cancel=self.cancel_event)
+
     def save(self):
         if self.future:return
         self.busy(True);self.cancel_event.clear();self.progress_record=None;self.operation='save';value=self.path.text()
-        if self.pack_mode.isChecked()and Path(value).is_file():
+        if self.network_mode.isChecked():
+            self.status.setText('正在检查并准备网络资源…')
+            self.future=self.pool.submit(self.network_source,value)
+        elif self.pack_mode.isChecked()and Path(value).is_file():
             from resource_pack import import_resource_pack
             self.status.setText('正在检查并导入资源包…')
             self.future=self.pool.submit(import_resource_pack,value,self.store.root,callback=self.progress,cancel=self.cancel_event)

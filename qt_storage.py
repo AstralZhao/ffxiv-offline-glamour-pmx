@@ -21,7 +21,7 @@ class StoragePanel(W.QWidget):
         path=label(str(root),'Muted');path.setWordWrap(True);path.setTextInteractionFlags(C.Qt.TextSelectableByMouse);body.addWidget(path)
         self.table=W.QTableWidget(len(CATEGORIES),3);self.table.setHorizontalHeaderLabels(['内容','占用空间','可清理'])
         self.table.verticalHeader().hide();self.table.setEditTriggers(W.QAbstractItemView.NoEditTriggers);self.table.setSelectionMode(W.QAbstractItemView.NoSelection)
-        self.table.setFocusPolicy(C.Qt.NoFocus);self.table.setShowGrid(False);self.table.setFixedHeight(205)
+        self.table.setFocusPolicy(C.Qt.NoFocus);self.table.setShowGrid(False);self.table.setFixedHeight(233)
         self.table.setStyleSheet('QTableWidget {background:#191e27;border:1px solid #2b3443;border-radius:7px;} QHeaderView::section {background:#222936;color:#aab7c8;border:0;padding:7px;} QTableWidget::item {padding:4px;border:0;}')
         self.table.horizontalHeader().setSectionResizeMode(0,W.QHeaderView.Stretch)
         for column in(1,2):self.table.horizontalHeader().setSectionResizeMode(column,W.QHeaderView.ResizeToContents)
@@ -29,7 +29,7 @@ class StoragePanel(W.QWidget):
             self.table.setRowHeight(row,28)
             for col,text in enumerate((name,'—','—')):self.table.setItem(row,col,W.QTableWidgetItem(text))
         body.addWidget(self.table)
-        hint=label('仅清理旧版本角色缓存和可重建的字节码；当前角色缓存保留。资源、预设和模版不会作为缓存清除。','Muted');hint.setWordWrap(True);body.addWidget(hint)
+        hint=label('清理旧角色缓存、字节码和网络下载片段。当前角色缓存、网络基础文件、导入资源、预设和模版保留；网络片段清理后需重新下载。','Muted');hint.setWordWrap(True);body.addWidget(hint)
         self.scope=label('统计软件目录内的文件，不计游戏安装目录。','Muted');self.scope.setWordWrap(True);body.addWidget(self.scope);body.addStretch()
         progress=horizontal();self.spinner=LoadingSpinner(16);progress.addWidget(self.spinner);self.status=label('切换到本页后自动统计。','Muted');self.status.setWordWrap(True);progress.addWidget(self.status,1);outer.addLayout(progress)
         actions=horizontal();self.refresh_button=button('重新统计',self.refresh,ghost=True);actions.addWidget(self.refresh_button);actions.addStretch()
@@ -59,7 +59,7 @@ class StoragePanel(W.QWidget):
 
     def confirm_clear(self):
         if self.future is not None or not self.report or not self.report['candidates']:return
-        message='可清理 '+human_size(self.report['reclaimable'])+'。\n将保留当前角色缓存、预设、模版、收藏与资源文件。'
+        message='可清理 '+human_size(self.report['reclaimable'])+'。\n保留当前角色缓存、预设、模版、收藏、导入资源与网络基础文件。网络片段下次使用时重新下载，离线时可能无法加载。'
         if W.QMessageBox.question(self,'清理缓存',message,W.QMessageBox.Yes|W.QMessageBox.No,W.QMessageBox.No)==W.QMessageBox.Yes:
             self.status.setText('正在清理可重建缓存…');self.start('clear',clear_cache,self.root,self.report['candidates'],self.identity())
 

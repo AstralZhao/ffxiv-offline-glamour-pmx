@@ -23,7 +23,10 @@ def validate_game(value,root=ROOT,*,verify_executable=True):
     if version!=profile['client_version']:
         raise ValueError(f"当前游戏版本 {version} 与软件支持的国服版本 {profile['client_version']} 不一致，请使用对应版本的软件包")
     if root.is_relative_to(path):raise ValueError('请将试衣软件放在游戏安装目录之外，避免写入游戏文件夹')
-    if (path/'resource-pack.json').is_file():
+    if (path/'network-source.json').is_file():
+        from network_resources import validate_cached
+        validate_cached(path,profile)
+    elif (path/'resource-pack.json').is_file():
         from resource_pack import validate_directory
         validate_directory(path,profile)
     if verify_executable:
@@ -42,6 +45,15 @@ class SettingsStore:
         if not self.path.is_file():return None,''
         try:
             data=json.loads(self.path.read_bytes())
+            if data.get('version')==3 and data.get('source')=='network':
+                from network_resources import BASE,host_url,validate_cached
+                relative=data.get('resource_directory')
+                if not isinstance(relative,str):raise ValueError('网络资源配置格式不正确')
+                path=(self.root/relative).resolve()
+                if not path.is_relative_to(self.root/BASE):raise ValueError('网络缓存必须位于软件网络资源目录内')
+                source=validate_cached(path,json.loads((self.root/'docs/cn-customization-profile.json').read_bytes()))
+                if source.host!=host_url(data.get('host','')):raise ValueError('网络资源网址与缓存不一致')
+                return validate_game(path,self.root,verify_executable=False),''
             if data.get('version')==2 and data.get('source')=='resource_pack':
                 relative=data.get('resource_directory')
                 if not isinstance(relative,str):raise ValueError('资源包配置格式不正确')
@@ -50,7 +62,7 @@ class SettingsStore:
                 return validate_game(path,self.root,verify_executable=False),''
             if data.get('version')!=1 or not isinstance(data.get('game_directory'),str):raise ValueError('配置格式不正确')
             return validate_game(data['game_directory'],self.root,verify_executable=False),''
-        except(OSError,ValueError,TypeError,AttributeError)as error:return None,str(error)
+        except(OSError,ValueError,TypeError,AttributeError,KeyError)as error:return None,str(error)
 
     def studio(self):
         from studio_lighting import options
@@ -61,7 +73,12 @@ class SettingsStore:
         # Caller validates fully off the GUI thread immediately before saving.
         path=game_root(game)
         if self.root.is_relative_to(path):raise ValueError('软件不能放在游戏安装目录内')
-        if (path/'resource-pack.json').is_file():
+        if (path/'network-source.json').is_file():
+            from network_resources import BASE,NetworkSource
+            if not path.is_relative_to(self.root/BASE):raise ValueError('网络资源缓存不在软件目录内')
+            source=NetworkSource(path)
+            data={'version':3,'source':'network','host':source.host,'resource_directory':path.relative_to(self.root).as_posix()}
+        elif (path/'resource-pack.json').is_file():
             if not path.is_relative_to(self.root/'resources'):raise ValueError('请先通过“导入资源包”将资源包导入软件目录')
             data={'version':2,'source':'resource_pack','resource_directory':path.relative_to(self.root).as_posix()}
         else:data={'version':1,'game_directory':str(path)}

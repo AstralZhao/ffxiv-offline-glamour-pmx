@@ -90,6 +90,7 @@ def validate_directory(path,profile,*,full=False,callback=None,cancel=None):
 def export_resource_pack(game,output,*,root=None,callback=None,cancel=None,compact=False):
     from settings import ROOT,validate_game
     root=Path(root or ROOT);game=validate_game(game,root);output=Path(output).resolve()
+    if (game/'network-source.json').is_file():raise ValueError('网络资源不支持导出，请使用原始资源包或本机游戏目录')
     if output.is_relative_to(game):raise ValueError('资源包不能写入游戏安装目录')
     if output.exists():raise ValueError('目标文件已存在，请使用新的资源包文件名')
     if compact:

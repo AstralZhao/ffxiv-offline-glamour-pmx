@@ -2,7 +2,7 @@
 import hashlib,json,os,re,stat,zipfile
 from pathlib import Path
 
-CATEGORIES=(('resources','已导入资源'),('archives','资源包文件'),('cache','角色与渲染缓存'),
+CATEGORIES=(('resources','已导入资源'),('archives','资源包文件'),('network','网络资源缓存'),('cache','角色与渲染缓存'),
     ('personal','预设、模版与个人数据'),('program','程序与运行环境'),('other','其他文件'))
 CACHE_DIR='artifacts/demo/character-cache'
 
@@ -20,6 +20,7 @@ def _cancel(event):
 
 
 def _category(relative):
+    if relative.startswith('artifacts/network-resources/'):return 'network'
     if relative.startswith('resources/'):return 'resources'
     if '/'not in relative and relative.endswith('.ff14resources'):return 'archives'
     if relative.startswith((CACHE_DIR+'/', 'artifacts/prepared-presets/','artifacts/static-hair-cache/')):return 'cache'
@@ -47,6 +48,7 @@ def _base_identity(path):
 
 def _kind(relative):
     p=Path(relative)
+    if re.fullmatch(r'artifacts/network-resources/[0-9a-f]{64}/[0-9a-f]{64}/chunks/[0-9a-f]{64}/[0-9a-f]{8}\.chunk',p.as_posix()):return 'network_chunk'
     if p.parent.as_posix()==CACHE_DIR and re.fullmatch('[0-9a-f]{64}\\.cache',p.name):return 'old_character'
     if len(p.parts)==3 and p.parts[0]in('demo','tools')and p.parts[1]=='__pycache__'and p.suffix=='.pyc':return 'bytecode'
     return None

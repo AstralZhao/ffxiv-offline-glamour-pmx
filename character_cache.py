@@ -105,7 +105,7 @@ class CharacterCache:
                 unchanged=bool(signatures)
                 for relative,expected in signatures.items():
                     file=(pack.game_root/relative).resolve()
-                    if not file.is_relative_to(pack.game_root)or not file.is_file()or list(stamp(file))!=expected:
+                    if not file.is_relative_to(pack.game_root)or not file.is_file()or list(pack.source_stamp(file))!=expected:
                         unchanged=False;break
                 shader_sources={}
                 names=()if unchanged else packet['resources']
@@ -189,7 +189,7 @@ class CharacterCache:
     def source_signatures(self,pack,resources):
         from source_session import stamp
         files={pack.locate(name)[0]for name in resources};files.update(pack.indexes)
-        return {str(p.relative_to(pack.game_root)).replace('\\','/'):list(stamp(p))for p in files}
+        return {str(p.relative_to(pack.game_root)).replace('\\','/'):list(pack.source_stamp(p))for p in files}
 
     def persist_saved(self,path,character):
         key,identity=self.key(path)
