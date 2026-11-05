@@ -45,7 +45,7 @@ def manifest_data(raw,profile):
     data=json.loads(raw)
     supported=((FORMAT,'CN','wardrobe-base-archives'),('ff14-wardrobe-resources-v2','CN','wardrobe-selected-all-races'))
     if (data.get('format'),data.get('region'),data.get('scope'))not in supported:
-        raise ValueError('不是受支持的幻衣间国服资源包')
+        raise ValueError('不是受支持的幻化柜国服资源包')
     if data.get('format')=='ff14-wardrobe-resources-v2'and data.get('selection',{}).get('race_gender_clan_filters')is not False:
         raise ValueError('精简包缺少全部种族保留声明')
     if data.get('client_version')!=profile['client_version']:raise ValueError('资源包的国服版本与当前软件不匹配')

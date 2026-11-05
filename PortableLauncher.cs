@@ -3,6 +3,10 @@ using System.Diagnostics;
 using System.IO;
 using System.Text;
 using System.Windows.Forms;
+using System.Reflection;
+
+[assembly: AssemblyTitle("幻化柜")]
+[assembly: AssemblyProduct("幻化柜")]
 
 internal static class PortableLauncher
 {
@@ -53,13 +57,13 @@ internal static class PortableLauncher
                 process.Start(); process.BeginOutputReadLine(); process.BeginErrorReadLine();
                 process.WaitForExit();
                 if (process.ExitCode != 0)
-                    MessageBox.Show("软件启动未能完成，请查看：\n" + log + "\n\n也可查看 artifacts/demo/client-startup.log。", "幻衣间", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("软件启动未能完成，请查看：\n" + log + "\n\n也可查看 artifacts/demo/client-startup.log。", "幻化柜", MessageBoxButtons.OK, MessageBoxIcon.Error);
                 return process.ExitCode;
             }
         }
         catch (Exception error)
         {
-            MessageBox.Show(error.Message, "幻衣间启动", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            MessageBox.Show(error.Message, "幻化柜启动", MessageBoxButtons.OK, MessageBoxIcon.Error);
             return 1;
         }
     }

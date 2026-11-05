@@ -55,7 +55,7 @@ class NativeClient:
         self.query=tk.StringVar();self.preset_name=tk.StringVar();self.folder_name=tk.StringVar(value='全部同模目录')
         self.appearance_note=tk.StringVar();self.selected_note=tk.StringVar(value='未装备')
         self.show_head=tk.BooleanVar(value=True)
-        root.title('幻衣间 · D3D11 客户端');root.geometry('1440x920');root.minsize(1100,720)
+        root.title('幻化柜 · D3D11 客户端');root.geometry('1440x920');root.minsize(1100,720)
         style=ttk.Style(root);style.theme_use('clam')
         style.configure('.',font=('Microsoft YaHei UI',10),background='#20242e',foreground='#edf0f6')
         style.configure('TFrame',background='#20242e');style.configure('TLabelframe',background='#20242e')
@@ -73,10 +73,10 @@ class NativeClient:
     def build_ui(self):
         shell=ttk.Frame(self.root,padding=12);shell.pack(fill='both',expand=True)
         top=ttk.Frame(shell);top.pack(fill='x',pady=(0,10))
-        ttk.Label(top,text='幻衣间',font=('Microsoft YaHei UI',20,'bold')).pack(side='left')
+        ttk.Label(top,text='幻化柜',font=('Microsoft YaHei UI',20,'bold')).pack(side='left')
         ttk.Label(top,text='  国服本地装备 · 原生三维试衣',foreground='#95a1b5').pack(side='left')
-        ttk.Button(top,text='我的搭配',command=self.saved_dialog).pack(side='right')
-        ttk.Button(top,text='收藏当前搭配',command=self.save_outfit).pack(side='right',padx=8)
+        ttk.Button(top,text='投影模版',command=self.saved_dialog).pack(side='right')
+        ttk.Button(top,text='保存模版',command=self.save_outfit).pack(side='right',padx=8)
         panes=ttk.Panedwindow(shell,orient='horizontal');panes.pack(fill='both',expand=True)
         left=ttk.Frame(panes,width=300,padding=(0,0,10,0));center=ttk.Frame(panes);right=ttk.Frame(panes,width=350,padding=(10,0,0,0))
         panes.add(left,weight=0);panes.add(center,weight=1);panes.add(right,weight=0)
@@ -87,7 +87,7 @@ class NativeClient:
         ttk.Button(actions,text='导入预设',command=self.import_preset).pack(side='left')
         ttk.Button(actions,text='编辑发型与捏脸',command=self.open_editor).pack(side='right')
         ttk.Label(left,textvariable=self.appearance_note,foreground='#e5c481',wraplength=280).pack(fill='x')
-        ttk.Label(left,text='当前搭配',font=('Microsoft YaHei UI',12,'bold')).pack(anchor='w',pady=(18,8))
+        ttk.Label(left,text='当前模版',font=('Microsoft YaHei UI',12,'bold')).pack(anchor='w',pady=(18,8))
         self.outfit=ttk.Treeview(left,columns=('name',),show='tree headings',height=10,selectmode='browse')
         self.outfit.heading('#0',text='部位');self.outfit.column('#0',width=60,stretch=False)
         self.outfit.heading('name',text='装备');self.outfit.column('name',width=195);self.outfit.pack(fill='x')
@@ -461,14 +461,14 @@ class NativeClient:
 
     def save_outfit(self):
         if not self.ready or self.job:return
-        name=simpledialog.askstring('收藏搭配','搭配名称',parent=self.root)
+        name=simpledialog.askstring('保存模版','模版名称',parent=self.root)
         if name:
-            try:self.engine.save({'name':name,'state':self.good});self.message.set('搭配已收藏')
+            try:self.engine.save({'name':name,'state':self.good});self.message.set('模版已保存')
             except Exception as error:self.message.set(str(error))
 
     def saved_dialog(self):
         if not self.boot:return
-        rows=self.engine.saved();dialog=tk.Toplevel(self.root);dialog.title('我的搭配');dialog.geometry('440x480')
+        rows=self.engine.saved();dialog=tk.Toplevel(self.root);dialog.title('投影模版');dialog.geometry('440x480')
         for row in rows:
             def choose(r=row):
                 if self.job:return
@@ -477,7 +477,7 @@ class NativeClient:
                     return self.engine.run('outfit',{'id':r['id'],'state':deepcopy(self.good)})
                 self.submit(load,self.accept_result)
             ttk.Button(dialog,text=row['name']+' · '+row['time'],command=choose).pack(fill='x',padx=12,pady=5)
-        if not rows:ttk.Label(dialog,text='还没有收藏的搭配').pack(pady=30)
+        if not rows:ttk.Label(dialog,text='还没有保存的模版').pack(pady=30)
 
     def close(self):
         if self.closed:return

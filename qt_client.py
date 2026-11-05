@@ -162,7 +162,7 @@ class OutfitCard(W.QFrame):
 
 class WardrobeWindow(W.QMainWindow):
     def __init__(self):
-        super().__init__();self.controller=None;self.allow_close=False;self.setWindowTitle('幻衣间')
+        super().__init__();self.controller=None;self.allow_close=False;self.setWindowTitle('幻化柜')
         available=W.QApplication.primaryScreen().availableGeometry()
         self.resize(min(1480,available.width()-36),min(940,available.height()-55));self.setMinimumSize(1020,680)
         self.setAttribute(C.Qt.WA_ShowWithoutActivating)
@@ -228,12 +228,12 @@ class QtClient(NativeClient):
     def build_ui(self):
         central=W.QWidget();self.window.setCentralWidget(central);outer=vertical(central,0,0)
         header=W.QFrame();header.setObjectName('Header');header.setFixedHeight(86);h=horizontal(header,22,14)
-        brand=vertical(spacing=0);brand.addWidget(label('GLAMOUR ATELIER','Eyebrow'));brand.addWidget(label('幻衣间','Brand'));h.addLayout(brand)
-        h.addSpacing(15);self.tagline=label('自由搭配，每一种可能。','Muted');h.addWidget(self.tagline);h.addStretch()
+        brand=vertical(spacing=0);brand.addWidget(label('GLAMOUR DRESSER','Eyebrow'));brand.addWidget(label('幻化柜','Brand'));h.addLayout(brand)
+        h.addSpacing(15);self.tagline=label('试遍幻化，保存每一种可能。','Muted');h.addWidget(self.tagline);h.addStretch()
         self.character_manager=CharacterManagerDialog(self);self.preset_combo=self.character_manager.preset_combo
         self.character_name_label=label('正在加载角色…','Muted');self.character_name_label.setMaximumWidth(210);h.addWidget(self.character_name_label)
         self.character_manager_button=button('角色管理',self.open_character_manager);h.addWidget(self.character_manager_button)
-        h.addWidget(button('我的搭配',self.saved_dialog,ghost=True));h.addWidget(button('保存搭配',self.save_outfit,primary=True))
+        h.addWidget(button('投影模版',self.saved_dialog,ghost=True));h.addWidget(button('保存模版',self.save_outfit,primary=True))
         h.addWidget(button('设置',self.open_settings,ghost=True));outer.addWidget(header)
         body=W.QWidget();body_layout=horizontal(body,18,16);outer.addWidget(body,1)
         self.browser=W.QFrame();self.browser.setObjectName('Panel');self.browser.setFixedWidth(340);left=vertical(self.browser,16,12)
@@ -305,7 +305,7 @@ class QtClient(NativeClient):
         hint=label('拖动旋转 · 右键平移 · 滚轮缩放','Muted');hint.setAlignment(C.Qt.AlignCenter);hint.setStyleSheet('font-size:10px;padding:0 0 12px 0');middle.addWidget(hint)
         body_layout.addWidget(scene,1)
         self.dressing=W.QFrame();self.dressing.setObjectName('Panel');self.dressing.setFixedWidth(290);right=vertical(self.dressing,14,8)
-        title=horizontal();title.addWidget(label('当前搭配','Title'));title.addStretch();self.worn_count=label('0 件','Badge');title.addWidget(self.worn_count)
+        title=horizontal();title.addWidget(label('当前模版','Title'));title.addStretch();self.worn_count=label('0 件','Badge');title.addWidget(self.worn_count)
         title.addWidget(button('清空',self.clear_outfit,ghost=True));right.addLayout(title)
         self.appearance_label=label('软件预设库','Muted');self.appearance_label.setWordWrap(True);right.addWidget(self.appearance_label)
         tabs=horizontal(spacing=6);self.outfit_tabs=[]
@@ -373,7 +373,7 @@ class QtClient(NativeClient):
 
     def open_guide(self):
         from user_guide import GUIDE
-        dialog=W.QDialog(self.window);dialog.setWindowTitle('操作说明 · 幻衣间');dialog.resize(680,720)
+        dialog=W.QDialog(self.window);dialog.setWindowTitle('操作说明 · 幻化柜');dialog.resize(680,720)
         layout=vertical(dialog,20,12);browser=W.QTextBrowser();browser.setOpenExternalLinks(False)
         browser.document().setDefaultStyleSheet('body,p,li { color:#edf1f7; } h2,h3 { color:#a3e4d5; } a { color:#89d5c4; }')
         browser.document().setDocumentMargin(14);browser.setHtml(GUIDE)
@@ -397,7 +397,7 @@ class QtClient(NativeClient):
         if accepted:
             if getattr(fn,'__name__','')=='draw':
                 same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))
-                self.loading_kind='正在调整视角…'if same_outfit else'正在绘制搭配…'
+                self.loading_kind='正在调整视角…'if same_outfit else'正在绘制模版…'
             else:
                 operation=arguments[0]if arguments and isinstance(arguments[0],str)else''
                 self.loading_kind={'preset':'正在加载角色…','import':'正在导入预设…','create':'正在新建预设…','appearance_preview':'正在更新模型…',
@@ -1051,9 +1051,9 @@ class QtClient(NativeClient):
 
     def save_outfit(self):
         if not self.ready or self.job:return
-        name,ok=W.QInputDialog.getText(self.window,'保存搭配','给这套搭配起个名字')
+        name,ok=W.QInputDialog.getText(self.window,'保存模版','给这套模版起个名字')
         if ok and name.strip():
-            try:self.engine.save({'name':name,'state':self.good});self.message.set('搭配已保存')
+            try:self.engine.save({'name':name,'state':self.good});self.message.set('模版已保存')
             except Exception as error:self.message.set(str(error))
 
     def saved_dialog(self):
@@ -1119,7 +1119,7 @@ class EquipmentDetailsDialog(W.QDialog):
         self.favorite_button.setToolTip('独立保存收藏状态，不会保存或丢弃正在编辑的标签');outer.addWidget(self.favorite_button)
         outer.addWidget(label('装备标签','Section'))
         hint=label('每件装备可添加多个标签，用逗号分隔。自动标签也可以修改或删除。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
-        self.tag_edit=W.QPlainTextEdit();self.tag_edit.setPlaceholderText('例如：礼服，优雅，我的常用搭配');self.tag_edit.setMaximumHeight(110);outer.addWidget(self.tag_edit)
+        self.tag_edit=W.QPlainTextEdit();self.tag_edit.setPlaceholderText('例如：礼服，优雅，我的常用模版');self.tag_edit.setMaximumHeight(110);outer.addWidget(self.tag_edit)
         outer.addWidget(label('当前标签（点标签进行检索）','Muted'))
         tag_scroll=W.QScrollArea();tag_scroll.setWidgetResizable(True);tag_scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff);tag_scroll.setMinimumHeight(85);tag_scroll.setMaximumHeight(140)
         self.tag_buttons=W.QWidget();self.tag_layout=W.QGridLayout(self.tag_buttons);self.tag_layout.setContentsMargins(0,0,0,0);self.tag_layout.setSpacing(6)

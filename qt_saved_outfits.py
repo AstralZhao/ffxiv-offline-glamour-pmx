@@ -16,15 +16,15 @@ class SavedOutfitsDialog(W.QDialog):
     page_size=12
 
     def __init__(self,controller):
-        super().__init__(controller.window);self.c=controller;self.setWindowTitle('我的搭配')
+        super().__init__(controller.window);self.c=controller;self.setWindowTitle('投影模版')
         self.resize(960,730);self.setMinimumSize(780,580);self.page_index=0;self.selected_id=None
         self.list_icons=[];self.detail_icons=[];self.records=[];self.matches=[];self.metadata={}
-        outer=vertical(self,22,14);heading=horizontal();heading.addWidget(label('我的搭配','Title'));heading.addStretch()
+        outer=vertical(self,22,14);heading=horizontal();heading.addWidget(label('投影模版','Title'));heading.addStretch()
         self.total=label('','Badge');heading.addWidget(self.total);outer.addLayout(heading)
         outer.addWidget(label('仅应用装备和染色，保留当前角色与观察视角。','Muted'))
-        tools=horizontal();self.search=W.QLineEdit();self.search.setPlaceholderText('搜索搭配名称、装备名称或编号');self.search.setClearButtonEnabled(True)
+        tools=horizontal();self.search=W.QLineEdit();self.search.setPlaceholderText('搜索模版名称、装备名称或编号');self.search.setClearButtonEnabled(True)
         tools.addWidget(self.search,1);self.sort=ComboBox();self.sort.addItem('最近保存','recent');self.sort.addItem('最早保存','oldest');self.sort.addItem('名称排序','name');tools.addWidget(self.sort)
-        tools.addWidget(button('刷新',self.reload,ghost=True));outer.addLayout(tools)
+        tools.addWidget(button('刷新',self.reload,ghost=True));self.import_code_button=button('导入模版码',self.import_code);tools.addWidget(self.import_code_button);outer.addLayout(tools)
         splitter=W.QSplitter(C.Qt.Horizontal);outer.addWidget(splitter,1)
         left=W.QWidget();left_layout=vertical(left,0,10);self.list=W.QListWidget();self.list.setSpacing(4)
         self.list.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel)
@@ -35,13 +35,13 @@ class SavedOutfitsDialog(W.QDialog):
         pager.addWidget(self.page);self.pages=label('','Muted');pager.addWidget(self.pages);pager.addStretch();pager.addWidget(self.next);left_layout.addLayout(pager)
         splitter.addWidget(left)
         self.detail_panel=W.QFrame();self.detail_panel.setObjectName('Panel');detail=vertical(self.detail_panel,18,12)
-        self.title=label('选择一套搭配','Title');self.title.setWordWrap(True);detail.addWidget(self.title)
-        self.info=label('在左侧查看保存的搭配。','Muted');self.info.setWordWrap(True);detail.addWidget(self.info)
+        self.title=label('选择一套模版','Title');self.title.setWordWrap(True);detail.addWidget(self.title)
+        self.info=label('在左侧查看保存的模版。','Muted');self.info.setWordWrap(True);detail.addWidget(self.info)
         scroll=W.QScrollArea();scroll.setWidgetResizable(True);self.gear_content=W.QWidget();self.gear_layout=vertical(self.gear_content,0,8)
         self.gear_layout.setSizeConstraint(W.QLayout.SetMinAndMaxSize);scroll.setWidget(self.gear_content);detail.addWidget(scroll,1)
         self.notice=label('','Warning');self.notice.setWordWrap(True);detail.addWidget(self.notice)
         actions=horizontal();self.rename_button=button('重命名',self.rename);self.delete_button=button('删除',self.delete,ghost=True)
-        actions.addWidget(self.rename_button);actions.addWidget(self.delete_button);actions.addStretch();detail.addLayout(actions)
+        actions.addWidget(self.rename_button);actions.addWidget(self.delete_button);actions.addStretch();self.export_code_button=button('生成导出码',self.export_code);actions.addWidget(self.export_code_button);detail.addLayout(actions)
         self.apply_button=button('应用到当前角色',self.apply,primary=True);detail.addWidget(self.apply_button)
         splitter.addWidget(self.detail_panel);splitter.setSizes([440,440]);splitter.setChildrenCollapsible(False)
         bottom=horizontal();self.count_note=label('','Muted');bottom.addWidget(self.count_note,1);bottom.addWidget(button('关闭',self.reject,ghost=True));outer.addLayout(bottom)
@@ -90,7 +90,7 @@ class SavedOutfitsDialog(W.QDialog):
         selected=next((i for i,r in enumerate(shown)if r['id']==self.selected_id),0)
         if shown:self.list.setCurrentRow(selected)
         else:self.select(None)
-        self.empty.setText('还没有保存搭配。试穿后点击主界面的“保存搭配”。'if not self.records else'没有符合搜索条件的搭配。')
+        self.empty.setText('还没有保存模版。试穿后点击主界面的“保存模版”。'if not self.records else'没有符合搜索条件的模版。')
         self.empty.setVisible(not shown);self.list.setVisible(bool(shown));self.count_note.setText(f"找到 {len(self.matches):,} / 共 {len(self.records):,} 套 · 每页 {self.page_size} 套")
         self.refresh_icons()
 
@@ -101,10 +101,10 @@ class SavedOutfitsDialog(W.QDialog):
         while self.gear_layout.count():
             child=self.gear_layout.takeAt(0)
             if child.widget():child.widget().deleteLater()
-        for control in(self.rename_button,self.delete_button,self.apply_button):control.setEnabled(record is not None)
+        for control in(self.rename_button,self.delete_button,self.apply_button,self.export_code_button):control.setEnabled(record is not None)
         self.notice.clear()
         if record is None:
-            self.title.setText('选择一套搭配');self.info.setText('在左侧查看保存的搭配。');return
+            self.title.setText('选择一套模版');self.info.setText('在左侧查看保存的模版。');return
         self.title.setText(record['name']);self.info.setText('保存于 '+record.get('time','')+'\n空部位会清空当前对应装备。')
         equipment=record['state']['equipment']
         for slot,slot_name in SLOTS.items():
@@ -136,7 +136,7 @@ class SavedOutfitsDialog(W.QDialog):
     def rename(self):
         record=self.selected_record()
         if record is None:return
-        name,ok=W.QInputDialog.getText(self,'重命名搭配','搭配名称',text=record['name'])
+        name,ok=W.QInputDialog.getText(self,'重命名模版','模版名称',text=record['name'])
         if ok:
             try:self.c.engine.rename_saved_outfit(record['id'],name);self.reload()
             except Exception as error:self.notice.setText(str(error))
@@ -144,7 +144,63 @@ class SavedOutfitsDialog(W.QDialog):
     def delete(self):
         record=self.selected_record()
         if record is None:return
-        answer=W.QMessageBox.question(self,'删除搭配','删除“'+record['name']+'”？此操作无法撤销。',W.QMessageBox.Yes|W.QMessageBox.No,W.QMessageBox.No)
+        answer=W.QMessageBox.question(self,'删除模版','删除“'+record['name']+'”？此操作无法撤销。',W.QMessageBox.Yes|W.QMessageBox.No,W.QMessageBox.No)
         if answer==W.QMessageBox.Yes:
             try:self.c.engine.delete_saved_outfit(record['id']);self.reload()
             except Exception as error:self.notice.setText(str(error))
+
+    def export_code(self):
+        record=self.selected_record()
+        if record is None:return
+        try:code=self.c.engine.export_template_code(record['id'])
+        except Exception as error:self.notice.setText(str(error));return
+        return self.open_code_dialog(TemplateExportDialog(self,record['name'],code))
+
+    def import_code(self):return self.open_code_dialog(TemplateImportDialog(self))
+
+    def open_code_dialog(self,dialog):
+        dialog.setWindowModality(C.Qt.WindowModal)
+        if self.testAttribute(C.Qt.WA_DontShowOnScreen):dialog.setAttribute(C.Qt.WA_DontShowOnScreen,True)
+        dialog.finished.connect(dialog.deleteLater);dialog.show();return dialog
+
+
+class TemplateExportDialog(W.QDialog):
+    def __init__(self,browser,name,code):
+        super().__init__(browser);self.setWindowTitle('模版导出码');self.resize(570,330)
+        outer=vertical(self,22,14);outer.addWidget(label('模版导出码','Title'));name_label=label(name,'Muted');name_label.setWordWrap(True);outer.addWidget(name_label)
+        self.code=W.QPlainTextEdit();self.code.setReadOnly(True);self.code.setPlainText(code);outer.addWidget(self.code,1)
+        note=label('包含装备和双染色；对方可在“投影模版 → 导入模版码”新增模版。','Muted');note.setWordWrap(True);outer.addWidget(note)
+        actions=horizontal();self.status=label('','Muted');actions.addWidget(self.status,1)
+        actions.addWidget(button('关闭',self.reject,ghost=True));self.copy_button=button('复制导出码',self.copy,primary=True);actions.addWidget(self.copy_button);outer.addLayout(actions)
+
+    def copy(self):W.QApplication.clipboard().setText(self.code.toPlainText());self.status.setText('已复制')
+
+
+class TemplateImportDialog(W.QDialog):
+    def __init__(self,browser):
+        super().__init__(browser);self.browser=browser;self.setWindowTitle('导入模版码');self.resize(570,430);self.record=None
+        outer=vertical(self,22,14);outer.addWidget(label('导入模版码','Title'))
+        hint=label('粘贴完整导出码，校验后新增一份模版。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
+        self.code=W.QPlainTextEdit();self.code.setPlaceholderText('HGG1.…');outer.addWidget(self.code,1)
+        self.name=W.QLineEdit();self.name.setMaxLength(32);self.name.setPlaceholderText('模版名称');outer.addWidget(self.name)
+        self.info=label('','Muted');self.info.setWordWrap(True);outer.addWidget(self.info)
+        self.error=label('','Warning');self.error.setWordWrap(True);outer.addWidget(self.error)
+        actions=horizontal();actions.addWidget(button('取消',self.reject,ghost=True));actions.addStretch();self.add_button=button('新增模版',self.add,primary=True);self.add_button.setEnabled(False);actions.addWidget(self.add_button);outer.addLayout(actions)
+        self.timer=C.QTimer(self);self.timer.setSingleShot(True);self.timer.setInterval(180);self.timer.timeout.connect(self.parse)
+        self.code.textChanged.connect(self.changed);self.name.textChanged.connect(lambda:self.add_button.setEnabled(self.record is not None and bool(self.name.text().strip())))
+
+    def changed(self):self.record=None;self.add_button.setEnabled(False);self.timer.start()
+
+    def parse(self):
+        self.timer.stop();self.record=None;self.add_button.setEnabled(False);self.info.clear();self.error.clear()
+        if not self.code.toPlainText().strip():return
+        try:self.record=self.browser.c.engine.inspect_template_code(self.code.toPlainText())
+        except Exception as error:self.error.setText(str(error));return
+        self.name.setText(self.record['name']);count=sum(c['item_id']is not None for c in self.record['state']['equipment'].values())
+        self.info.setText(f'{count} 件装备 · 含两个染色区 · 新增后可在列表中选择应用到当前角色。');self.add_button.setEnabled(True)
+
+    def add(self):
+        try:record=self.browser.c.engine.import_template_code(self.code.toPlainText(),self.name.text())
+        except Exception as error:self.error.setText(str(error));return
+        b=self.browser;b.search.clear();b.search_timer.stop();b.sort.setCurrentIndex(0);b.page_index=0;b.selected_id=record['id'];b.reload()
+        b.notice.setText('模版已新增，尚未应用到角色。');self.accept()

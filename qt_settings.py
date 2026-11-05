@@ -16,7 +16,7 @@ class SettingsDialog(W.QDialog):
         self.cancel_event=threading.Event();self.progress_record=None;self.operation=None
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeConfig')
         self.setWindowTitle('首次配置'if first else'设置');self.resize(660,660)
-        outer=vertical(self,24,16);outer.addWidget(label('开始使用幻衣间'if first else'软件设置','Title'))
+        outer=vertical(self,24,16);outer.addWidget(label('开始使用幻化柜'if first else'软件设置','Title'))
         hint=label('选择资源来源：使用本机国服游戏目录，或导入独立资源包。导入后无需安装游戏，配置会自动记住。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
         modes=horizontal();self.game_mode=W.QRadioButton('使用游戏目录');self.pack_mode=W.QRadioButton('导入资源包')
         modes.addWidget(self.game_mode);modes.addWidget(self.pack_mode);modes.addStretch();outer.addLayout(modes)
@@ -27,7 +27,7 @@ class SettingsDialog(W.QDialog):
         self.browse=button('选择目录',self.choose);row.addWidget(self.browse);outer.addLayout(row)
         exports=horizontal();self.export_button=button('从游戏目录导出资源包',self.export,ghost=True);exports.addWidget(self.export_button);exports.addStretch();outer.addLayout(exports)
         self.game_mode.toggled.connect(self.mode_changed);self.mode_changed()
-        note=label('运行环境已随软件提供。预设、收藏和搭配保存在软件目录，无需额外配置。','Muted');note.setWordWrap(True);outer.addWidget(note)
+        note=label('运行环境已随软件提供。预设、收藏和模版保存在软件目录，无需额外配置。','Muted');note.setWordWrap(True);outer.addWidget(note)
         outer.addWidget(label('预览摄影棚','Section'));form=W.QFormLayout();self.studio_background=ComboBox();self.studio_light=ComboBox()
         for key,(text,_)in BACKGROUNDS.items():self.studio_background.addItem(text,key)
         for key,text in LIGHTS.items():self.studio_light.addItem(text,key)
@@ -47,12 +47,12 @@ class SettingsDialog(W.QDialog):
         self.finished.connect(lambda _:self.pool.shutdown(wait=False,cancel_futures=True))
 
     def choose(self):
-        if self.pack_mode.isChecked():path,_=W.QFileDialog.getOpenFileName(self,'导入幻衣间资源包','','幻衣间资源包 (*.ff14resources *.zip)')
+        if self.pack_mode.isChecked():path,_=W.QFileDialog.getOpenFileName(self,'导入幻化柜资源包','','幻化柜资源包 (*.ff14resources *.zip)')
         else:path=W.QFileDialog.getExistingDirectory(self,'选择国服游戏目录',self.path.text()or str(Path.home()))
         if path:self.path.setText(path)
 
     def mode_changed(self):
-        packed=self.pack_mode.isChecked();self.path_label.setText('幻衣间资源包'if packed else'国服游戏目录')
+        packed=self.pack_mode.isChecked();self.path_label.setText('幻化柜资源包'if packed else'国服游戏目录')
         self.path.setPlaceholderText('选择 .ff14resources 文件，导入后保存在软件 resources 目录'if packed else'包含 game 文件夹的游戏安装目录')
         self.browse.setText('选择资源包'if packed else'选择目录');self.export_button.setVisible(not packed)
 
@@ -64,7 +64,7 @@ class SettingsDialog(W.QDialog):
 
     def export(self):
         if self.future:return
-        path,_=W.QFileDialog.getSaveFileName(self,'导出幻衣间资源包',str(self.store.root/'幻衣间资源包-全种族精简.ff14resources'),'幻衣间资源包 (*.ff14resources)')
+        path,_=W.QFileDialog.getSaveFileName(self,'导出幻化柜资源包',str(self.store.root/'幻化柜资源包-全种族精简.ff14resources'),'幻化柜资源包 (*.ff14resources)')
         if not path:return
         from resource_pack import export_resource_pack
         self.operation='export';self.cancel_event.clear();self.progress_record=None;self.busy(True)
@@ -81,7 +81,7 @@ class SettingsDialog(W.QDialog):
             self.future=self.pool.submit(import_resource_pack,value,self.store.root,callback=self.progress,cancel=self.cancel_event)
         else:
             if self.pack_mode.isChecked()and not(Path(value)/'resource-pack.json').is_file():
-                self.status.setText('请选择有效的幻衣间资源包文件');self.busy(False);return
+                self.status.setText('请选择有效的幻化柜资源包文件');self.busy(False);return
             self.status.setText('正在检查资源目录与版本…');self.future=self.pool.submit(validate_game,value,self.store.root)
         self.timer.start()
 

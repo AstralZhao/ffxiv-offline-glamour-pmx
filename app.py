@@ -51,7 +51,7 @@ def empty_outfit():return {slot:{'item_id':None,'first':0,'second':0}for slot in
 
 
 def parse_state(raw):
-    if not isinstance(raw,dict):raise ValueError('搭配数据格式不正确')
+    if not isinstance(raw,dict):raise ValueError('模版数据格式不正确')
     equipment=raw.get('equipment',{})
     if not isinstance(equipment,dict)or set(equipment)-set(SLOTS):raise ValueError('存在未接入的装备部位')
     result=empty_outfit()
@@ -409,7 +409,7 @@ class DemoEngine:
             self.refresh_presets();self.appearance_options=AppearanceOptions(self.pack,self.store,ROOT)
             if not self.presets:raise ValueError('没有找到可用的角色预设，请导入原生DAT预设')
             self.restore_startup_session()
-            with self.lock:self.status='ready';self.message='可以开始搭配了'
+            with self.lock:self.status='ready';self.message='可以开始试衣了'
         except Exception as error:
             with self.lock:self.status='error';self.error=str(error);self.message='初始化未完成'
             self.write_error(error)
@@ -432,7 +432,7 @@ class DemoEngine:
         except (ValueError,NotImplementedError):
             if not valid or not self.initial_state:raise
             self.initial_state={};self.load(self.active_preset)
-            self.last['notices'].append('上次搭配暂时无法恢复，已加载原角色。')
+            self.last['notices'].append('上次模版暂时无法恢复，已加载原角色。')
         if valid:
             current=self.describe_appearance(key);rendered=record.get('rendered_parameters')
             if isinstance(rendered,dict)and record.get('saved_preset_sha256')==current['sha256']and rendered!=current['parameters']:
@@ -673,7 +673,7 @@ class DemoEngine:
             elif operation=='outfit':result=self.apply_saved_outfit(payload)
             else:raise ValueError('未知操作')
             if result.get('model_loaded')is False or self.character is None:return result
-            with self.lock:self.status='ready';self.error=None;self.message='可以开始搭配了'
+            with self.lock:self.status='ready';self.error=None;self.message='可以开始试衣了'
             return result
         except Exception as error:self.write_error(error);raise
 
@@ -695,7 +695,7 @@ class DemoEngine:
 
     def save(self,payload):
         name=payload.get('name','').strip()[:32]
-        if not name:raise ValueError('请为搭配起个名字')
+        if not name:raise ValueError('请为模版起个名字')
         state=parse_state(payload['state']);rows=self.saved()
         row={'id':secrets.token_hex(6),'name':name,'state':{'equipment':state['equipment']},
             'time':time.strftime('%Y-%m-%d %H:%M')}
@@ -708,7 +708,7 @@ class DemoEngine:
 
     def saved_record(self,identifier):
         record=next((r for r in self.saved()if r['id']==identifier),None)
-        if record is None:raise ValueError('这套搭配已不存在，请刷新列表')
+        if record is None:raise ValueError('这套模版已不存在，请刷新列表')
         return record
 
     def apply_saved_outfit(self,payload):
@@ -721,15 +721,42 @@ class DemoEngine:
 
     def rename_saved_outfit(self,identifier,name):
         name=name.strip()[:32]
-        if not name:raise ValueError('请为搭配起个名字')
+        if not name:raise ValueError('请为模版起个名字')
         rows=self.saved();record=next((r for r in rows if r['id']==identifier),None)
-        if record is None:raise ValueError('这套搭配已不存在，请刷新列表')
+        if record is None:raise ValueError('这套模版已不存在，请刷新列表')
         record['name']=name;self.write_saved(rows)
 
     def delete_saved_outfit(self,identifier):
         rows=self.saved();remaining=[r for r in rows if r['id']!=identifier]
-        if len(rows)==len(remaining):raise ValueError('这套搭配已不存在，请刷新列表')
+        if len(rows)==len(remaining):raise ValueError('这套模版已不存在，请刷新列表')
         self.write_saved(remaining)
+
+    def export_template_code(self,identifier):
+        from template_code import encode
+        record=self.saved_record(identifier)
+        return encode(record['name'],parse_state(record['state'])['equipment'])
+
+    def inspect_template_code(self,code):
+        from template_code import decode
+        record=decode(code)
+        with closing(database())as conn:
+            stains={r[0]for r in conn.execute('SELECT stain_id FROM dyes')}
+            for slot,choice in record['state']['equipment'].items():
+                if choice['item_id']is None:continue
+                item=conn.execute('SELECT slot,dye_count FROM equipment WHERE item_id=?',(choice['item_id'],)).fetchone()
+                if item is None:raise ValueError('当前国服目录没有装备 #'+str(choice['item_id']))
+                if item['slot']!=('FingerL'if slot=='FingerR'else slot):raise ValueError('装备 #'+str(choice['item_id'])+' 的部位与模版码不符')
+                for channel,key in enumerate(('first','second'),1):
+                    if choice[key]not in stains:raise ValueError('当前国服目录没有染剂 #'+str(choice[key]))
+                    if choice[key]and channel>item['dye_count']:raise ValueError('模版码对不可染色的区域设置了染剂')
+        return record
+
+    def import_template_code(self,code,name=None):
+        record=self.inspect_template_code(code)
+        if name is not None:
+            from template_code import _name
+            record['name']=_name(name)
+        return self.save(record)[0]
 
     def close_gpu(self):
         if self.characters:self.characters.close()
