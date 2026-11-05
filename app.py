@@ -144,6 +144,13 @@ class DemoEngine:
                 reuse_joint_palette=True
                 reuse_frame_constants=True
                 reuse_character_layer=True
+                def create(self,*args,**kwargs):
+                    pointer=super().create(*args,**kwargs)
+                    owner=getattr(self,'_effect_scope',None)
+                    if owner is not None and hasattr(self,'memory_residency'):
+                        if not hasattr(owner,'_owned_gpu'):owner._owned_gpu={}
+                        owner._owned_gpu[id(pointer)]=pointer
+                    return pointer
                 def __init__(self,*args,**kwargs):
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
                     self.geometry_identities=OrderedDict();self.reuse_geometry_identity=True
@@ -211,6 +218,9 @@ class DemoEngine:
                         self.character_layer.invalidate();self.capture_character_layer=self.reuse_character_layer
                         return super().draw_scene(scene,yaw)
                     finally:
+                        if hasattr(self,'memory_residency'):
+                            from resource_residency import prune_effect_resources
+                            prune_effect_resources(self)
                         self.capture_character_layer=False
                         self.pending_effect_draw=None
                         self.frame_joints={};self.frame_constant_buffers=None;self.frame_constant_pointers=set()
@@ -270,9 +280,11 @@ class DemoEngine:
                     immutable=immutable and isinstance(owner,bytes)
                     identity=(bind,id(array));known=self.geometry_identities.get(identity)if immutable and self.reuse_geometry_identity else None
                     if known is not None and known[0]()is array and known[1]in self.geometry_buffers:
+                        if hasattr(self,'memory_residency'):self.memory_residency.geometry(known[1])
                         self.geometry_buffers.move_to_end(known[1]);self.geometry_identities.move_to_end(identity)
                         return self.geometry_buffers[known[1]][0]
                     key=(bind,array.dtype.str,array.shape,hashlib.sha256(array.tobytes()).digest())
+                    if hasattr(self,'memory_residency'):self.memory_residency.geometry(key)
                     if immutable and self.reuse_geometry_identity:
                         self.geometry_identities[identity]=(weakref.ref(array),key)
                         while len(self.geometry_identities)>1024:self.geometry_identities.popitem(last=False)
@@ -326,10 +338,15 @@ class DemoEngine:
                         if any(sample.get('draw_layer')!=2 for sample in scene.effect_samples):
                             raise UnsupportedEffect('原生试穿合成尚未审阅此特效层')
                         def draw_layer2(color):
-                            self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view,
+                            self.last_effect_draws=self.draw_effects(scene,scene.effect_samples,camera,view,
                                 color_source=color,native_alpha=True)
                         self.pending_effect_draw=draw_layer2
-                    else:self.last_effect_draws=self.effect_renderer.draw(scene,scene.effect_samples,camera,view)
+                    else:self.last_effect_draws=self.draw_effects(scene,scene.effect_samples,camera,view)
+
+                def draw_effects(self,*args,**kwargs):
+                    self._effect_scope=self.effect_renderer
+                    try:return self.effect_renderer.draw(*args,**kwargs)
+                    finally:self._effect_scope=None
 
                 def render_plan(self,scene,mesh,role):
                     if role!='material'or not mesh['shader_path'].endswith('/characterlegacy.shpk'):
@@ -384,6 +401,11 @@ class DemoEngine:
             self.characters=CharacterCache(self.pack,self.store,self.hair)
             from gpu_selection import preferred_adapter
             self.renderer=PreviewRenderer(640,840,preferred_adapter(),reverse_depth=True)
+            if self.pack.memory_only:
+                from resource_residency import Residency
+                self.renderer.memory_residency=Residency(self.renderer)
+                from memory_resources import release_pending
+                release_pending(self.game)
             from presets import PresetLibrary
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
@@ -500,14 +522,26 @@ class DemoEngine:
                 'indices':freeze(np.ascontiguousarray(mesh['indices'],dtype='<u4'))}for mesh in scene.meshes]
             while len(self.scene_cache)>6:self.scene_cache.popitem(last=False)
         if scene.pending_meshes or scene.omitted:raise NotImplementedError('当前装备含尚未接入的可见部件')
-        if getattr(scene,'effect_frame',None)!=frame:
-            self.prepare_effects(scene,enabled=state['effects_visible'],frame=frame)
+        residency=getattr(self.renderer,'memory_residency',None)if getattr(getattr(self,'pack',None),'memory_only',False)is True else None
+        transition=residency.begin(scene)if residency else False
         self.renderer.zoom=state['zoom'];self.renderer.pitch=state['pitch'];self.renderer.pan=state['pan']
-        try:image,_=self.renderer.draw_scene(scene,state['yaw'])
+        try:
+            if getattr(scene,'effect_frame',None)!=frame:
+                self.prepare_effects(scene,enabled=state['effects_visible'],frame=frame)
+            image,_=self.renderer.draw_scene(scene,state['yaw'])
         except Exception:
             for history in getattr(scene,'simple_histories',{}).values():history.discard()
             scene.effect_frame=None
+            if transition:
+                residency.finish(scene,False);self.scene_cache.pop(key,None)
+                if residency.active_scene is not None:
+                    from resource_residency import release_inactive_cpu
+                    release_inactive_cpu(self,residency.active_scene)
             raise
+        if transition:
+            residency.finish(scene,True)
+            from resource_residency import release_inactive_cpu
+            release_inactive_cpu(self,scene)
         for history in getattr(scene,'simple_histories',{}).values():history.commit()
         self.effect_frame=frame
         url=self.image_record(image)
@@ -543,9 +577,12 @@ class DemoEngine:
                 if not hasattr(self.renderer,'effect_renderer'):self.renderer.effect_renderer=EffectRenderer(self.renderer,scene.pack)
                 accepted=[];pending=list(pending)
                 for sample in samples:
-                    try:self.renderer.effect_renderer.plan(sample)
+                    try:
+                        self.renderer._effect_scope=self.renderer.effect_renderer
+                        self.renderer.effect_renderer.plan(sample)
                     except UnsupportedEffect as error:pending.append(str(error))
                     else:accepted.append(sample)
+                    finally:self.renderer._effect_scope=None
                 samples=accepted;pending=tuple(sorted(set(pending)))
             scene.effect_samples.extend({**s,'effect_path':path,'effect_instance':(slot,path)}for s in samples)
             scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':frame,
@@ -759,9 +796,17 @@ class DemoEngine:
         return self.save(record)[0]
 
     def close_gpu(self):
+        memory=bool(getattr(getattr(self,'pack',None),'memory_only',False))
         if self.characters:self.characters.close()
         elif self.character:self.character.close()
         if self.renderer:self.renderer.close()
+        if memory:
+            if getattr(self.renderer,'memory_residency',None):self.renderer.memory_residency.detach()
+            self.pack.release_idle()
+            from memory_resources import release_pending
+            release_pending(self.game)
+            self.scene_cache.clear();self.character=None;self.characters=None;self.renderer=None
+            self.pack=None;self.store=None;self.item_icons=None;self.appearance_options=None;self.accessories=None;self.hair=None
 
 
 class Handler(BaseHTTPRequestHandler):

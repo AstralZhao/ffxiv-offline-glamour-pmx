@@ -95,8 +95,12 @@ def _stamp(path):
     s=path.stat();return[s.st_size,s.st_mtime_ns,s.st_ctime_ns]
 
 
-def prepare(host,root,*,callback=None,cancel=None):
+def prepare(host,root,*,callback=None,cancel=None,cache_policy='disk'):
     """Settings worker: refresh manifest, verify small files, probe each DAT's Range/ETag."""
+    if cache_policy=='memory':
+        from memory_resources import connect
+        return connect(host,root,callback=callback,cancel=cancel)
+    if cache_policy!='disk':raise ValueError('未知的网络缓存方式')
     from resource_pack import manifest_data
     root=Path(root).resolve(strict=True);host=host_url(host)
     profile=json.loads((root/'docs/cn-customization-profile.json').read_bytes())
@@ -130,6 +134,13 @@ def prepare(host,root,*,callback=None,cancel=None):
 
 
 class NetworkSource:
+    cache_policy='disk'
+
+    def __new__(cls,root):
+        from memory_resources import descriptor,open_root
+        if descriptor(root)is not None:return open_root(root)
+        return super().__new__(cls)
+
     def __init__(self,root):
         self.root=Path(root).resolve(strict=True)
         marker=safe_path(self.root,MARKER);manifest=safe_path(self.root,'resource-pack.json')
@@ -211,5 +222,5 @@ class RangeReader(io.RawIOBase):
 
 def validate_cached(path,profile):
     from resource_pack import manifest_data
-    source=NetworkSource(path);manifest_data((source.root/'resource-pack.json').read_bytes(),profile)
+    source=NetworkSource(path);manifest_data(source.manifest if source.cache_policy=='memory'else(source.root/'resource-pack.json').read_bytes(),profile)
     return source

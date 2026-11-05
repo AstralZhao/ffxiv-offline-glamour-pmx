@@ -69,15 +69,15 @@ class CharacterCache:
     def __init__(self,pack,store,hair,root=None,*,limit=4):
         self.pack,self.store,self.hair=pack,store,hair
         self.root=safe_output((Path(root)if root else ROOT/'artifacts/demo/character-cache')/'index.json',pack.game_root).parent
-        self.entries=OrderedDict();self.limit=limit
+        self.entries=OrderedDict();self.limit=1 if pack.memory_only else limit
         self.live_root=self.root/'live'/uuid.uuid4().hex;self.live_directories=set()
         code,profiles=application_files();native=native_static_assets()
         ui_only={'qt_client','qt_theme','qt_runtime','qt_settings','launch','client','settings','catalogue','catalogue_cache',
             'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection','effect_clock','appearance_options','qt_saved_outfits',
             'qt_resource_source','qt_first_run','qt_storage','storage_management'}
-        self.identity={'format':3,'client':(pack.game_root/'game/ffxivgame.ver').read_text().strip(),
+        self.identity={'format':3,'client':pack.source_version(),
             'numpy_version':np.__version__,
-            'executable_sha256':digest((pack.game_root/'game/ffxiv_dx11.exe').read_bytes()),
+            'executable_sha256':digest(pack.read_source_file(pack.game_root/'game/ffxiv_dx11.exe')),
             'files':{str(p.relative_to(ROOT)).replace('\\','/'):digest(p.read_bytes())for p in code+profiles+native if p.stem not in ui_only}}
 
     def key(self,path):
@@ -105,7 +105,7 @@ class CharacterCache:
                 unchanged=bool(signatures)
                 for relative,expected in signatures.items():
                     file=(pack.game_root/relative).resolve()
-                    if not file.is_relative_to(pack.game_root)or not file.is_file()or list(pack.source_stamp(file))!=expected:
+                    if not file.is_relative_to(pack.game_root)or not pack.source_exists(file)or list(pack.source_stamp(file))!=expected:
                         unchanged=False;break
                 shader_sources={}
                 names=()if unchanged else packet['resources']

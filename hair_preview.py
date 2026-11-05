@@ -16,7 +16,7 @@ def hair_preview(character,path,directory):
     source=character.base;new=import_preset(path);p=new['parameters'];old=source.pose['preset']['parameters']
     if old['hair']==p['hair']or not material_only({**old,'hair':p['hair']},p):return None
     pack=source.pack
-    if (pack.game_root/'game/ffxivgame.ver').read_text().strip()!=source.version:raise ValueError('Hair source version changed')
+    if pack.source_version()!=source.version:raise ValueError('Hair source version changed')
     assembly_path=Path(source.pose['source_assembly']['path']);assembly=json.loads(assembly_path.read_bytes())
     reference=bundle_arrays(assembly,assembly_path,'bind_geometry_bundle')
     previous=bundle_arrays(source.pose,character.pose_path,'customized_stance_geometry_bundle')

@@ -1,0 +1,160 @@
+"""Memory-resident network resource sessions. Disk stores connection identity only.
+
+This controls original downloaded assets, not the existing prepared-character
+library or user presets/templates. Active decoded scenes own their own data.
+"""
+from collections import OrderedDict
+import io,json,re,threading,weakref
+from pathlib import Path
+from network_resources import BLOCK,BASE,MARKER,_sha,_url,_request,_atomic,_cancel,safe_path,host_url
+
+_sessions=weakref.WeakValueDictionary();_pending=OrderedDict();_gate=threading.RLock()
+MEMORY_LIMIT=16*BLOCK
+METADATA_LIMIT=128*BLOCK
+
+
+def require_space(bytes_needed):
+    """A conservative admission guard, not a promise about total process RSS."""
+    import os
+    if os.name!='nt':return
+    import ctypes as c
+    class Status(c.Structure):
+        _fields_=[('length',c.c_ulong),('load',c.c_ulong)]+[(n,c.c_ulonglong)for n in('total_phys','available_phys','total_commit','available_commit','total_virtual','available_virtual','extended')]
+    value=Status();value.length=c.sizeof(value)
+    if c.windll.kernel32.GlobalMemoryStatusEx(c.byref(value)):
+        if min(value.available_phys,value.available_commit)<64*BLOCK+max(0,bytes_needed):
+            raise MemoryError('可用内存不足，已停止加载新资源；请关闭部分程序后重试')
+
+
+def descriptor(root):
+    p=safe_path(Path(root),MARKER)
+    if not p.is_file():return None
+    if p.stat().st_size>1024**2:raise ValueError('网络资源连接记录过大')
+    data=json.loads(p.read_bytes())
+    if data.get('cache_policy')!='memory':return None
+    if data.get('version')!=2:raise ValueError('内存资源连接记录版本不正确')
+    host=host_url(data['host']);root=Path(root).resolve()
+    if (not re.fullmatch('[0-9a-f]{64}',data['manifest_sha256'])or root.name!=data['manifest_sha256']
+        or root.parent.name!=_sha(host.encode())or root.parent.parent.name!='memory'):
+        raise ValueError('内存资源连接身份不正确')
+    return data
+
+
+def release_pending(root):
+    with _gate:_pending.pop(str(Path(root).resolve()),None)
+
+
+def peek(root):
+    with _gate:return _sessions.get(str(Path(root).resolve()))
+
+
+def connect(host,root,*,callback=None,cancel=None):
+    """Called in a worker. No original manifest/index/EXE/DAT bytes are written."""
+    host=host_url(host);root=Path(root).resolve(strict=True)
+    profile=json.loads((root/'docs/cn-customization-profile.json').read_bytes())
+    source=MemorySource.load(host,profile,callback=callback,cancel=cancel)
+    folder=safe_path(root,f'{BASE}/memory/{_sha(host.encode())}/{source.info["manifest_sha256"]}')
+    source.root=folder
+    info={'version':2,'cache_policy':'memory','host':host,'manifest_sha256':source.info['manifest_sha256'],
+        'client_version':profile['client_version'],'executable_sha256':profile['executable_sha256']}
+    _cancel(cancel);_atomic(safe_path(folder,MARKER),json.dumps(info,sort_keys=True).encode())
+    key=str(folder.resolve())
+    with _gate:
+        _sessions[key]=source;_pending[key]=source
+        while len(_pending)>2:_pending.popitem(last=False)
+    return folder
+
+
+def open_root(root):
+    root=Path(root).resolve(strict=True);key=str(root)
+    with _gate:
+        source=_sessions.get(key)
+        if source is not None:return source
+        data=descriptor(root)
+        if data is None:raise ValueError('不是内存网络资源来源')
+        profile={k:data[k]for k in('client_version','executable_sha256')}
+        source=MemorySource.load(data['host'],profile,expected=data['manifest_sha256']);source.root=root
+        _sessions[key]=source
+        return source
+
+
+class MemorySource:
+    cache_policy='memory'
+
+    @classmethod
+    def load(cls,host,profile,*,expected=None,callback=None,cancel=None):
+        from resource_pack import manifest_data
+        source=cls();source.host=host_url(host);source.lock=threading.RLock();source.blocks=OrderedDict();source.block_bytes=0
+        source.peak_block_bytes=0;source.requests=0;source.metadata={};source.root=None
+        raw,_=_request(_url(source.host,'resource-pack.json'),limit=BLOCK,cancel=cancel)
+        if expected is not None and _sha(raw)!=expected:raise ValueError('网络清单已变化，请重新配置新的资源版本网址')
+        data=manifest_data(raw,profile);source.files=data['files'];source.manifest=raw
+        names=[n for n in source.files if not re.search(r'\.dat[0-7]$',n)]
+        total=sum(source.files[n]['bytes']for n in names)
+        if total>METADATA_LIMIT or any(source.files[n]['bytes']>(4096 if n.endswith('.ver')else 64*BLOCK)for n in names):raise ValueError('基础资源超过内存模式预算')
+        source.info={'host':source.host,'manifest_sha256':_sha(raw),'etags':{}};done=0
+        for name,record in source.files.items():
+            _cancel(cancel)
+            if name in names:
+                require_space(record['bytes']*3)
+                content,_=_request(_url(source.host,name),limit=record['bytes'],cancel=cancel)
+                if len(content)!=record['bytes']or _sha(content)!=record['sha256']:raise ValueError('网络基础资源校验失败：'+name)
+                source.metadata[name]=content;done+=len(content)
+                if callback:callback({'phase':'加载基础资源到内存','done':done,'total':total})
+            else:
+                _,tag=_request(_url(source.host,name),limit=1,start=0,end=0,total=record['bytes'],cancel=cancel)
+                if not tag or tag.startswith('W/')or not re.fullmatch(r'"[^"\r\n]+"',tag):raise ValueError('网络数据文件需要稳定的强 ETag')
+                source.info['etags'][name]=tag
+        if source.metadata['game/ffxivgame.ver'].decode('utf8').strip()!=profile['client_version']:raise ValueError('网络版本文件与软件不一致')
+        return source
+
+    def relative(self,path):
+        name=Path(path).relative_to(self.root).as_posix()
+        if name not in self.files:raise ValueError('资源文件不在网络清单中')
+        return name
+
+    def has_file(self,path):
+        try:return self.relative(path)in self.files
+        except ValueError:return False
+
+    def source_stamp(self,path):
+        name=self.relative(path);record=self.files[name]
+        return(record['bytes'],record['sha256'],self.info['etags'].get(name,'metadata'))
+
+    def read_file(self,path):
+        name=self.relative(path)
+        if name not in self.metadata:raise ValueError('不能整档读取网络数据档案')
+        return self.metadata[name]
+
+    def open_file(self,path):return io.BytesIO(self.read_file(path))
+
+    def index_paths(self,category):
+        return sorted(self.root/n for n in self.metadata if n.startswith('game/sqpack/ffxiv/'+category)and n.endswith('.index2'))
+
+    def open(self,path):
+        from network_resources import RangeReader
+        name=self.relative(path)
+        if name not in self.info['etags']:raise ValueError('不是网络数据档案')
+        return RangeReader(self,name)
+
+    def block(self,name,index):
+        record=self.files[name];start=index*BLOCK;end=min(record['bytes'],start+BLOCK)-1
+        if start<0 or start>end:raise ValueError('网络资源读取超出范围')
+        # All sources/forks/icon workers share one request lane and byte budget.
+        with self.lock:
+            key=(name,index)
+            if key in self.blocks:self.blocks.move_to_end(key);return self.blocks[key]
+            require_space((end-start+1)*3)
+            raw,_=_request(_url(self.host,name),limit=end-start+1,start=start,end=end,total=record['bytes'],etag=self.info['etags'][name])
+            self.requests+=1
+            while self.blocks and self.block_bytes+len(raw)>MEMORY_LIMIT:
+                _,old=self.blocks.popitem(last=False);self.block_bytes-=len(old)
+            self.blocks[key]=raw;self.block_bytes+=len(raw);self.peak_block_bytes=max(self.peak_block_bytes,self.block_bytes)
+            return raw
+
+    def release_idle(self):
+        with self.lock:self.blocks.clear();self.block_bytes=0
+
+    def metrics(self):
+        return {'metadata_bytes':sum(map(len,self.metadata.values())),'block_bytes':self.block_bytes,'block_limit':MEMORY_LIMIT,
+            'peak_block_bytes':self.peak_block_bytes,'range_requests':self.requests}

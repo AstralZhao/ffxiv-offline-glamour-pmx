@@ -18,8 +18,8 @@ PROFILE=Path(__file__).resolve().parents[1]/'docs/cn-legacy-light-direction.json
 
 def source_direction(pack):
     profile=json.loads(PROFILE.read_bytes())
-    version=(pack.game_root/'game/ffxivgame.ver').read_text().strip()
-    exe=(pack.game_root/'game/ffxiv_dx11.exe').read_bytes()
+    version=pack.source_version()
+    exe=pack.read_source_file(pack.game_root/'game/ffxiv_dx11.exe')
     if version!=profile['client_version']or hashlib.sha256(exe).hexdigest()!=profile['executable_sha256']:
         raise ValueError('Legacy light direction requires CN source review')
     for window in profile['windows']:

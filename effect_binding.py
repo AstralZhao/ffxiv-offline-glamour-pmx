@@ -24,7 +24,8 @@ def attachment_scale(scales,vfx,bias,separate):
 def character_vfx_scale(game_root,race):
     from cn_offscreen_lighting import rva_bytes
     profile=json.loads((Path(__file__).resolve().parents[1]/'docs/cn-equipment-effect-rules.json').read_text(encoding='utf8'))
-    exe=(Path(game_root)/'game/ffxiv_dx11.exe').read_bytes()
+    from ff14_readonly import SqPack
+    pack=SqPack(Path(game_root));exe=pack.read_source_file(pack.game_root/'game/ffxiv_dx11.exe')
     if hashlib.sha256(exe).hexdigest()!=profile['executable_sha256']:raise ValueError('Unreviewed CN VFX scale source')
     for name in('character_scale','character_scale_callback','separate_scale','combined_scale'):
         entry=profile['native_ranges'][name]
