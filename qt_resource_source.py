@@ -10,7 +10,7 @@ from settings import validate_game
 
 
 class ResourceSourcePanel(W.QWidget):
-    def __init__(self,game=None,*,export=False,parent=None):
+    def __init__(self,game=None,*,export=False,parent=None,remembered=None):
         super().__init__(parent);outer=vertical(self,0,14)
         hint=label('选择本机游戏、独立资源包或网络资源，配置会自动保存。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
         modes=horizontal();self.game_mode=W.QRadioButton('游戏目录');self.pack_mode=W.QRadioButton('导入资源包')
@@ -30,6 +30,10 @@ class ResourceSourcePanel(W.QWidget):
                 from network_resources import NetworkSource
                 host=NetworkSource(game).host;policy='disk'
         self._paths={'game':str(game or'')if not(packed or network)else'','pack':str(game or'')if packed else'','network':host}
+        remembered=remembered or{}
+        for key in self._paths:
+            if isinstance(remembered.get(key),str):self._paths[key]=remembered[key]
+        if not network and type(remembered.get('disk_cache'))is bool:policy='disk'if remembered['disk_cache']else'memory'
         self.game_mode.setChecked(self._mode=='game');self.pack_mode.setChecked(packed);self.network_mode.setChecked(network)
         self.path_label=label('','Section');outer.addWidget(self.path_label);row=horizontal()
         self.path=W.QLineEdit(self._paths[self._mode]);self.path.setClearButtonEnabled(True);row.addWidget(self.path,1)
@@ -42,6 +46,9 @@ class ResourceSourcePanel(W.QWidget):
             self.export_button=button('导出精简资源包…',ghost=True);line=horizontal();line.addWidget(self.export_button);line.addStretch();outer.addLayout(line)
         for control in(self.game_mode,self.pack_mode,self.network_mode):control.toggled.connect(lambda checked:self.mode_changed()if checked else None)
         self.mode_changed()
+
+    def input_values(self):
+        return {**self._paths,self._mode:self.path.text(),'disk_cache':self.disk_cache.isChecked()}
 
     def choose(self):
         if self.pack_mode.isChecked():path,_=W.QFileDialog.getOpenFileName(self,'导入幻化柜资源包','','幻化柜资源包 (*.ff14resources *.zip)')
@@ -133,7 +140,7 @@ class ResourceDialog(W.QDialog):
             result=future.result()
             if self.operation=='export':
                 self.status.setText('资源包已导出：'+str(result));self.progress_record=None;self.busy(False);return
-            self.saved_studio=self.studio_value();self.saved_game=self.store.save(result,studio=self.saved_studio)
+            self.saved_studio=self.studio_value();self.saved_game=self.store.save(result,studio=self.saved_studio,resource_inputs=self.source_panel.input_values())
         except Exception as error:
             self.status.setText(str(error));self.progress_record=None;self.busy(False);return
         self.accept()

@@ -85,7 +85,34 @@ class SettingsStore:
         try:return options(json.loads(self.path.read_bytes()).get('studio'))
         except(OSError,ValueError,TypeError,AttributeError):return options()
 
-    def save(self,game,*,studio=None):
+    def resource_inputs(self):
+        """UI drafts only: never activate or validate an inactive source."""
+        try:data=json.loads(self.path.read_bytes())
+        except(OSError,ValueError):return {}
+        if not isinstance(data,dict):return {}
+        saved=data.get('resource_inputs',{});result={}
+        if isinstance(saved,dict):
+            for key in('game','pack','network'):
+                value=saved.get(key)
+                if isinstance(value,dict)and key!='network':
+                    relative=value.get('software_relative')
+                    if isinstance(relative,str)and len(relative)<=8192:
+                        candidate=(self.root/relative).resolve()
+                        if candidate.is_relative_to(self.root):result[key]=str(candidate)
+                elif isinstance(value,str)and len(value)<=8192:result[key]=value
+            if type(saved.get('disk_cache'))is bool:result['disk_cache']=saved['disk_cache']
+        # Preserve the previous active source when upgrading an old config.
+        if data.get('source')=='network':
+            result.setdefault('network',data.get('host',''));result.setdefault('disk_cache',data.get('cache_policy','disk')=='disk')
+        elif data.get('source')=='resource_pack':
+            relative=data.get('resource_directory')
+            if isinstance(relative,str):
+                candidate=(self.root/relative).resolve()
+                if candidate.is_relative_to(self.root/'resources'):result.setdefault('pack',str(candidate))
+        elif isinstance(data.get('game_directory'),str):result.setdefault('game',data['game_directory'])
+        return result
+
+    def save(self,game,*,studio=None,resource_inputs=None):
         # Caller validates fully off the GUI thread immediately before saving.
         path=game_root(game)
         if self.root.is_relative_to(path):raise ValueError('软件不能放在游戏安装目录内')
@@ -102,6 +129,25 @@ class SettingsStore:
         else:data={'version':1,'game_directory':str(path)}
         from studio_lighting import options
         data['studio']=self.studio()if studio is None else options(studio)
+        remembered=self.resource_inputs()
+        if resource_inputs is not None:
+            if not isinstance(resource_inputs,dict):raise ValueError('资源输入记录格式不正确')
+            for key,value in resource_inputs.items():
+                if key in('game','pack','network')and isinstance(value,str)and len(value)<=8192:remembered[key]=value
+                elif key=='disk_cache'and type(value)is bool:remembered[key]=value
+        current='network'if data.get('source')=='network'else'pack'if data.get('source')=='resource_pack'else'game'
+        if resource_inputs is None or current not in resource_inputs:
+            remembered[current]=data['host']if current=='network'else str(path)
+        if current=='network':remembered['disk_cache']=data['cache_policy']=='disk'
+        # Internal directory/file hints move with the software; external paths
+        # and unfinished text remain exactly as the user entered them.
+        for key in('game','pack'):
+            value=remembered.get(key)
+            if isinstance(value,str)and value:
+                candidate=Path(value)
+                if candidate.is_absolute()and candidate.resolve().is_relative_to(self.root):
+                    remembered[key]={'software_relative':candidate.resolve().relative_to(self.root).as_posix()}
+        data['resource_inputs']=remembered
         temporary=self.root/('.config-'+uuid.uuid4().hex+'.tmp')
         try:
             with temporary.open('x',encoding='utf8')as file:

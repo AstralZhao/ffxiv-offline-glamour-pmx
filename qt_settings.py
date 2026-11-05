@@ -10,7 +10,7 @@ class SettingsDialog(ResourceDialog):
         super().__init__(store,parent);self.setWindowTitle('设置 · 幻化柜');self.resize(760,640);self.setMinimumSize(640,520)
         outer=vertical(self,22,14);outer.addWidget(label('设置','Title'));outer.addWidget(label('资源、场景与存储空间。','Muted'))
         self.tabs=W.QTabWidget();outer.addWidget(self.tabs,1)
-        self.bind_source(ResourceSourcePanel(game,export=True));self.add_page(self.source_panel,'资源')
+        self.bind_source(ResourceSourcePanel(game,export=True,remembered=store.resource_inputs()));self.add_page(self.source_panel,'资源')
         studio=W.QWidget();content=vertical(studio,0,18);content.addWidget(label('预览摄影棚','Section'))
         form=W.QFormLayout();form.setVerticalSpacing(16);self.studio_background=ComboBox();self.studio_light=ComboBox()
         for key,(text,_)in BACKGROUNDS.items():self.studio_background.addItem(text,key)
