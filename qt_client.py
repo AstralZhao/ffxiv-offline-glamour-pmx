@@ -474,9 +474,13 @@ class QtClient(NativeClient):
         if self.settings_handler:self.settings_handler();return
         from settings import SettingsStore
         from qt_settings import SettingsDialog
-        dialog=SettingsDialog(SettingsStore(),self.game,parent=self.window)
+        dialog=SettingsDialog(SettingsStore(),self.game,parent=self.window,storage_context=self.storage_identity)
         dialog.accepted.connect(lambda:self.apply_studio(dialog.saved_studio)if dialog.saved_game==self.game else self.message.set('资源来源已保存，下次启动软件时生效'))
         self.show_dialog(dialog)
+
+    def storage_identity(self):
+        cache=getattr(self.engine,'characters',None)if self.engine is not None else None
+        return deepcopy(cache.identity)if cache is not None else None
 
     def refresh_boot(self):
         self.boot=self.engine.bootstrap();self.dye_by_id={d['stain_id']:d for d in self.boot['dyes']}
@@ -1306,7 +1310,7 @@ class DesktopSession(C.QObject):
     def open_settings(self):
         if self.settings_dialog:self.settings_dialog.raise_();return
         from qt_settings import SettingsDialog
-        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window)
+        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window,storage_context=self.controller.storage_identity)
         self.settings_dialog=dialog
         def finish(result):
             self.settings_dialog=None
@@ -1330,13 +1334,13 @@ def main():
     args=parser.parse_args();os.chdir(ROOT);application=W.QApplication.instance()or W.QApplication(sys.argv[:1]);application.setStyle('Fusion');application.setStyleSheet(STYLE)
     application.setFont(G.QFont('Microsoft YaHei UI',10));application.setQuitOnLastWindowClosed(False)
     from settings import SettingsStore,validate_game
-    from qt_settings import SettingsDialog
+    from qt_first_run import FirstRunDialog
     store=SettingsStore();game,error=store.read()
     if args.game:
         try:game=store.save(validate_game(args.game));error=''
         except Exception as issue:game=None;error=str(issue)
     if game is None:
-        dialog=SettingsDialog(store,args.game,first=True,error=error)
+        dialog=FirstRunDialog(store,args.game,error=error)
         if dialog.exec()!=W.QDialog.Accepted:return 0
         game=dialog.saved_game
     session=DesktopSession(application,store,game,args.preset)
