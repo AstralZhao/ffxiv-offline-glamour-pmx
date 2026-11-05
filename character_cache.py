@@ -16,6 +16,7 @@ from runtime_files import application_files,native_static_assets,ROOT
 
 
 from source_session import sha256 as digest
+from source_executable import source_executable,executable_sha256
 
 
 def write_packet(path,value):
@@ -77,7 +78,7 @@ class CharacterCache:
             'qt_resource_source','qt_first_run','qt_storage','storage_management'}
         self.identity={'format':3,'client':pack.source_version(),
             'numpy_version':np.__version__,
-            'executable_sha256':digest(pack.read_source_file(pack.game_root/'game/ffxiv_dx11.exe')),
+            'executable_sha256':executable_sha256(source_executable(pack)),
             'files':{str(p.relative_to(ROOT)).replace('\\','/'):digest(p.read_bytes())for p in code+profiles+native if p.stem not in ui_only}}
 
     def key(self,path):

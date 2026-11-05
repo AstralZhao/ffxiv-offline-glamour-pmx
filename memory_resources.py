@@ -92,20 +92,13 @@ class MemorySource:
         names=[n for n in source.files if not re.search(r'\.dat[0-7]$',n)]
         total=sum(source.files[n]['bytes']for n in names)
         if total>METADATA_LIMIT or any(source.files[n]['bytes']>(4096 if n.endswith('.ver')else 64*BLOCK)for n in names):raise ValueError('基础资源超过内存模式预算')
-        source.info={'host':source.host,'manifest_sha256':_sha(raw),'etags':{}};done=0
-        for name,record in source.files.items():
-            _cancel(cancel)
-            if name in names:
-                require_space(record['bytes']*3)
-                content,_=_request(_url(source.host,name),limit=record['bytes'],cancel=cancel)
-                if len(content)!=record['bytes']or _sha(content)!=record['sha256']:raise ValueError('网络基础资源校验失败：'+name)
-                source.metadata[name]=content;done+=len(content)
-                if callback:callback({'phase':'加载基础资源到内存','done':done,'total':total})
-            else:
-                _,tag=_request(_url(source.host,name),limit=1,start=0,end=0,total=record['bytes'],cancel=cancel)
-                if not tag or tag.startswith('W/')or not re.fullmatch(r'"[^"\r\n]+"',tag):raise ValueError('网络数据文件需要稳定的强 ETag')
-                source.info['etags'][name]=tag
-        if source.metadata['game/ffxivgame.ver'].decode('utf8').strip()!=profile['client_version']:raise ValueError('网络版本文件与软件不一致')
+        source.info={'host':source.host,'manifest_sha256':_sha(raw),'etags':{}}
+        # Only the version is needed to connect. Indexes, native windows and
+        # archive bytes are fetched by the first actual consumer, never probed
+        # or prefetched just because they are present in the manifest.
+        version=source.read_file('game/ffxivgame.ver',cancel=cancel)
+        if version.decode('utf8').strip()!=profile['client_version']:raise ValueError('网络版本文件与软件不一致')
+        if callback:callback({'phase':'连接资源完成','done':len(version),'total':len(version)})
         return source
 
     def relative(self,path):
@@ -119,33 +112,58 @@ class MemorySource:
 
     def source_stamp(self,path):
         name=self.relative(path);record=self.files[name]
-        return(record['bytes'],record['sha256'],self.info['etags'].get(name,'metadata'))
+        # Persistent character packets must notice in-place server changes,
+        # even when the published manifest was not updated. Establish a tag
+        # ONLY for an archive actually needed by this packet/resource.
+        with self.lock:
+            if re.search(r'\.dat[0-7]$',name)and name not in self.info['etags']:
+                self.read_range(name,0,1)
+            return(record['bytes'],record['sha256'],self.info['etags'].get(name,'metadata'))
 
-    def read_file(self,path):
-        name=self.relative(path)
-        if name not in self.metadata:raise ValueError('不能整档读取网络数据档案')
-        return self.metadata[name]
+    def read_file(self,path,*,cancel=None):
+        name=path if isinstance(path,str)and path in self.files else self.relative(path)
+        if re.search(r'\.dat[0-7]$',name):raise ValueError('不能整档读取网络数据档案')
+        if name.endswith('.exe')and self.files[name]['bytes']>2*BLOCK:
+            raise ValueError('网络客户端文件只允许按所需原始片段读取')
+        with self.lock:
+            if name not in self.metadata:
+                record=self.files[name];require_space(record['bytes']*3)
+                raw,_=_request(_url(self.host,name),limit=record['bytes'],cancel=cancel)
+                if len(raw)!=record['bytes']or _sha(raw)!=record['sha256']:raise ValueError('网络基础资源校验失败：'+name)
+                self.metadata[name]=raw
+            return self.metadata[name]
 
     def open_file(self,path):return io.BytesIO(self.read_file(path))
 
     def index_paths(self,category):
-        return sorted(self.root/n for n in self.metadata if n.startswith('game/sqpack/ffxiv/'+category)and n.endswith('.index2'))
+        return sorted(self.root/n for n in self.files if n.startswith('game/sqpack/ffxiv/'+category)and n.endswith('.index2'))
 
     def open(self,path):
         from network_resources import RangeReader
         name=self.relative(path)
-        if name not in self.info['etags']:raise ValueError('不是网络数据档案')
+        if not re.search(r'\.dat[0-7]$',name):raise ValueError('不是网络数据档案')
         return RangeReader(self,name)
+
+    def read_range(self,name,start,length):
+        if name not in self.files or type(start)is not int or type(length)is not int or start<0 or length<0 or start+length>self.files[name]['bytes']or length>2*BLOCK:
+            raise ValueError('网络原始片段超出范围')
+        if not length:return b''
+        return self._fetch(name,start,start+length-1,('range',name,start,length))
 
     def block(self,name,index):
         record=self.files[name];start=index*BLOCK;end=min(record['bytes'],start+BLOCK)-1
         if start<0 or start>end:raise ValueError('网络资源读取超出范围')
+        return self._fetch(name,start,end,(name,index))
+
+    def _fetch(self,name,start,end,key):
+        record=self.files[name]
         # All sources/forks/icon workers share one request lane and byte budget.
         with self.lock:
-            key=(name,index)
             if key in self.blocks:self.blocks.move_to_end(key);return self.blocks[key]
             require_space((end-start+1)*3)
-            raw,_=_request(_url(self.host,name),limit=end-start+1,start=start,end=end,total=record['bytes'],etag=self.info['etags'][name])
+            raw,tag=_request(_url(self.host,name),limit=end-start+1,start=start,end=end,total=record['bytes'],etag=self.info['etags'].get(name))
+            if not tag or tag.startswith('W/')or not re.fullmatch(r'"[^"\r\n]+"',tag):raise ValueError('网络数据文件需要稳定的强 ETag')
+            self.info['etags'][name]=tag
             self.requests+=1
             while self.blocks and self.block_bytes+len(raw)>MEMORY_LIMIT:
                 _,old=self.blocks.popitem(last=False);self.block_bytes-=len(old)
@@ -153,7 +171,7 @@ class MemorySource:
             return raw
 
     def release_idle(self):
-        with self.lock:self.blocks.clear();self.block_bytes=0
+        with self.lock:self.blocks.clear();self.block_bytes=0;self.metadata.clear()
 
     def metrics(self):
         return {'metadata_bytes':sum(map(len,self.metadata.values())),'block_bytes':self.block_bytes,'block_limit':MEMORY_LIMIT,

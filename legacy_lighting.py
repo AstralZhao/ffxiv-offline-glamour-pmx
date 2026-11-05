@@ -12,6 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from cn_offscreen_lighting import rva_bytes
+from source_executable import source_executable,executable_sha256
 
 PROFILE=Path(__file__).resolve().parents[1]/'docs/cn-legacy-light-direction.json'
 
@@ -19,8 +20,8 @@ PROFILE=Path(__file__).resolve().parents[1]/'docs/cn-legacy-light-direction.json
 def source_direction(pack):
     profile=json.loads(PROFILE.read_bytes())
     version=pack.source_version()
-    exe=pack.read_source_file(pack.game_root/'game/ffxiv_dx11.exe')
-    if version!=profile['client_version']or hashlib.sha256(exe).hexdigest()!=profile['executable_sha256']:
+    exe=source_executable(pack)
+    if version!=profile['client_version']or executable_sha256(exe)!=profile['executable_sha256']:
         raise ValueError('Legacy light direction requires CN source review')
     for window in profile['windows']:
         raw=rva_bytes(exe,int(window['rva'],16),window['bytes'])
