@@ -4,6 +4,7 @@ Block checksums detect local corruption; they are NOT full remote DAT SHA proofs
 Servers must publish immutable versions with strong ETags and support byte ranges.
 """
 from collections import OrderedDict
+from concurrent.futures import Future
 import hashlib,io,json,os,re,stat,threading,uuid
 from pathlib import Path
 from urllib.parse import urlsplit,urlunsplit,quote
@@ -13,7 +14,9 @@ from urllib.error import HTTPError,URLError
 MARKER='network-source.json'
 BASE='artifacts/network-resources'
 BLOCK=1024**2
-_lock=threading.RLock();_memory=OrderedDict();_memory_size=0
+_lock=threading.RLock();_memory=OrderedDict();_memory_size=0;_inflight={}
+CONNECTIONS=8
+_slots=threading.BoundedSemaphore(CONNECTIONS)
 
 
 def host_url(value):
@@ -58,8 +61,14 @@ def _atomic(path,raw):
 
 def _request(url,*,limit,headers=None,start=None,end=None,total=None,etag=None,cancel=None):
     from transfer_progress import measured
-    with measured(url)as report:
-        return _request_impl(url,limit=limit,headers=headers,start=start,end=end,total=total,etag=etag,cancel=cancel,report=report)
+    # Waiting requests consume no HTTP response buffers. Cancellation remains
+    # responsive while another worker occupies the connection budget.
+    slots=_slots
+    while not slots.acquire(timeout=.1):_cancel(cancel)
+    try:
+        with measured(url)as report:
+            return _request_impl(url,limit=limit,headers=headers,start=start,end=end,total=total,etag=etag,cancel=cancel,report=report)
+    finally:slots.release()
 
 
 def _request_impl(url,*,limit,headers=None,start=None,end=None,total=None,etag=None,cancel=None,report=None):
@@ -193,6 +202,10 @@ class NetworkSource:
         with _lock:
             old=_memory.get(key)
             if old is not None:_memory.move_to_end(key);return old
+            future=_inflight.get(key);owner=future is None
+            if owner:future=Future();_inflight[key]=future
+        if not owner:return future.result()
+        try:
             p=safe_path(self.root,f"chunks/{record['sha256']}/{index:08x}.chunk")
             try:
                 if p.stat().st_size!=36+end-start+1:raise ValueError('Corrupt block size')
@@ -201,10 +214,15 @@ class NetworkSource:
             except(OSError,ValueError):
                 raw,_=_request(_url(self.host,name),limit=end-start+1,start=start,end=end,total=record['bytes'],etag=self.info['etags'][name])
                 _atomic(p,b'HGN1'+hashlib.sha256(raw).digest()+raw)
-            _memory[key]=raw;_memory_size+=len(raw)
-            while _memory_size>32*BLOCK:
-                _,v=_memory.popitem(last=False);_memory_size-=len(v)
+            with _lock:
+                _memory[key]=raw;_memory_size+=len(raw)
+                while _memory_size>32*BLOCK:
+                    _,v=_memory.popitem(last=False);_memory_size-=len(v)
+                future.set_result(raw);_inflight.pop(key,None)
             return raw
+        except BaseException as error:
+            with _lock:future.set_exception(error);_inflight.pop(key,None)
+            raise
 
 
 class RangeReader(io.RawIOBase):

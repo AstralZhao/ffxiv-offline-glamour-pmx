@@ -411,9 +411,9 @@ class QtClient(NativeClient):
         prominent=busy and text not in('正在调整视角…','正在保存预设…')and not getattr(self,'live_edit_job',False)
         meter=getattr(self.engine,'transfer_progress',None)if self.engine else None
         transfer=meter.snapshot()if busy and meter else None
-        fraction=transfer['done']/transfer['total']if transfer and transfer['total']else None
+        from transfer_progress import presentation
+        fraction,text=presentation(transfer,text)
         for spinner in(self.loading_spinner,self.footer_spinner):spinner.set_progress(fraction)
-        if transfer:text='正在下载资源 · '+transfer['kind']+(f' {fraction:.0%}'if fraction is not None else'…')
         self.loading_label.setText(text);self.loading_panel.setVisible(prominent)
         self.loading_spinner.set_running(prominent);self.footer_spinner.set_running(busy);self.status_dot.setVisible(not busy)
         if busy:self.status_label.setText(text)

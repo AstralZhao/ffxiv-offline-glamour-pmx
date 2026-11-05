@@ -2,6 +2,7 @@
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import threading
+from transfer_progress import tracked,presentation
 from qt_runtime import enable
 enable()
 from PySide6 import QtCore as C,QtWidgets as W
@@ -107,6 +108,7 @@ class ResourceDialog(W.QDialog):
         self.status.setText('正在扫描全部种族与装备依赖…')
         self.future=self.pool.submit(export_resource_pack,self.path.text(),path,root=self.store.root,callback=self.progress,cancel=self.cancel_event,compact=True);self.timer.start()
 
+    @tracked
     def network_source(self,value,policy,current):
         from network_resources import prepare,host_url,NetworkSource
         if current is not None:
@@ -135,12 +137,12 @@ class ResourceDialog(W.QDialog):
 
     def poll(self):
         transfer=self.transfer_progress.snapshot()
-        fraction=transfer['done']/transfer['total']if transfer and transfer['total']else None
+        fraction,text=presentation(transfer)
         self.spinner.set_progress(fraction)
         if self.progress_record:
             record=self.progress_record;total=max(1,record['total'])
             self.status.setText(f"{record['phase']} · {record['done']/total:.0%}")
-        if transfer:self.status.setText('正在下载资源 · '+transfer['kind']+(f' {fraction:.0%}'if fraction is not None else'…'))
+        if transfer:self.status.setText(text)
         if not self.future or not self.future.done():return
         self.timer.stop();self.spinner.set_running(False);future=self.future;self.future=None
         try:

@@ -5,6 +5,7 @@ import argparse
 import base64
 from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from transfer_progress import tracked
 from contextlib import closing
 import hashlib
 from http.server import BaseHTTPRequestHandler,ThreadingHTTPServer
@@ -130,6 +131,7 @@ class DemoEngine:
         entries={key:(path,entry)for key,path,entry in self.library.scan()}
         with self.lock:self.presets=entries
 
+    @tracked
     def initialize(self):
         try:
             from icons import ItemIcons
@@ -487,6 +489,7 @@ class DemoEngine:
         self.last_character_load={**cache,'seconds':time.perf_counter()-started}
         return {**result,'preset':self.presets[key][1],'appearance':self.appearance_state(),'character_cache':self.last_character_load}
 
+    @tracked
     def render(self,raw,*,effect_frame=None):
         from preset_outfit import CHOICES
         state=parse_state(raw);started=time.perf_counter()
@@ -530,7 +533,11 @@ class DemoEngine:
         try:
             if getattr(scene,'effect_frame',None)!=frame:
                 self.prepare_effects(scene,enabled=state['effects_visible'],frame=frame)
+            if getattr(getattr(scene,'pack',None),'network',None)is not None and getattr(self,'_network_input_scene',None)is not scene:
+                from network_loading import prepare_scene_inputs
+                prepare_scene_inputs(self.renderer,scene)
             image,_=self.renderer.draw_scene(scene,state['yaw'])
+            self._network_input_scene=scene
         except Exception:
             for history in getattr(scene,'simple_histories',{}).values():history.discard()
             scene.effect_frame=None
@@ -698,6 +705,7 @@ class DemoEngine:
         return {'rendered_parameters':rendered,'is_preview':self.appearance_is_preview if key==active else False,
             'model_matches_file':bool(entry and rendered==entry[1]['parameters'])}
 
+    @tracked
     def run(self,operation,payload):
         if self.status!='ready'and(operation not in('preset','import','create','delete_preset','appearance_save','appearance_preview')or self.renderer is None):
             raise ValueError('角色还在准备，请稍后再试')
@@ -798,6 +806,7 @@ class DemoEngine:
         return self.save(record)[0]
 
     def close_gpu(self):
+        self._network_input_scene=None
         memory=bool(getattr(getattr(self,'pack',None),'memory_only',False))
         if self.characters:self.characters.close()
         elif self.character:self.character.close()

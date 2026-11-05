@@ -4,6 +4,7 @@ This controls original downloaded assets, not the existing prepared-character
 library or user presets/templates. Active decoded scenes own their own data.
 """
 from collections import OrderedDict
+from concurrent.futures import Future
 import io,json,re,threading,weakref
 from pathlib import Path
 from network_resources import BLOCK,BASE,MARKER,_sha,_url,_request,_atomic,_cancel,safe_path,host_url
@@ -86,6 +87,7 @@ class MemorySource:
         from resource_pack import manifest_data
         source=cls();source.host=host_url(host);source.lock=threading.RLock();source.blocks=OrderedDict();source.block_bytes=0
         source.peak_block_bytes=0;source.requests=0;source.metadata={};source.root=None
+        source.inflight={};source.epoch=0
         raw,_=_request(_url(source.host,'resource-pack.json'),limit=BLOCK,cancel=cancel)
         if expected is not None and _sha(raw)!=expected:raise ValueError('网络清单已变化，请重新配置新的资源版本网址')
         data=manifest_data(raw,profile);source.files=data['files'];source.manifest=raw
@@ -115,23 +117,42 @@ class MemorySource:
         # Persistent character packets must notice in-place server changes,
         # even when the published manifest was not updated. Establish a tag
         # ONLY for an archive actually needed by this packet/resource.
-        with self.lock:
-            if re.search(r'\.dat[0-7]$',name)and name not in self.info['etags']:
-                self.read_range(name,0,1)
-            return(record['bytes'],record['sha256'],self.info['etags'].get(name,'metadata'))
+        with self.lock:needed=re.search(r'\.dat[0-7]$',name)and name not in self.info['etags']
+        if needed:self.read_range(name,0,1)
+        with self.lock:return(record['bytes'],record['sha256'],self.info['etags'].get(name,'metadata'))
 
     def read_file(self,path,*,cancel=None):
         name=path if isinstance(path,str)and path in self.files else self.relative(path)
         if re.search(r'\.dat[0-7]$',name):raise ValueError('不能整档读取网络数据档案')
         if name.endswith('.exe')and self.files[name]['bytes']>2*BLOCK:
             raise ValueError('网络客户端文件只允许按所需原始片段读取')
+        return self._get(('file',name),lambda:self.metadata.get(name),
+            lambda:self._metadata(name,cancel),lambda raw:self.metadata.__setitem__(name,raw))
+
+    def _metadata(self,name,cancel):
+        record=self.files[name];require_space(record['bytes']*3)
+        raw,_=_request(_url(self.host,name),limit=record['bytes'],cancel=cancel)
+        if len(raw)!=record['bytes']or _sha(raw)!=record['sha256']:raise ValueError('网络基础资源校验失败：'+name)
+        return raw
+
+    def _get(self,key,cached,load,store):
+        # Deduplicate identical reads, but never hold the cache lock across
+        # network I/O or waiting for another worker's future.
         with self.lock:
-            if name not in self.metadata:
-                record=self.files[name];require_space(record['bytes']*3)
-                raw,_=_request(_url(self.host,name),limit=record['bytes'],cancel=cancel)
-                if len(raw)!=record['bytes']or _sha(raw)!=record['sha256']:raise ValueError('网络基础资源校验失败：'+name)
-                self.metadata[name]=raw
-            return self.metadata[name]
+            old=cached()
+            if old is not None:return old
+            future=self.inflight.get(key);owner=future is None;epoch=self.epoch
+            if owner:future=Future();self.inflight[key]=future
+        if not owner:return future.result()
+        try:
+            raw=load()
+            with self.lock:
+                if epoch==self.epoch:store(raw)
+                future.set_result(raw);self.inflight.pop(key,None)
+            return raw
+        except BaseException as error:
+            with self.lock:future.set_exception(error);self.inflight.pop(key,None)
+            raise
 
     def open_file(self,path):return io.BytesIO(self.read_file(path))
 
@@ -157,21 +178,26 @@ class MemorySource:
 
     def _fetch(self,name,start,end,key):
         record=self.files[name]
-        # All sources/forks/icon workers share one request lane and byte budget.
-        with self.lock:
+        def cached():
             if key in self.blocks:self.blocks.move_to_end(key);return self.blocks[key]
+        def load():
             require_space((end-start+1)*3)
-            raw,tag=_request(_url(self.host,name),limit=end-start+1,start=start,end=end,total=record['bytes'],etag=self.info['etags'].get(name))
+            with self.lock:expected=self.info['etags'].get(name)
+            raw,tag=_request(_url(self.host,name),limit=end-start+1,start=start,end=end,total=record['bytes'],etag=expected)
             if not tag or tag.startswith('W/')or not re.fullmatch(r'"[^"\r\n]+"',tag):raise ValueError('网络数据文件需要稳定的强 ETag')
-            self.info['etags'][name]=tag
-            self.requests+=1
+            with self.lock:
+                previous=self.info['etags'].get(name)
+                if previous is not None and previous!=tag:raise ValueError('服务器资源版本已变化，请使用新的版本目录重新配置')
+                self.info['etags'][name]=tag;self.requests+=1
+            return raw
+        def store(raw):
             while self.blocks and self.block_bytes+len(raw)>MEMORY_LIMIT:
                 _,old=self.blocks.popitem(last=False);self.block_bytes-=len(old)
             self.blocks[key]=raw;self.block_bytes+=len(raw);self.peak_block_bytes=max(self.peak_block_bytes,self.block_bytes)
-            return raw
+        return self._get(key,cached,load,store)
 
     def release_idle(self):
-        with self.lock:self.blocks.clear();self.block_bytes=0;self.metadata.clear()
+        with self.lock:self.epoch+=1;self.blocks.clear();self.block_bytes=0;self.metadata.clear()
 
     def metrics(self):
         return {'metadata_bytes':sum(map(len,self.metadata.values())),'block_bytes':self.block_bytes,'block_limit':MEMORY_LIMIT,
