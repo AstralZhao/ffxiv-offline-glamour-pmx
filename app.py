@@ -121,7 +121,8 @@ class DemoEngine:
         if identifier is not None:key=identifier
         from cn_character import reviewed_identity,CLANS
         reviewed_identity(p)
-        entry={'id':key,'name':record.get('comment')or path.stem,'file_name':path.name,
+        from presets import display_name
+        entry={'id':key,'name':display_name(path,record),'file_name':path.name,
             'clan':CLANS[p['tribe']],'face':p['face'],'hair':p['hair'],
             'parameters':p,'sha256':record['source_sha256'],'app_owned':True}
         with self.lock:self.presets[key]=(path,entry)
@@ -414,18 +415,8 @@ class DemoEngine:
             from appearance_options import AppearanceOptions
             self.library=PresetLibrary(self.preset_directory,self.game)
             self.library.seed(self.default_preset,default=True)
-            from builtin_presets import seed_hrothgar_examples,seed_roegadyn_examples,seed_lalafell_examples,seed_elezen_examples,seed_au_ra_male_examples,seed_hyur_male_examples,seed_hyur_female_examples,seed_miqote_examples,seed_miqote_male_examples,seed_viera_examples,seed_viera_male_examples
-            seed_hrothgar_examples(self.library)
-            seed_roegadyn_examples(self.library)
-            seed_lalafell_examples(self.library)
-            seed_elezen_examples(self.library)
-            seed_au_ra_male_examples(self.library)
-            seed_hyur_male_examples(self.library)
-            seed_hyur_female_examples(self.library)
-            seed_miqote_examples(self.library)
-            seed_miqote_male_examples(self.library)
-            seed_viera_examples(self.library)
-            seed_viera_male_examples(self.library)
+            # A clean installation starts with test.dat only. Other identities
+            # remain available through explicit create/import operations.
             if not self.library.metadata.get('legacy_migration_complete'):
                 paths=sorted(self.default_preset.parent.glob('FFXIV_CHARA_*.dat'))+sorted((self.data/'presets').glob('*.dat'))
                 for path in paths:

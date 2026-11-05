@@ -9,6 +9,10 @@ from cn_character import reviewed_identity,CLANS
 def digest(raw):return hashlib.sha256(raw).hexdigest()
 
 
+def display_name(path,record):
+    return 'test'if Path(path).name.casefold()=='test.dat'else record.get('comment')or Path(path).stem
+
+
 def decode(raw):
     if len(raw)!=212:raise ValueError('请导入212字节的原生DAT外观预设')
     magic,version,saved=struct.unpack_from('<III',raw)
@@ -103,7 +107,7 @@ class PresetLibrary:
             except ValueError:continue
             key=self.metadata['files'].get(path.name,{}).get('id')or digest(str(path).encode())[:24]
             p=record['parameters']
-            records.append((key,path,{'id':key,'name':record['comment']or path.stem,'file_name':path.name,
+            records.append((key,path,{'id':key,'name':display_name(path,record),'file_name':path.name,
                 'clan':CLANS[p['tribe']],'face':p['face'],'hair':p['hair'],
                 'parameters':p,'sha256':record['sha256'],'app_owned':True}))
         return records
