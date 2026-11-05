@@ -29,15 +29,20 @@ internal static class PortableLauncher
     private static int Main(string[] args)
     {
         string root = AppDomain.CurrentDomain.BaseDirectory;
+        string program = Path.Combine(root, "程序");
+        bool compiled = File.Exists(Path.Combine(program, "artifacts", "compiled-runtime.json"));
+        if (compiled) root = program;
         string python = Path.Combine(root, "artifacts", "runtime", "python", "pythonw.exe");
         string script = Path.Combine(root, "demo", "launch.py");
         string log = Path.Combine(root, "artifacts", "demo", "launcher.log");
         try
         {
-            if (!File.Exists(python) || !File.Exists(script))
+            if (!File.Exists(python) || (!compiled && !File.Exists(script)))
                 throw new FileNotFoundException("软件文件不完整，请解压完整软件包，保留 exe 旁的全部文件夹。");
             Directory.CreateDirectory(Path.GetDirectoryName(log));
-            var command = new StringBuilder("-X utf8 "); command.Append(Quote(script));
+            var command = new StringBuilder("-X utf8 ");
+            if (compiled) { command.Append("-c "); command.Append(Quote("import launch; raise SystemExit(launch.main())")); }
+            else command.Append(Quote(script));
             foreach (string arg in args) { command.Append(' '); command.Append(Quote(arg)); }
             var info = new ProcessStartInfo(python, command.ToString()) {
                 WorkingDirectory = root, UseShellExecute = false, CreateNoWindow = true,

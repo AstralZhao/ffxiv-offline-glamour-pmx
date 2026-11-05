@@ -13,6 +13,7 @@ from ff14_readonly import SqPack,safe_output
 from preset_character import import_preset
 from preset_static_character import PresetStaticCharacter
 from runtime_files import application_files,native_static_assets,ROOT
+from runtime_identity import implementation_digest
 
 
 from source_session import sha256 as digest
@@ -79,7 +80,7 @@ class CharacterCache:
         self.identity={'format':3,'client':pack.source_version(),
             'numpy_version':np.__version__,
             'executable_sha256':executable_sha256(source_executable(pack)),
-            'files':{str(p.relative_to(ROOT)).replace('\\','/'):digest(p.read_bytes())for p in code+profiles+native if p.stem not in ui_only}}
+            'files':{str(p.relative_to(ROOT)).replace('\\','/'):implementation_digest(p)for p in code+profiles+native if p.stem not in ui_only}}
 
     def key(self,path):
         preset=import_preset(path)

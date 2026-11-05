@@ -3,6 +3,7 @@ import ast
 import json
 import os
 from pathlib import Path
+from runtime_identity import compiled_manifest
 ROOT=Path(__file__).resolve().parents[1]
 
 def native_static_assets():
@@ -18,6 +19,10 @@ def native_static_assets():
 
 
 def application_files():
+    compiled=compiled_manifest()
+    if compiled is not None:
+        return ([ROOT/p for p in sorted(compiled['modules'])],
+                [ROOT/p for p in sorted(compiled['profiles'])])
     inventory={str(p.relative_to(ROOT)).replace('\\','/'):(p.stat().st_size,p.stat().st_mtime_ns,p.stat().st_ctime_ns)
         for folder in('tools','demo')for p in(ROOT/folder).glob('*.py')}
     signature=json.dumps(inventory,sort_keys=True);path=ROOT/'artifacts/runtime-closure-cache.json'
