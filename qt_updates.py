@@ -38,10 +38,10 @@ class UpdateController(C.QObject):
     def download(self):
         if self.future or self.closed or not self.info:return
         if not can_install():self.status='开发版请通过 Git 更新源码，不覆盖开发目录。';self.changed.emit();return
-        self.cancel.clear();self.operation='download';self.status='正在下载并校验差异补丁…';self.fraction=0
+        self.cancel.clear();self.operation='download';self.status='正在下载并校验完整软件包…';self.fraction=0
         self.future=self.pool.submit(updates.prepare,self.info,progress=self.progress,cancel=self.cancel);self.timer.start();self.changed.emit()
 
-    def progress(self,done,total):self.fraction=done/max(1,total)
+    def progress(self,done,total):self.fraction=done/max(1,total) if total else None
 
     def poll(self):
         self.changed.emit()
@@ -51,17 +51,17 @@ class UpdateController(C.QObject):
         try:
             result=future.result()
             if self.operation=='download':
-                self.status='补丁已校验，正在保存会话并关闭预览…';self.changed.emit()
+                self.status='发行包已校验，正在保存会话并关闭预览…';self.changed.emit()
                 self.session.update_folder=result;self.session.window.setEnabled(False)
                 if self.session.settings_dialog:self.session.settings_dialog.reject()
                 self.session.controller.close();return
             self.info=result
             self.status=('当前已是最新版本：'+self.version if result['status']=='current' else
-                '检测到新版本 '+result['latest']+('，可使用差异补丁更新。' if result['status']=='available' else '，发行页尚未提供适用于当前版本的更新补丁。'))
+                '检测到新版本 '+result['latest']+('，可使用完整软件包更新。' if result['status']=='available' else '，发行页没有唯一可识别的完整软件包。'))
             if self.automatic and result['status']=='available' and not self.session.controller.closing:
                 answer=W.QMessageBox.question(self.session.window,'发现新版本',
                     self.version+' → '+result['latest']+'\n\n'+result.get('notes','')[:1500]+
-                    '\n\n现在下载差异补丁并更新？更新前会保存会话并退出软件，角色、模版、收藏、标签及资源保留。',
+                    '\n\n现在下载完整软件包并更新？更新前会保存会话并退出软件，角色、模版、收藏、标签及资源保留。',
                     W.QMessageBox.Yes|W.QMessageBox.No,W.QMessageBox.No)
                 if answer==W.QMessageBox.Yes:self.download()
         except Exception as error:
@@ -79,8 +79,8 @@ class UpdatePanel(W.QWidget):
         outer=vertical(self,0,16);outer.addWidget(label('软件更新','Section'))
         outer.addWidget(label('当前版本：'+controller.version+(' · 开发模式' if not can_install() else ''),'Badge'))
         self.auto=W.QCheckBox('启动时自动检查更新');self.auto.setChecked(controller.auto);self.auto.toggled.connect(controller.set_auto);outer.addWidget(self.auto)
-        hint=label('本地版本由版本配置文件指定，新版按 Gitee 发行 tag 识别。仅使用当前版本对应的差异补丁；不会下载完整安装包，也不会替换用户数据、缓存或资源。更新失败时保留原版本。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
-        row=horizontal();self.check_button=button('检查更新',lambda:controller.check());self.install_button=button('下载补丁并更新',controller.download,primary=True)
+        hint=label('本地版本由版本配置文件指定，新版按 Gitee 发行 tag 识别。下载新版完整发行包，只替换程序文件，保留用户数据、缓存和资源。更新失败时保留原版本。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
+        row=horizontal();self.check_button=button('检查更新',lambda:controller.check());self.install_button=button('下载新版并更新',controller.download,primary=True)
         row.addWidget(self.check_button);row.addWidget(self.install_button);row.addStretch();outer.addLayout(row)
         self.spinner=LoadingSpinner(36);outer.addWidget(self.spinner)
         self.status=label('','Muted');self.status.setWordWrap(True);outer.addWidget(self.status)
