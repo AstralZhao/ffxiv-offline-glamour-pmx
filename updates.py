@@ -163,7 +163,7 @@ def _release_index(z,version):
     return files,indexed
 
 
-def _local_files(p):
+def _local_files(p,current):
     manifest=p.program/'artifacts/package-manifest.json'
     no_links(manifest,p.root)
     if manifest.stat().st_size>LIMIT:raise ValueError('本地程序清单过大')
@@ -171,6 +171,15 @@ def _local_files(p):
     if not isinstance(files,dict):raise ValueError('本地程序清单不正确')
     owned={n:h for n,h in files.items() if program_file(n)}
     if not all(_hash(h) for h in owned.values()):raise ValueError('本地程序摘要不正确')
+    # This JSON is explicitly user-managed, unlike executable program files.
+    # Bind the transaction to its actual validated bytes, not the release hash.
+    version_path=no_links(p.program/'docs/client-version.json',p.root)
+    if version_path.stat().st_size>4096:raise ValueError('本地版本配置过大')
+    version_raw=version_path.read_bytes();declared=json.loads(version_raw)
+    if not isinstance(declared,dict):raise ValueError('本地版本配置不正确')
+    version_key(declared.get('version'))
+    if declared['version']!=current:raise ValueError('本地版本号已变化，请重新检查更新')
+    owned['程序/docs/client-version.json']=hashlib.sha256(version_raw).hexdigest()
     owned['程序/artifacts/package-manifest.json']=digest(manifest)
     return owned
 
@@ -180,6 +189,7 @@ def prepare(info,*,layout=None,progress=None,cancel=None,local=False):
     if layout is None and not can_install():raise ValueError('开发版直接运行源码，请通过 Git 更新源码；不会覆盖开发目录')
     if info.get('status')!='available' or not distribution_name(info.get('asset')):raise ValueError('没有可用的完整软件发行包')
     if version_key(info['latest'])<=version_key(info['current']):raise ValueError('不允许降级或重复更新')
+    old=_local_files(p,info['current'])
     folder=no_links(p.derived('updates')/uuid.uuid4().hex,p.root);folder.mkdir(parents=True)
     package=folder/'release.zip';received=0;total=info.get('bytes')
     if total is not None and (type(total)is not int or not 0<total<=1024**3):raise ValueError('发行包大小不正确')
@@ -205,7 +215,7 @@ def prepare(info,*,layout=None,progress=None,cancel=None,local=False):
             if progress:progress(received,total)
         out.flush();os.fsync(out.fileno())
     if not received or total is not None and received!=total:raise ValueError('发行包下载校验失败，原软件未修改')
-    stage=folder/'stage';stage.mkdir();old=_local_files(p)
+    stage=folder/'stage';stage.mkdir()
     with zipfile.ZipFile(package) as z:
         files,indexed=_release_index(z,info['latest'])
         backup_bytes=sum(no_links(p.root/n,p.root).stat().st_size for n in old if (p.root/n).is_file())

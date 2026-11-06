@@ -77,7 +77,10 @@ internal static class UpdateHelper
         window.Invoke((Action)(()=>{ status.Text=message;bar.Value=Math.Min(100,done*100/Math.Max(1,total)); }));
     }
     static string MutexName() { using(var h=SHA256.Create()) return "Local\\HGG-"+BitConverter.ToString(h.ComputeHash(Encoding.UTF8.GetBytes(root.ToUpperInvariant()))).Replace("-",""); }
-    static void Copy(string src,string dst) { CreateDirectory(Path.GetDirectoryName(dst));string t=dst+".update-tmp";CopyFile(src,t,true);if(Exists(dst)) Replace(t,dst,null);else Move(t,dst); }
+    static void Copy(string src,string dst) {
+        try { CreateDirectory(Path.GetDirectoryName(dst));string t=dst+".update-tmp";CopyFile(src,t,true);if(Exists(dst)) Replace(t,dst,null);else Move(t,dst); }
+        catch(IOException error) { throw new IOException("更新文件替换失败："+dst,error); }
+    }
     static Dictionary<string,object> Entries() {
         var files=Map(job["files"]);var removed=Map(job["removed"]);var all=new Dictionary<string,object>(StringComparer.OrdinalIgnoreCase);
         foreach(var e in files) { if(!Owned(e.Key)||all.ContainsKey(e.Key))throw new Exception("更新包包含非程序或重复文件");Safe(root,e.Key);all.Add(e.Key,e.Value); }
@@ -92,7 +95,7 @@ internal static class UpdateHelper
             if(old!=null) {
                 string backup=Safe(Path.Combine(folder,"backup"),e.Key);
                 if(Hash(backup)!=old)throw new Exception("回滚备份校验失败");
-                Copy(backup,target);
+                if(current!=old)Copy(backup,target);
             } else if(Exists(target))Delete(target);
             Report("正在恢复原版本…",++n,snapshot.Count);
         }
@@ -136,7 +139,9 @@ internal static class UpdateHelper
                     foreach(var e in all) {
                         var snap=Map(snapshot[e.Key]);string dst=Safe(root,e.Key);string old=Exists(dst)?Hash(dst):null;
                         if(old!=Text(snap["old"]))throw new Exception("更新期间程序文件发生变化");
-                        if(snap["new"]!=null)Copy(Safe(stage,e.Key),dst);else if(Exists(dst))Delete(dst);
+                        if(snap["new"]!=null) {
+                            if(old!=Text(snap["new"]))Copy(Safe(stage,e.Key),dst);
+                        } else if(Exists(dst))Delete(dst);
                         Report("正在更新程序文件…",++n,all.Count);
                     }
                     // Probe the real installed Python/Qt route before commit.
