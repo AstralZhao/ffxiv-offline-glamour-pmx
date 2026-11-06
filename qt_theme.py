@@ -274,13 +274,17 @@ class EquipmentHoverDelegate(W.QStyledItemDelegate):
 
 
 class EquipmentDelegate(EquipmentHoverDelegate):
+    def __init__(self,parent=None,*,use_item_selection=False):
+        super().__init__(parent);self.use_item_selection=use_item_selection
+
     def sizeHint(self,option,index):return C.QSize(250,82)
 
     def paint(self,painter,option,index):
         row=index.data(C.Qt.UserRole)
         if not row:return
         painter.save();painter.setRenderHint(G.QPainter.Antialiasing)
-        area=option.rect.adjusted(0,3,-5,-3);selected=bool(index.data(C.Qt.UserRole+1))
+        area=option.rect.adjusted(0,3,-5,-3)
+        selected=bool(option.state&W.QStyle.State_Selected)if self.use_item_selection else bool(index.data(C.Qt.UserRole+1))
         hover=bool(option.state&W.QStyle.State_MouseOver)
         painter.setBrush(G.QColor('#253b3e'if selected else'#252f3d'if hover else'#202733'))
         painter.setPen(G.QPen(G.QColor('#79b9af'if selected else'#3c4d60'if hover else'#2d3746')))
