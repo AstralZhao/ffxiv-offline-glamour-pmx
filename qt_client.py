@@ -961,10 +961,15 @@ class QtClient(NativeClient):
         outer=vertical(dialog,22,14);outer.addWidget(label('新建角色预设','Title'))
         outer.addWidget(label('种族和性别创建后固定，其他外观可在创建后编辑。','Muted'))
         form=W.QFormLayout();profile=ComboBox();tribe=ComboBox();name=W.QLineEdit();name.setPlaceholderText('留空使用默认名称')
-        for p in CREATION_PROFILES:profile.addItem(p['label'],p['id'])
+        reversed_profiles=tuple(reversed(CREATION_PROFILES))
+        race_order=dict.fromkeys(p['race'] for p in reversed_profiles)
+        by_id={p['id']:p for p in CREATION_PROFILES}
+        for race in race_order:
+            for p in reversed_profiles:
+                if p['race']==race:profile.addItem(p['label'],p['id'])
         def update_clans(index=None):
             tribe.clear()
-            for value in CREATION_PROFILES[profile.currentIndex()]['tribes']:tribe.addItem(CLANS[value],value)
+            for value in by_id[profile.currentData()]['tribes']:tribe.addItem(CLANS[value],value)
         profile.currentIndexChanged.connect(update_clans);update_clans()
         form.addRow('角色类型',profile);form.addRow('部族',tribe);form.addRow('预设名称',name);outer.addLayout(form)
         actions=horizontal(spacing=8);actions.addStretch();actions.addWidget(button('取消',dialog.reject,ghost=True))
