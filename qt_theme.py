@@ -256,11 +256,11 @@ def equipment_hover_html(icon,text):
     from html import escape
     image=''
     if isinstance(icon,G.QIcon) and not icon.isNull():
-        pixmap=icon.pixmap(64,64).scaled(64,64,C.Qt.KeepAspectRatio,C.Qt.SmoothTransformation)
+        pixmap=icon.pixmap(80,80).scaled(80,80,C.Qt.KeepAspectRatio,C.Qt.SmoothTransformation)
         buffer=C.QBuffer();buffer.open(C.QIODevice.WriteOnly);pixmap.save(buffer,'PNG')
         import base64
         data=base64.b64encode(bytes(buffer.data())).decode('ascii')
-        image='<div align="center"><img width="64" height="64" src="data:image/png;base64,'+data+'"></div><br>'
+        image='<div align="center"><img width="80" height="80" src="data:image/png;base64,'+data+'"></div><br>'
     return '<div style="max-width:280px">'+image+escape(text).replace('\n','<br>')+'</div>'
 
 
@@ -288,7 +288,7 @@ class EquipmentDelegate(EquipmentHoverDelegate):
         iconbox=C.QRect(area.left()+8,area.top()+4,68,68)
         painter.fillRect(iconbox,G.QColor('#131922'))
         icon=index.data(C.Qt.DecorationRole)
-        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(iconbox.left()+4,iconbox.top()+4,59,59))
+        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(iconbox.left()+6,iconbox.top()+6,55,55))
         x=area.left()+86;right=area.right()-14
         painter.setPen(G.QColor(TEXT));font=G.QFont('Microsoft YaHei UI',10);font.setWeight(G.QFont.Medium);painter.setFont(font)
         title=painter.fontMetrics().elidedText(row['name'],C.Qt.ElideRight,max(10,right-x-18))
@@ -321,7 +321,7 @@ class IconEquipmentDelegate(EquipmentHoverDelegate):
             painter.drawRoundedRect(C.QRectF(area.left()+2,area.top()-2,27,13),3,3)
         painter.drawRoundedRect(area,7,7)
         icon=index.data(C.Qt.DecorationRole)
-        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(round(area.left()+3),round(area.top()+3),58,58))
+        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(round(area.left()+5),round(area.top()+6),54,54))
         if row.get('favorite'):
             painter.setPen(G.QColor('#f5d184'));painter.setFont(G.QFont('Microsoft YaHei UI',10));painter.drawText(C.QRectF(area.right()-18,area.top(),18,20),C.Qt.AlignCenter,'★')
         if folder:
