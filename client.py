@@ -50,7 +50,7 @@ class NativeClient:
         self.boot=None;self.ready=False;self.state=parse_state({});self.good=deepcopy(self.state)
         self.items={};self.icons=OrderedDict();self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None
-        self.session_path=Path(session_path)if session_path else ROOT/'artifacts/demo/native-session.json'
+        self.session_path=Path(session_path)if session_path else __import__('app_paths').paths().user/'native-session.json'
         self.message=tk.StringVar(value='正在准备国服资源与预设…');self.slot=tk.StringVar(value=SLOTS['Head'])
         self.query=tk.StringVar();self.preset_name=tk.StringVar();self.folder_name=tk.StringVar(value='全部同模目录')
         self.appearance_note=tk.StringVar();self.selected_note=tk.StringVar(value='未装备')

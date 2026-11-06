@@ -12,7 +12,7 @@ from urllib.request import Request,urlopen
 from urllib.error import HTTPError,URLError
 
 MARKER='network-source.json'
-BASE='artifacts/network-resources'
+BASE='缓存/network-resources'
 BLOCK=1024**2
 _lock=threading.RLock();_memory=OrderedDict();_memory_size=0;_inflight={}
 CONNECTIONS=8
@@ -129,7 +129,7 @@ def prepare(host,root,*,callback=None,cancel=None,cache_policy='disk'):
     if cache_policy!='disk':raise ValueError('未知的网络缓存方式')
     from resource_pack import manifest_data
     root=Path(root).resolve(strict=True);host=host_url(host)
-    profile=json.loads((root/'docs/cn-customization-profile.json').read_bytes())
+    profile=json.loads((__import__('app_paths').program_root(root)/'docs/cn-customization-profile.json').read_bytes())
     raw,_=_request(_url(host,'resource-pack.json'),limit=1024**2,cancel=cancel);data=manifest_data(raw,profile)
     key=_sha(host.encode());digest=_sha(raw);folder=safe_path(root,f'{BASE}/{key}/{digest}')
     files=data['files'];metadata=[n for n in files if not re.search(r'\.dat[0-7]$',n)]

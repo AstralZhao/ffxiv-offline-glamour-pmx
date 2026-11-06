@@ -11,7 +11,7 @@ if not exist "%FF14_DEMO_PYTHON%" (
 set "FF14_DEMO_EXIT=%errorlevel%"
 if not "%FF14_DEMO_EXIT%"=="0" (
   echo.
-  echo The client could not start. See artifacts\demo\client-startup.log
+  echo The client could not start. See 缓存\logs\client-startup.log
   echo Please keep this window open if you need help.
   pause
 )

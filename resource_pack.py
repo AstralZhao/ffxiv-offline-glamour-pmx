@@ -114,7 +114,7 @@ def export_resource_pack(game,output,*,root=None,callback=None,cancel=None,compa
                 records[name]={'bytes':size,'sha256':h.hexdigest()}
             data={'format':FORMAT,'region':'CN','scope':'wardrobe-base-archives','categories':list(CATEGORIES),
                 'client_version':(game/'game/ffxivgame.ver').read_text().strip(),'files':records}
-            profile=json.loads((root/'docs/cn-customization-profile.json').read_bytes());manifest_data(json.dumps(data),profile)
+            profile=json.loads((__import__('app_paths').program_root(root)/'docs/cn-customization-profile.json').read_bytes());manifest_data(json.dumps(data),profile)
             archive.writestr(MANIFEST,json.dumps(data,ensure_ascii=False,sort_keys=True,indent=2))
         check_cancel(cancel)
         if any((p.stat().st_size,p.stat().st_mtime_ns)!=expected for p,expected in stats.items()):raise ValueError('导出时游戏资源发生变化')
@@ -126,7 +126,7 @@ def export_resource_pack(game,output,*,root=None,callback=None,cancel=None,compa
 
 
 def import_resource_pack(archive_path,root,*,callback=None,cancel=None):
-    root=Path(root).resolve();profile=json.loads((root/'docs/cn-customization-profile.json').read_bytes())
+    root=Path(root).resolve();profile=json.loads((__import__('app_paths').program_root(root)/'docs/cn-customization-profile.json').read_bytes())
     source=Path(archive_path).resolve(strict=True);managed=root/'resources';managed.mkdir(exist_ok=True)
     if managed.is_symlink()or not managed.resolve().is_relative_to(root):raise ValueError('软件资源目录不能链接到外部位置')
     staging=managed/('.import-'+uuid.uuid4().hex);staging.mkdir()

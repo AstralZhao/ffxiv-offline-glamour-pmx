@@ -14,6 +14,7 @@ from preset_character import import_preset
 from preset_static_character import PresetStaticCharacter
 from runtime_files import application_files,native_static_assets,ROOT
 from runtime_identity import implementation_digest
+from app_paths import paths
 
 
 from source_session import sha256 as digest
@@ -70,13 +71,14 @@ def strings(value,replace):
 class CharacterCache:
     def __init__(self,pack,store,hair,root=None,*,limit=4):
         self.pack,self.store,self.hair=pack,store,hair
-        self.root=safe_output((Path(root)if root else ROOT/'artifacts/demo/character-cache')/'index.json',pack.game_root).parent
+        self.root=safe_output((Path(root)if root else paths().derived('character-cache'))/'index.json',pack.game_root).parent
         self.entries=OrderedDict();self.limit=1 if pack.memory_only else limit
         self.live_root=self.root/'live'/uuid.uuid4().hex;self.live_directories=set()
         code,profiles=application_files();native=native_static_assets()
         ui_only={'qt_client','qt_theme','qt_runtime','qt_settings','launch','client','settings','catalogue','catalogue_cache',
             'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection','effect_clock','appearance_options','qt_saved_outfits',
-            'qt_resource_source','qt_first_run','qt_storage','storage_management'}
+            'qt_resource_source','qt_first_run','qt_storage','storage_management',
+            'app_paths','app_version','qt_updates','updates','client-version'}
         self.identity={'format':3,'client':pack.source_version(),
             'numpy_version':np.__version__,
             'executable_sha256':executable_sha256(source_executable(pack)),
@@ -95,6 +97,14 @@ class CharacterCache:
         from accessories import Accessories
         from equipment import DemoOutfit
         packet_path=self.root/(key+'.cache');disk_hit=False
+        if not packet_path.is_file():
+            import shutil
+            for seed in (ROOT/'defaults/character-cache'/packet_path.name,ROOT/'artifacts/demo/character-cache'/packet_path.name):
+                if seed.is_file() and seed.resolve()!=packet_path.resolve():
+                    temporary=packet_path.with_name('.seed-'+uuid.uuid4().hex)
+                    try:shutil.copyfile(seed,temporary);temporary.rename(packet_path)
+                    finally:temporary.unlink(missing_ok=True)
+                    break
         # This packet owns its own resource journal even when indexes are shared.
         pack=self.pack.fork()if hasattr(self.pack,'fork')else SqPack(self.pack.game_root)
         pack.indexes=self.pack.indexes;pack.synonyms=self.pack.synonyms

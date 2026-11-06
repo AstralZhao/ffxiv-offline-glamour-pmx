@@ -24,6 +24,7 @@ from urllib.parse import parse_qs,urlparse
 import webbrowser
 import weakref
 
+from app_paths import paths,AppPaths
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'tools'))
 SLOTS={'Head':'头部','Body':'上装','Gloves':'手部','Legs':'下装','Feet':'脚部',
@@ -92,7 +93,7 @@ class DemoEngine:
         from studio_lighting import options
         self.studio=options(studio)
         self.game=game.resolve();self.default_preset=preset.resolve();self.character=None;self.renderer=None
-        self.preset_directory=Path(preset_directory)if preset_directory is not None else ROOT/'presets'
+        self.preset_directory=Path(preset_directory)if preset_directory is not None else AppPaths(ROOT).presets
         self.rendered_parameters=None;self.appearance_is_preview=False;self.characters=None
         self.native_hwnd=native_hwnd;self.effect_frame=30.
         self.startup_session=startup_session;self.startup_session_prepared=False
@@ -105,7 +106,7 @@ class DemoEngine:
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU',initializer=bind,initargs=(self.transfer_progress,))
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
         self.images=OrderedDict();self.presets={};self.last=None;self.error=None;self.scene_cache=OrderedDict()
-        self.data=ROOT/'artifacts/demo';self.data.mkdir(parents=True,exist_ok=True)
+        self.data=AppPaths(ROOT).user;self.data.mkdir(parents=True,exist_ok=True)
         self.token=secrets.token_urlsafe(24);self.ready=self.pool.submit(self.initialize)
 
     def image_record(self,image):
@@ -673,7 +674,7 @@ class DemoEngine:
         key,_,proposed=self.appearance_changes(payload)
         # This is a content-addressed preparation input, outside the user's
         # selectable preset library. The selected DAT is never written.
-        path=safe_output(self.data/'appearance-previews'/(digest(proposed)+'.dat'),self.game)
+        path=safe_output(AppPaths(ROOT).derived('appearance-previews')/(digest(proposed)+'.dat'),self.game)
         if path.exists():
             if path.read_bytes()!=proposed:raise ValueError('外观预览缓存文件已改变')
         else:

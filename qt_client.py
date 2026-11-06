@@ -20,6 +20,7 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
 from effect_clock import EffectClock
+from app_paths import paths,migrate
 from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,PresetComboBox,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
@@ -200,7 +201,7 @@ class QtClient(NativeClient):
         self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
         self.page_index=0;self.page_count=1;self.catalog_total=0
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None;self.group=ARMOR
-        self.session_path=Path(session_path)if session_path else ROOT/'artifacts/demo/native-session.json'
+        self.session_path=Path(session_path)if session_path else paths().user/'native-session.json'
         self.message=Value('正在准备角色与装备…');self.slot=Value(SLOTS['Head']);self.query=Value('');self.show_head=Value(True)
         self.preset_name=Value('');self.folder_name=Value('全部同模目录');self.appearance_note=Value('');self.selected_note=Value('')
         self.dye_by_id={};self.raw_status='';self.dialogs=[];self.build_ui()
@@ -961,7 +962,7 @@ class QtClient(NativeClient):
         outer.addWidget(label('种族和性别创建后固定，其他外观可在创建后编辑。','Muted'))
         form=W.QFormLayout();profile=ComboBox();tribe=ComboBox();name=W.QLineEdit();name.setPlaceholderText('留空使用默认名称')
         for p in CREATION_PROFILES:profile.addItem(p['label'],p['id'])
-        def update_clans():
+        def update_clans(index=None):
             tribe.clear()
             for value in CREATION_PROFILES[profile.currentIndex()]['tribes']:tribe.addItem(CLANS[value],value)
         profile.currentIndexChanged.connect(update_clans);update_clans()
@@ -1318,9 +1319,12 @@ class DesktopSession(C.QObject):
     """Apply game-directory changes after the old GPU worker releases HWND."""
     def __init__(self,application,store,game,preset=None):
         super().__init__(application);self.application=application;self.store=store;self.next_game=None;self.settings_dialog=None
-        self.preset=preset or ROOT/'presets/test.dat';self.controller=None
+        self.preset=preset or (ROOT/'defaults/test.dat' if (ROOT/'defaults/test.dat').is_file() else paths().presets/'test.dat');self.controller=None
         self.timer=C.QTimer(self);self.timer.setInterval(40);self.timer.timeout.connect(self.poll);self.timer.start()
+        self.update_folder=None
         self.start(game)
+        from qt_updates import UpdateController
+        self.updates=UpdateController(self)
 
     def start(self,game):
         self.window=WardrobeWindow();self.controller=QtClient(self.window,game,self.preset,settings_handler=self.open_settings,studio=self.store.studio());self.window.show()
@@ -1328,7 +1332,7 @@ class DesktopSession(C.QObject):
     def open_settings(self):
         if self.settings_dialog:self.settings_dialog.raise_();return
         from qt_settings import SettingsDialog
-        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window,storage_context=self.controller.storage_identity)
+        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window,storage_context=self.controller.storage_identity,update_controller=self.updates)
         self.settings_dialog=dialog
         def finish(result):
             self.settings_dialog=None
@@ -1342,6 +1346,12 @@ class DesktopSession(C.QObject):
     def poll(self):
         if not self.controller.closed:return
         self.window.deleteLater()
+        if self.update_folder:
+            from updates import launch_helper
+            try:launch_helper(self.update_folder)
+            except Exception as error:
+                W.QMessageBox.warning(None,'更新未开始',str(error));self.update_folder=None;self.start(self.controller.game);return
+            self.timer.stop();self.application.quit();return
         if self.next_game:
             game=self.next_game;self.next_game=None;self.start(game)
         else:self.timer.stop();self.application.quit()
@@ -1349,7 +1359,7 @@ class DesktopSession(C.QObject):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--game',type=Path);parser.add_argument('--preset',type=Path)
-    args=parser.parse_args();os.chdir(ROOT);application=W.QApplication.instance()or W.QApplication(sys.argv[:1]);application.setStyle('Fusion');application.setStyleSheet(STYLE)
+    args=parser.parse_args();migrate();os.chdir(ROOT);application=W.QApplication.instance()or W.QApplication(sys.argv[:1]);application.setStyle('Fusion');application.setStyleSheet(STYLE)
     application.setFont(G.QFont('Microsoft YaHei UI',10));application.setQuitOnLastWindowClosed(False)
     from settings import SettingsStore,validate_game
     from qt_first_run import FirstRunDialog

@@ -220,7 +220,7 @@ def wardrobe_icons(pack):
     from build_cn_catalog import VerifiedData
     from pathlib import Path
     root=Path(__file__).resolve().parents[1]
-    mapping=json.loads((root/'artifacts/cn-data/schema-mapping.json').read_bytes());data=VerifiedData(pack,mapping)
+    mapping=json.loads((__import__('app_paths').program_root(root)/'artifacts/cn-data/schema-mapping.json').read_bytes());data=VerifiedData(pack,mapping)
     slots=dict(data.rows('EquipSlotCategory'));supported={'Head','Body','Gloves','Legs','Feet','Ears','Neck','Wrists','FingerL','FingerR'}
     icons=set()
     for _,row in data.rows('Item'):

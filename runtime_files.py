@@ -25,7 +25,7 @@ def application_files():
                 [ROOT/p for p in sorted(compiled['profiles'])])
     inventory={str(p.relative_to(ROOT)).replace('\\','/'):(p.stat().st_size,p.stat().st_mtime_ns,p.stat().st_ctime_ns)
         for folder in('tools','demo')for p in(ROOT/folder).glob('*.py')}
-    signature=json.dumps(inventory,sort_keys=True);path=ROOT/'artifacts/runtime-closure-cache.json'
+    signature=json.dumps(inventory,sort_keys=True);path=__import__('app_paths').paths().cache/'runtime-closure-cache.json'
     try:
         record=json.loads(path.read_bytes())
         if record['version']==1 and record['inventory']==signature:

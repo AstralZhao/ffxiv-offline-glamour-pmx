@@ -52,7 +52,7 @@ def peek(root):
 def connect(host,root,*,callback=None,cancel=None):
     """Called in a worker. No original manifest/index/EXE/DAT bytes are written."""
     host=host_url(host);root=Path(root).resolve(strict=True)
-    profile=json.loads((root/'docs/cn-customization-profile.json').read_bytes())
+    profile=json.loads((__import__('app_paths').program_root(root)/'docs/cn-customization-profile.json').read_bytes())
     source=MemorySource.load(host,profile,callback=callback,cancel=cancel)
     folder=safe_path(root,f'{BASE}/memory/{_sha(host.encode())}/{source.info["manifest_sha256"]}')
     source.root=folder

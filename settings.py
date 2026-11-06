@@ -2,7 +2,8 @@
 import hashlib,json,os,uuid
 from pathlib import Path
 
-ROOT=Path(__file__).resolve().parents[1]
+from app_paths import paths,program_root
+ROOT=paths().root
 
 
 def game_root(value):
@@ -21,7 +22,7 @@ def game_root(value):
 
 def validate_game(value,root=ROOT,*,verify_executable=True):
     path=game_root(value);root=Path(root)
-    profile=json.loads((root/'docs/cn-customization-profile.json').read_bytes())
+    profile=json.loads((program_root(root)/'docs/cn-customization-profile.json').read_bytes())
     if (path/'network-source.json').is_file():
         from memory_resources import descriptor
         if descriptor(path)is not None:
@@ -48,7 +49,8 @@ def validate_game(value,root=ROOT,*,verify_executable=True):
 
 
 class SettingsStore:
-    def __init__(self,root=ROOT):self.root=Path(root).resolve();self.path=self.root/'config.json'
+    def __init__(self,root=ROOT):
+        self.root=Path(root).resolve();self.path=self.root/'用户数据/config.json'
 
     def read(self):
         if not self.path.is_file():return None,''
@@ -59,22 +61,22 @@ class SettingsStore:
                 relative=data.get('resource_directory')
                 if not isinstance(relative,str):raise ValueError('网络资源配置格式不正确')
                 path=(self.root/relative).resolve()
-                if not path.is_relative_to(self.root/BASE):raise ValueError('网络缓存必须位于软件网络资源目录内')
+                if not any(path.is_relative_to(p) for p in (self.root/BASE,self.root/'artifacts/network-resources',program_root(self.root)/'artifacts/network-resources')):raise ValueError('网络缓存必须位于软件网络资源目录内')
                 from memory_resources import descriptor
                 memory=descriptor(path)
                 if memory is not None:
-                    profile=json.loads((self.root/'docs/cn-customization-profile.json').read_bytes())
+                    profile=json.loads((program_root(self.root)/'docs/cn-customization-profile.json').read_bytes())
                     if any(memory[k]!=profile[k]for k in('client_version','executable_sha256')):raise ValueError('网络连接与软件支持的国服版本不一致')
                     if memory['host']!=host_url(data.get('host','')):raise ValueError('网络资源网址与连接记录不一致')
                     return path,''
-                source=validate_cached(path,json.loads((self.root/'docs/cn-customization-profile.json').read_bytes()))
+                source=validate_cached(path,json.loads((program_root(self.root)/'docs/cn-customization-profile.json').read_bytes()))
                 if source.host!=host_url(data.get('host','')):raise ValueError('网络资源网址与缓存不一致')
                 return validate_game(path,self.root,verify_executable=False),''
             if data.get('version')==2 and data.get('source')=='resource_pack':
                 relative=data.get('resource_directory')
                 if not isinstance(relative,str):raise ValueError('资源包配置格式不正确')
                 path=(self.root/relative).resolve()
-                if not path.is_relative_to(self.root/'resources'):raise ValueError('资源包必须位于软件 resources 目录内')
+                if not any(path.is_relative_to(p) for p in (self.root/'resources',program_root(self.root)/'resources')):raise ValueError('资源包必须位于软件 resources 目录内')
                 return validate_game(path,self.root,verify_executable=False),''
             if data.get('version')!=1 or not isinstance(data.get('game_directory'),str):raise ValueError('配置格式不正确')
             return validate_game(data['game_directory'],self.root,verify_executable=False),''
@@ -108,7 +110,7 @@ class SettingsStore:
             relative=data.get('resource_directory')
             if isinstance(relative,str):
                 candidate=(self.root/relative).resolve()
-                if candidate.is_relative_to(self.root/'resources'):result.setdefault('pack',str(candidate))
+                if any(candidate.is_relative_to(p) for p in (self.root/'resources',program_root(self.root)/'resources')):result.setdefault('pack',str(candidate))
         elif isinstance(data.get('game_directory'),str):result.setdefault('game',data['game_directory'])
         return result
 
@@ -118,13 +120,13 @@ class SettingsStore:
         if self.root.is_relative_to(path):raise ValueError('软件不能放在游戏安装目录内')
         if (path/'network-source.json').is_file():
             from network_resources import BASE,NetworkSource
-            if not path.is_relative_to(self.root/BASE):raise ValueError('网络资源缓存不在软件目录内')
+            if not any(path.is_relative_to(p) for p in (self.root/BASE,self.root/'artifacts/network-resources',program_root(self.root)/'artifacts/network-resources')):raise ValueError('网络资源缓存不在软件目录内')
             from memory_resources import descriptor
             memory=descriptor(path)
             host=memory['host']if memory else NetworkSource(path).host
             data={'version':3,'source':'network','host':host,'resource_directory':path.relative_to(self.root).as_posix(),'cache_policy':'memory'if memory else'disk'}
         elif (path/'resource-pack.json').is_file():
-            if not path.is_relative_to(self.root/'resources'):raise ValueError('请先通过“导入资源包”将资源包导入软件目录')
+            if not any(path.is_relative_to(p) for p in (self.root/'resources',program_root(self.root)/'resources')):raise ValueError('请先通过“导入资源包”将资源包导入软件目录')
             data={'version':2,'source':'resource_pack','resource_directory':path.relative_to(self.root).as_posix()}
         else:data={'version':1,'game_directory':str(path)}
         from studio_lighting import options
@@ -148,7 +150,8 @@ class SettingsStore:
                 if candidate.is_absolute()and candidate.resolve().is_relative_to(self.root):
                     remembered[key]={'software_relative':candidate.resolve().relative_to(self.root).as_posix()}
         data['resource_inputs']=remembered
-        temporary=self.root/('.config-'+uuid.uuid4().hex+'.tmp')
+        self.path.parent.mkdir(parents=True,exist_ok=True)
+        temporary=self.path.parent/('.config-'+uuid.uuid4().hex+'.tmp')
         try:
             with temporary.open('x',encoding='utf8')as file:
                 json.dump(data,file,ensure_ascii=False,indent=2)

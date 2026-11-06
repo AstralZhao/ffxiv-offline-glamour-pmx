@@ -20,6 +20,12 @@ def _cancel(event):
 
 
 def _category(relative):
+    if relative.startswith('程序/'):
+        category=_category(relative.split('/',1)[1])
+        return 'program' if category=='other' else category
+    if relative.startswith('用户数据/'):return 'personal'
+    if relative.startswith('缓存/network-resources/'):return 'network'
+    if relative.startswith('缓存/'):return 'cache'
     if relative.startswith('artifacts/network-resources/'):return 'network'
     if relative.startswith('resources/'):return 'resources'
     if '/'not in relative and relative.endswith('.ff14resources'):return 'archives'
@@ -48,6 +54,10 @@ def _base_identity(path):
 
 def _kind(relative):
     p=Path(relative)
+    if p.parent.as_posix()=='缓存/character-cache' and re.fullmatch('[0-9a-f]{64}\\.cache',p.name):return 'old_character'
+    if p.parts and p.parts[0]=='缓存' and len(p.parts)>1 and p.parts[1]=='network-resources':
+        return _kind('artifacts/'+p.relative_to('缓存').as_posix())
+    if p.parts and p.parts[0]=='程序':return _kind(p.relative_to('程序').as_posix())
     if re.fullmatch(r'artifacts/network-resources/[0-9a-f]{64}/[0-9a-f]{64}/chunks/[0-9a-f]{64}/[0-9a-f]{8}\.chunk',p.as_posix()):return 'network_chunk'
     if p.parent.as_posix()==CACHE_DIR and re.fullmatch('[0-9a-f]{64}\\.cache',p.name):return 'old_character'
     if len(p.parts)==3 and p.parts[0]in('demo','tools')and p.parts[1]=='__pycache__'and p.suffix=='.pyc':return 'bytecode'
