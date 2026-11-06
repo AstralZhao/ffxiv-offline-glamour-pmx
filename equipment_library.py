@@ -106,6 +106,48 @@ class EquipmentLibrary:
             detail['source']='user'if detail['origin']=='user'else'model'if detail['tag']in model_tags else'name'if detail['tag']in dict(RULES)else'dye'
         result['tags']=[r['tag']for r in result['tag_details']];return result
 
+    def relation_data(self):
+        if hasattr(self,'_relation_data'):return self._relation_data
+        path=self.catalog.with_name('equipment-relations.json')
+        if not path.is_file():
+            self._relation_data={'sets':[],'dye_icons':{}};return self._relation_data
+        if path.stat().st_size>2*1024*1024:raise ValueError('装备关联数据过大')
+        data=json.loads(path.read_bytes())
+        with closing(sqlite3.connect(self.catalog.as_uri()+'?mode=ro',uri=True))as conn:
+            version=conn.execute("SELECT value FROM metadata WHERE key='client_version'").fetchone()[0]
+        if data.get('version')!=1 or data.get('client_version')!=version:raise ValueError('装备关联数据与国服目录版本不一致')
+        self._relation_data=data;return data
+
+    def dye_icon(self,stain):
+        return self.relation_data()['dye_icons'].get(str(stain),{}).get('icon_id')
+
+    def related_equipment(self,identifier):
+        source=self.item(identifier);data=self.relation_data()
+        matches=[group for group in data['sets']if identifier in group['items']]
+        groups=[]
+        for group in matches:
+            groups.append({**group,'inferred':False,'items':[self.item(i)for i in group['items']]})
+        if groups:return groups
+        # Older combat sets are often absent from the native stored/shop sets.
+        # Infer a conservative name stem from matching model/variant + job/level,
+        # then include matching accessories. Clearly label these as candidates.
+        with closing(sqlite3.connect(self.catalog.as_uri()+'?mode=ro',uri=True))as conn:
+            conn.row_factory=sqlite3.Row
+            rows=[dict(r)for r in conn.execute('SELECT *,model_main & 65535 AS model_set FROM equipment WHERE level=? AND class_job_category=?',
+                (source['level'],source['class_job_category']))if r['slot']in PARTS]
+        from os.path import commonprefix
+        seeds=[r for r in rows if r['slot']!=source['slot']and r['model_main']&0xffffffff==source['model_main']&0xffffffff
+            and len(commonprefix([source['name'],r['name']]))>=2]
+        if not seeds:return []
+        prefix=commonprefix([source['name'],*(r['name']for r in seeds)])
+        if len(prefix)<2 or prefix in ('改良型','陈旧的','旧化的'):return []
+        candidates=[r for r in rows if r['name'].startswith(prefix)and
+            (len(prefix)>=4 or r['model_main']&0xffffffff==source['model_main']&0xffffffff)]
+        if len({r['slot']for r in candidates})<2:return []
+        candidates.sort(key=lambda r:(list(PARTS).index(r['slot']),r['item_id']))
+        return [{'id':'inferred:'+str(identifier),'name':prefix+' · 同系列候选','source':'name/model/job/level',
+                 'inferred':True,'items':candidates}]
+
     def members(self,slot,model):
         slot='FingerL'if slot=='FingerR'else slot
         with closing(sqlite3.connect(self.catalog.as_uri()+'?mode=ro',uri=True))as conn:

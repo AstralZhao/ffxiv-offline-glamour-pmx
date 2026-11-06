@@ -252,7 +252,28 @@ def slot_icon(slot):
     p.end();return image
 
 
-class EquipmentDelegate(W.QStyledItemDelegate):
+def equipment_hover_html(icon,text):
+    from html import escape
+    image=''
+    if isinstance(icon,G.QIcon) and not icon.isNull():
+        pixmap=icon.pixmap(64,64).scaled(64,64,C.Qt.KeepAspectRatio,C.Qt.SmoothTransformation)
+        buffer=C.QBuffer();buffer.open(C.QIODevice.WriteOnly);pixmap.save(buffer,'PNG')
+        import base64
+        data=base64.b64encode(bytes(buffer.data())).decode('ascii')
+        image='<div align="center"><img width="64" height="64" src="data:image/png;base64,'+data+'"></div><br>'
+    return '<div style="max-width:280px">'+image+escape(text).replace('\n','<br>')+'</div>'
+
+
+class EquipmentHoverDelegate(W.QStyledItemDelegate):
+    def helpEvent(self,event,view,option,index):
+        if event.type()==C.QEvent.ToolTip and index.isValid():
+            text=index.data(C.Qt.ToolTipRole)or''
+            W.QToolTip.showText(event.globalPos(),equipment_hover_html(index.data(C.Qt.DecorationRole),text),view,option.rect,10000)
+            return True
+        return super().helpEvent(event,view,option,index)
+
+
+class EquipmentDelegate(EquipmentHoverDelegate):
     def sizeHint(self,option,index):return C.QSize(250,82)
 
     def paint(self,painter,option,index):
@@ -264,11 +285,11 @@ class EquipmentDelegate(W.QStyledItemDelegate):
         painter.setBrush(G.QColor('#253b3e'if selected else'#252f3d'if hover else'#202733'))
         painter.setPen(G.QPen(G.QColor('#79b9af'if selected else'#3c4d60'if hover else'#2d3746')))
         painter.drawRoundedRect(C.QRectF(area),8,8)
-        iconbox=C.QRect(area.left()+12,area.top()+14,46,46)
+        iconbox=C.QRect(area.left()+8,area.top()+4,68,68)
         painter.fillRect(iconbox,G.QColor('#131922'))
         icon=index.data(C.Qt.DecorationRole)
-        if isinstance(icon,G.QIcon):icon.paint(painter,iconbox.adjusted(3,3,-3,-3))
-        x=area.left()+70;right=area.right()-14
+        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(iconbox.left()+4,iconbox.top()+4,59,59))
+        x=area.left()+86;right=area.right()-14
         painter.setPen(G.QColor(TEXT));font=G.QFont('Microsoft YaHei UI',10);font.setWeight(G.QFont.Medium);painter.setFont(font)
         title=painter.fontMetrics().elidedText(row['name'],C.Qt.ElideRight,max(10,right-x-18))
         painter.drawText(C.QRect(x,area.top()+12,right-x-18,24),C.Qt.AlignVCenter,title)
@@ -284,7 +305,7 @@ class EquipmentDelegate(W.QStyledItemDelegate):
         painter.restore()
 
 
-class IconEquipmentDelegate(W.QStyledItemDelegate):
+class IconEquipmentDelegate(EquipmentHoverDelegate):
     def sizeHint(self,option,index):return C.QSize(72,78)
 
     def paint(self,painter,option,index):
@@ -300,7 +321,7 @@ class IconEquipmentDelegate(W.QStyledItemDelegate):
             painter.drawRoundedRect(C.QRectF(area.left()+2,area.top()-2,27,13),3,3)
         painter.drawRoundedRect(area,7,7)
         icon=index.data(C.Qt.DecorationRole)
-        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(round(area.left()+7),round(area.top()+7),50,50))
+        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(round(area.left()+3),round(area.top()+3),58,58))
         if row.get('favorite'):
             painter.setPen(G.QColor('#f5d184'));painter.setFont(G.QFont('Microsoft YaHei UI',10));painter.drawText(C.QRectF(area.right()-18,area.top(),18,20),C.Qt.AlignCenter,'★')
         if folder:

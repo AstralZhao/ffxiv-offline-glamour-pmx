@@ -21,7 +21,7 @@ from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_s
 from client import NativeClient,color_text
 from effect_clock import EffectClock
 from app_paths import paths,migrate
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,ComboBox,SearchComboBox,PresetComboBox,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -146,6 +146,7 @@ class OutfitCard(W.QFrame):
         self.part.setText(SLOTS[self.slot]+(' · 已隐藏'if hidden else''))
         self.setProperty('selected',selected);polish(self)
         text=item.get('name','未装备');tooltip=text+'\n标签：'+(' / '.join(item.get('tags',[]))or'暂无标签')if item else text
+        tooltip=equipment_hover_html(self.controller.icon(item.get('icon_id')),tooltip)if item else tooltip
         self.setToolTip(tooltip);self.name.setToolTip(tooltip);self.icon.setToolTip(tooltip)
         self.name.setText(G.QFontMetrics(self.name.font()).elidedText(text,C.Qt.ElideRight,max(70,self.width()-82)))
         self.name.setStyleSheet('color:'+('#edf1f7'if item else'#748296')+';font-size:12px;font-weight:500')
@@ -156,7 +157,8 @@ class OutfitCard(W.QFrame):
             name=dye['name']if dye and stain else'原色'
             color='#%06x'%(dye['color']&0xffffff)if dye and stain else'#91a0b4'
             b.setEnabled(count>=ch and not hidden)
-            b.setText(f'{ch}区');b.setIcon(swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(14,14))
+            b.setText(f'{ch}区');native_icon=self.controller.dye_icon(stain)if count>=ch and stain else G.QIcon()
+            b.setIcon(native_icon if not native_icon.isNull()else swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(16,16))
             b.setStyleSheet('QPushButton:disabled { background:#38252b; color:#e3aaa3; border:1px dashed #a46367; font-weight:600; }'if count<ch else'')
             b.setToolTip(f'第{ch}染色区 · '+(name if count>=ch else'不可染色'))
 
@@ -255,7 +257,7 @@ class QtClient(NativeClient):
         self.min_level=W.QSpinBox();self.max_level=W.QSpinBox()
         for control,text in((self.min_level,'最低穿戴等级'),(self.max_level,'最高穿戴等级')):
             control.setRange(0,999);control.setSpecialValueText('不限');control.setButtonSymbols(W.QAbstractSpinBox.NoButtons)
-            control.setAlignment(C.Qt.AlignCenter);control.setFixedSize(58,30);control.setStyleSheet('padding:4px 6px');control.setToolTip(text+'；0表示不限。按穿戴所需等级筛选，不是装备品级。')
+            control.setAlignment(C.Qt.AlignCenter);control.setFixedSize(48,28);control.setStyleSheet('padding:4px 6px');control.setToolTip(text+'；0表示不限。按穿戴所需等级筛选，不是装备品级。')
             control.setKeyboardTracking(False);control.valueChanged.connect(lambda _,c=control:self.level_changed(c))
         levels.addWidget(self.min_level);levels.addWidget(label('—','Muted'));levels.addWidget(self.max_level);levels.addStretch()
         self.reset_filters_button=button('重置',self.reset_filters,ghost=True);self.reset_filters_button.setToolTip('清除搜索、等级、标签与仅收藏筛选')
@@ -609,7 +611,9 @@ class QtClient(NativeClient):
                 item=self.catalog.item(i);identifier=item.data(C.Qt.UserRole).get('icon_id')
                 if identifier in changed:item.setIcon(self.icons[identifier])
             for card in self.outfit_cards.values():
-                if getattr(card,'display_key',None)and card.display_key[3]in changed:card.display_key=None
+                key=getattr(card,'display_key',None)
+                if key and (key[3]in changed or any(self.library.dye_icon(stain)in changed for stain in key[1:3]if stain)):
+                    card.display_key=None
             for dialog in self.dialogs:
                 if getattr(dialog,'icon_id',None)in changed:dialog.icon_label.setPixmap(self.icons[dialog.icon_id].pixmap(60,60))
                 if dialog is not self.editor and hasattr(dialog,'refresh_icons'):dialog.refresh_icons(changed)
@@ -699,7 +703,8 @@ class QtClient(NativeClient):
         item=self.catalog.itemAt(position)
         if not item or not self.library:return
         menu=self.equipment_context_menu(item)
-        menu.exec(self.catalog.viewport().mapToGlobal(position))
+        try:menu.exec(self.catalog.viewport().mapToGlobal(position))
+        finally:menu.deleteLater()
 
     def equipment_context_menu(self,item):
         row=item.data(C.Qt.UserRole);menu=W.QMenu(self.catalog)
@@ -709,6 +714,25 @@ class QtClient(NativeClient):
         text=('取消收藏'if exact['favorite']else'收藏装备')+('（目录代表款式）'if folder else'')
         menu.addAction(text,lambda:self.toggle_favorite(row['item_id']))
         if folder:menu.addAction('打开同模目录',lambda:self.activate_item(item))
+        else:
+            related=menu.addMenu('同套装备');menu.related_menus=[related]
+            groups=self.library.related_equipment(row['item_id'])
+            if groups:
+                related.addAction('查看同套装备…',lambda:self.open_related_equipment(row['item_id']))
+                related.addSeparator()
+                for group in groups:
+                    target=related.addMenu(group['name'])if len(groups)>1 else related
+                    if target is not related:menu.related_menus.append(target)
+                    if group.get('inferred'):
+                        hint=target.addAction('名称关联候选，请确认款式');hint.setEnabled(False)
+                    for member in group['items']:
+                        if member['item_id']==row['item_id']:continue
+                        action=target.addAction(self.icon(member.get('icon_id')),SLOTS[member['slot']]+' · '+member['name'])
+                        action.triggered.connect(lambda _=False,m=member:self.try_equipment_rows([m]))
+            else:
+                action=related.addAction('未找到同套装备');action.setEnabled(False)
+        # Keep submenu QAction wrappers alive alongside their QMenus in PySide.
+        menu.related_actions=[child.menuAction()for child in getattr(menu,'related_menus',[])]
         return menu
 
     def outfit_context(self,slot,position):
@@ -716,7 +740,25 @@ class QtClient(NativeClient):
         if not identifier or not self.library:return
         item=W.QListWidgetItem();item.setData(C.Qt.UserRole,self.library.item(identifier))
         menu=self.equipment_context_menu(item)
-        menu.exec(self.outfit_cards[slot].mapToGlobal(position))
+        try:menu.exec(self.outfit_cards[slot].mapToGlobal(position))
+        finally:menu.deleteLater()
+
+    def open_related_equipment(self,identifier):
+        groups=self.library.related_equipment(identifier)
+        if not groups:self.message.set('未找到这件装备的同套关联');return
+        return self.show_dialog(RelatedEquipmentDialog(self,identifier,groups))
+
+    def try_equipment_rows(self,rows):
+        if not self.ready or self.closing:return
+        slots=[row['slot']for row in rows]
+        if len(set(slots))!=len(slots):self.message.set('此候选有同部位的多件装备，请逐件选择试穿');return
+        for row in rows:
+            slot=row['slot']
+            if slot not in SLOTS:continue
+            self.items[row['item_id']]=row;self.hidden_equipment.pop(slot,None)
+            if self.state['equipment'][slot]['item_id']!=row['item_id']:
+                self.state['equipment'][slot]={'item_id':row['item_id'],'first':0,'second':0}
+        self.update_outfit();self.queue_render()
 
     def open_equipment_details(self,row):
         if not self.library:return
@@ -999,7 +1041,13 @@ class QtClient(NativeClient):
         search=W.QLineEdit();search.setPlaceholderText('搜索名称');search.setClearButtonEnabled(True);outer.addWidget(search)
         scroll=W.QScrollArea();scroll.setWidgetResizable(True);scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
         content=W.QWidget();grid=W.QGridLayout(content);grid.setSpacing(8);scroll.setWidget(content);outer.addWidget(scroll,1)
+        dialog.icon_buttons={}
+        def refresh_icons(changed):
+            for identifier in changed:
+                for control in dialog.icon_buttons.get(identifier,[]):control.setIcon(self.icon(identifier))
+        dialog.refresh_icons=refresh_icons
         def render(text=''):
+            dialog.icon_buttons={}
             while grid.count():
                 item=grid.takeAt(0)
                 if item.widget():item.widget().hide();item.widget().deleteLater()
@@ -1007,15 +1055,24 @@ class QtClient(NativeClient):
             for i,choice in enumerate(rows):
                 color=choice.get('color','#333b48');b=button('✓'if choice['value']==selected else'')
                 b.setFixedSize(40,40);b.setToolTip(choice['label']);b.setAccessibleName(choice['label']);b.setStyleSheet(f'QPushButton {{ background:{color};color:{color_text(color)};border:1px solid #657387;border-radius:7px;font-size:18px; }} QPushButton:hover {{ border:2px solid white; }}')
+                if choice.get('icon_id'):
+                    selected_border='2px solid #a6e7d8'if choice['value']==selected else'1px solid #465366'
+                    b.setText('');b.setIcon(self.icon(choice['icon_id']));b.setIconSize(C.QSize(32,32))
+                    b.setStyleSheet('QPushButton { background:#202733;padding:2px;border:'+selected_border+';border-radius:6px; } QPushButton:hover { border:2px solid white; }')
+                    dialog.icon_buttons.setdefault(choice['icon_id'],[]).append(b)
                 def pick(c=choice):callback(c['value']);dialog.accept()
                 b.clicked.connect(lambda _=False,p=pick:p());b.enterEvent=lambda e,c=choice:name.setText(c['label']);grid.addWidget(b,i//8,i%8)
             grid.setRowStretch((len(rows)+7)//8,1)
         search.textChanged.connect(render);render();return self.show_dialog(dialog)
 
+    def dye_icon(self,stain):
+        identifier=self.library.dye_icon(stain)if self.library and stain else None
+        return self.icon(identifier)if identifier else G.QIcon()
+
     def open_dyes(self,slot,channel):
         choice=self.state['equipment'][slot];item=self.items.get(choice['item_id'],{})
         if item.get('dye_count',0)<channel:return
-        colors=[{'value':0,'label':'原色','color':'#333b48'}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff)}for d in self.boot['dyes']if d['stain_id']]
+        colors=[{'value':0,'label':'原色','color':'#333b48'}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff),'icon_id':self.library.dye_icon(d['stain_id'])if self.library else None}for d in self.boot['dyes']if d['stain_id']]
         item_id=choice['item_id']
         def pick(value):
             if self.state['equipment'][slot]['item_id']!=item_id:return
@@ -1141,6 +1198,45 @@ class CharacterManagerDialog(W.QDialog):
         self.delete_button.setToolTip('至少保留一份角色预设'if len(records)<2 else'删除软件内的预设副本，原始导入文件不受影响')
         self.status.setText('请先关闭外观编辑窗口，再切换或删除角色。'if c.editor else'正在处理，请稍候…'if c.job is not None else
             '当前角色的外观修改尚未保存；请在“编辑外观”中保存。'if boot.get('appearance',{}).get('is_preview')else'')
+
+
+class RelatedEquipmentDialog(W.QDialog):
+    def __init__(self,controller,identifier,groups):
+        super().__init__(controller.window);self.c=controller;self.groups=groups;self.identifier=identifier
+        self.setWindowTitle('同套装备');self.resize(470,640);self.setMinimumSize(390,410)
+        outer=vertical(self,16,10);outer.addWidget(label('同套装备','Title'))
+        self.picker=ComboBox()
+        for group in groups:self.picker.addItem(group['name'])
+        outer.addWidget(self.picker);self.note=label('','Muted');self.note.setWordWrap(True);outer.addWidget(self.note)
+        self.list=W.QListWidget();self.list.setMouseTracking(True);self.list.setItemDelegate(EquipmentDelegate(self.list))
+        self.list.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel);outer.addWidget(self.list,1)
+        actions=horizontal();self.try_one=button('试穿所选',self.apply_one,primary=True);actions.addWidget(self.try_one)
+        self.try_all=button('试穿这一套',self.apply_all);actions.addWidget(self.try_all);actions.addStretch()
+        actions.addWidget(button('关闭',self.accept,ghost=True));outer.addLayout(actions)
+        self.picker.currentIndexChanged.connect(self.populate);self.list.itemDoubleClicked.connect(lambda _:self.apply_one())
+        self.populate(0)
+
+    def populate(self,index):
+        group=self.groups[index];self.list.clear()
+        self.note.setText('按名称、模型、职业和等级找到的候选，请确认款式。'if group.get('inferred')else'游戏原生套装关联。双击或点击“试穿所选”只替换对应部位。')
+        rows=sorted(group['items'],key=lambda r:(list(SLOTS).index(r['slot']),r['item_id']))
+        for row in rows:
+            item=W.QListWidgetItem(row['name']);item.setData(C.Qt.UserRole,row);item.setIcon(self.c.icon(row.get('icon_id')))
+            item.setToolTip(self.c.equipment_tooltip(row));item.setData(C.Qt.UserRole+1,row['item_id']==self.identifier);self.list.addItem(item)
+            if row['item_id']==self.identifier:self.list.setCurrentItem(item)
+        self.try_all.setEnabled(len({r['slot']for r in rows})==len(rows))
+        self.try_all.setToolTip('只替换本套包含的部位，保留其他装备和当前角色。'if self.try_all.isEnabled()else'有多个同部位候选，请单件试穿。')
+
+    def refresh_icons(self,changed):
+        for i in range(self.list.count()):
+            item=self.list.item(i);identifier=item.data(C.Qt.UserRole).get('icon_id')
+            if identifier in changed:item.setIcon(self.c.icon(identifier))
+
+    def apply_one(self):
+        item=self.list.currentItem()
+        if item:self.c.try_equipment_rows([item.data(C.Qt.UserRole)])
+
+    def apply_all(self):self.c.try_equipment_rows(self.groups[self.picker.currentIndex()]['items'])
 
 
 class EquipmentDetailsDialog(W.QDialog):
