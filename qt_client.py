@@ -575,7 +575,7 @@ class QtClient(NativeClient):
     def select_slot(self,slot):
         if not self.boot:return
         group=ARMOR if slot in ARMOR else ACCESSORIES
-        self.slot.set(SLOTS[slot]);self.folder=None;self.outer=None;self.query.set('');self.cancel_search()
+        self.slot.set(SLOTS[slot]);self.folder=None;self.outer=None;self.cancel_search()
         if group!=self.group:self.switch_group(group)
         self.update_outfit();self.load_catalog()
 
@@ -705,6 +705,7 @@ class QtClient(NativeClient):
         row=item.data(C.Qt.UserRole);menu=W.QMenu(self.catalog)
         menu.addAction('查看详情 / 编辑标签',lambda:self.open_equipment_details(row))
         exact=self.library.item(row['item_id']);folder=row.get('is_group')and row.get('group_count',1)>1
+        menu.addAction('复制装备名称',lambda:W.QApplication.clipboard().setText(exact['name']))
         text=('取消收藏'if exact['favorite']else'收藏装备')+('（目录代表款式）'if folder else'')
         menu.addAction(text,lambda:self.toggle_favorite(row['item_id']))
         if folder:menu.addAction('打开同模目录',lambda:self.activate_item(item))
@@ -713,7 +714,9 @@ class QtClient(NativeClient):
     def outfit_context(self,slot,position):
         identifier=self.state['equipment'][slot]['item_id']
         if not identifier or not self.library:return
-        self.open_equipment_details({'item_id':identifier})
+        item=W.QListWidgetItem();item.setData(C.Qt.UserRole,self.library.item(identifier))
+        menu=self.equipment_context_menu(item)
+        menu.exec(self.outfit_cards[slot].mapToGlobal(position))
 
     def open_equipment_details(self,row):
         if not self.library:return
@@ -937,11 +940,16 @@ class QtClient(NativeClient):
             self.message.set('预设已删除，原始导入文件未改动'if result['deleted']else'已切换角色，但预设未删除：'+result['delete_error'])
         self.submit(self.engine.run,done,'delete_preset',{'id':record['id'],'sha256':record['sha256']})
 
+    def preset_import_directory(self):
+        if any((self.game/name).is_file()for name in('network-source.json','resource-pack.json')):return ''
+        directory=self.game/'game/My Games/FINAL FANTASY XIV - A Realm Reborn'
+        return str(directory if directory.is_dir()else self.game)
+
     def import_preset(self):
         if self.engine is None or not self.engine.ready.done():return self.message.set('正在加载角色，请稍候…')
         if self.job:return self.message.set('请等待当前模型准备完成')
         parent=self.character_manager if self.character_manager.isVisible()else self.window
-        name,_=W.QFileDialog.getOpenFileName(parent,'导入角色外观预设','','角色预设 (*.dat)')
+        name,_=W.QFileDialog.getOpenFileName(parent,'导入角色外观预设',self.preset_import_directory(),'角色预设 (*.dat)')
         if not name:return
         try:raw=Path(name).read_bytes()
         except OSError as error:return self.message.set(str(error))

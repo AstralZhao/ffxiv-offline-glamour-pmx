@@ -68,7 +68,7 @@ def parse_state(raw):
     pitch=raw.get('pitch',0);pan=raw.get('pan',0)
     effects_visible=raw.get('effects_visible',True)
     if type(yaw)not in(int,float)or not math.isfinite(yaw)or not -3600<=yaw<=3600:raise ValueError('观察角度不正确')
-    if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .25<=zoom<=4:raise ValueError('缩放范围不正确')
+    if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .25<=zoom<=6:raise ValueError('缩放范围不正确')
     if type(visible)is not bool:raise ValueError('头饰显示状态不正确')
     if type(effects_visible)is not bool:raise ValueError('特效显示状态不正确')
     if type(pitch)not in(int,float)or not math.isfinite(pitch)or not -65<=pitch<=65:raise ValueError('俯仰角度不正确')

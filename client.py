@@ -335,7 +335,7 @@ class NativeClient:
 
     def end_drag(self,event=None):self.drag=None
     def camera_yaw(self,yaw):self.state['yaw']=yaw;self.queue_render()
-    def zoom(self,delta):self.state['zoom']=max(.25,min(4,self.state['zoom']+delta));self.queue_render()
+    def zoom(self,delta):self.state['zoom']=max(.25,min(6,self.state['zoom']+delta));self.queue_render()
     def reset_camera(self):self.state.update(yaw=0,pitch=0,pan=0,zoom=1);self.queue_render()
     def toggle_head(self):self.state['head_visible']=self.show_head.get();self.queue_render()
     def remove_slot(self):self.state['equipment'][self.slot_key()]={'item_id':None,'first':0,'second':0};self.update_outfit();self.queue_render()
