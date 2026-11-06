@@ -65,15 +65,16 @@ def parse_state(raw):
         if item is None and(first or second):raise ValueError('空部位不能染色')
         result[slot]={'item_id':item,'first':first,'second':second}
     yaw=raw.get('yaw',0);zoom=raw.get('zoom',1);visible=raw.get('head_visible',True)
-    pitch=raw.get('pitch',0);pan=raw.get('pan',0)
+    pitch=raw.get('pitch',0);pan=raw.get('pan',0);pan_x=raw.get('pan_x',0)
     effects_visible=raw.get('effects_visible',True)
     if type(yaw)not in(int,float)or not math.isfinite(yaw)or not -3600<=yaw<=3600:raise ValueError('观察角度不正确')
-    if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .25<=zoom<=6:raise ValueError('缩放范围不正确')
+    if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .25<=zoom<=8:raise ValueError('缩放范围不正确')
     if type(visible)is not bool:raise ValueError('头饰显示状态不正确')
     if type(effects_visible)is not bool:raise ValueError('特效显示状态不正确')
     if type(pitch)not in(int,float)or not math.isfinite(pitch)or not -65<=pitch<=65:raise ValueError('俯仰角度不正确')
     if type(pan)not in(int,float)or not math.isfinite(pan)or not -1<=pan<=1:raise ValueError('相机平移范围不正确')
-    return {'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan)}
+    if type(pan_x)not in(int,float)or not math.isfinite(pan_x)or not -1<=pan_x<=1:raise ValueError('相机水平平移范围不正确')
+    return {'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan),'pan_x':float(pan_x)}
 
 
 def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,library=None,favorites_only=False,tags=(),favorite_snapshot=None,min_level=None,max_level=None):
@@ -85,6 +86,11 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
         if library is not None:return library.equipment_rows(conn,slot,query,offset,limit,grouped=grouped,model_set=model_set,
             preferred_item=EXAMPLE.get(slot,0),favorites_only=favorites_only,tags=tags,favorite_snapshot=favorite_snapshot,min_level=min_level,max_level=max_level)
         return rows(conn,slot,query,offset,limit,grouped=grouped,model_set=model_set,preferred_item=EXAMPLE.get(slot,0),min_level=min_level,max_level=max_level)
+
+
+def parse_startup_state(raw):
+    if not isinstance(raw,dict):return parse_state(raw)
+    return parse_state({**raw,'yaw':0,'pitch':0,'pan':0,'pan_x':0,'zoom':1})
 
 
 class DemoEngine:
@@ -149,7 +155,7 @@ class DemoEngine:
             native_hwnd=self.native_hwnd
             defer_native_present=self.defer_native_present
             class PreviewRenderer(PresetMaterialRenderer):
-                zoom=1.;pitch=0.;pan=0.
+                zoom=1.;pitch=0.;pan=0.;pan_x=0.
                 reuse_joint_palette=True
                 reuse_frame_constants=True
                 reuse_character_layer=True
@@ -323,10 +329,11 @@ class DemoEngine:
                     import numpy as np
                     low,high=scene.bounds.min(axis=0),scene.bounds.max(axis=0)
                     center=(low+high)/2;focus=center.copy()
-                    focus[1]+=(high[1]-low[1])*(.28*(1-1/self.zoom)+self.pan)
+                    focus[1]+=(high[1]-low[1])*(.28*(1-1/self.zoom))
                     y,p=np.deg2rad((yaw,self.pitch));c,s=np.cos(y),np.sin(y);cp,sp=np.cos(p),np.sin(p)
                     ry=np.array(((c,0,s),(0,1,0),(-s,0,c)));rx=np.array(((1,0,0),(0,cp,-sp),(0,sp,cp)))
                     view=np.eye(4);view[:3,:3]=rx@ry;view[:3,3]=-view[:3,:3]@focus+(0,0,-3)
+                    view[0,3]+=(high[1]-low[1])*self.pan_x;view[1,3]-=(high[1]-low[1])*self.pan
                     radius=max((high[1]-low[1])/2,np.max(high-low)/2*self.height/self.width)*1.12/self.zoom
                     projection=np.eye(4);projection[0,0]=self.height/self.width/radius;projection[1,1]=1/radius
                     projection[2,2]=1/(10-.01);projection[2,3]=10/(10-.01)
@@ -450,7 +457,7 @@ class DemoEngine:
         # restoration, so no default/intermediate character can flash up.
         record=self.startup_session if isinstance(self.startup_session,dict)else{}
         key=record.get('preset_id');valid=key in self.presets if isinstance(key,str)else False
-        try:self.initial_state=parse_state(record.get('state',{}))if valid else{}
+        try:self.initial_state=parse_startup_state(record.get('state',{}))if valid else{}
         except ValueError:self.initial_state={}
         self.active_preset=key if valid else next(iter(self.presets))
         try:self.load(self.active_preset)
@@ -528,7 +535,7 @@ class DemoEngine:
         if scene.pending_meshes or scene.omitted:raise NotImplementedError('当前装备含尚未接入的可见部件')
         residency=getattr(self.renderer,'memory_residency',None)if getattr(getattr(self,'pack',None),'memory_only',False)is True else None
         transition=residency.begin(scene)if residency else False
-        self.renderer.zoom=state['zoom'];self.renderer.pitch=state['pitch'];self.renderer.pan=state['pan']
+        self.renderer.zoom=state['zoom'];self.renderer.pitch=state['pitch'];self.renderer.pan=state['pan'];self.renderer.pan_x=state['pan_x']
         try:
             if getattr(scene,'effect_frame',None)!=frame:
                 self.prepare_effects(scene,enabled=state['effects_visible'],frame=frame)

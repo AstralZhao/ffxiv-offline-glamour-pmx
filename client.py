@@ -11,7 +11,7 @@ import os
 from pathlib import Path
 from PIL import Image
 
-from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
+from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state,parse_startup_state
 
 
 def enable_legacy_tk():
@@ -115,7 +115,7 @@ class NativeClient:
         ttk.Button(toolbar,text='−',command=lambda:self.zoom(-.15)).pack(side='left',padx=(12,2))
         ttk.Button(toolbar,text='+',command=lambda:self.zoom(.15)).pack(side='left',padx=2)
         ttk.Button(toolbar,text='还原相机',command=self.reset_camera).pack(side='right')
-        ttk.Label(center,text='左键旋转 / 俯仰 · 右键上下平移 · 滚轮缩放',foreground='#95a1b5').pack()
+        ttk.Label(center,text='左键旋转 / 俯仰 · 右键左右、上下平移 · 滚轮缩放',foreground='#95a1b5').pack()
         ttk.Label(right,text='装备目录',font=('Microsoft YaHei UI',12,'bold')).pack(anchor='w',pady=6)
         slots=ttk.Combobox(right,textvariable=self.slot,values=list(SLOTS.values()),state='readonly');slots.pack(fill='x')
         slots.bind('<<ComboboxSelected>>',lambda e:self.select_slot(self.slot_key()))
@@ -159,7 +159,7 @@ class NativeClient:
         if rendered and record.get('saved_preset_sha256')==current['sha256']and rendered!=current['parameters']:
             self.engine.run('appearance_preview',{'id':key,'sha256':current['sha256'],
                 'changes':{k:v for k,v in rendered.items()if v!=current['parameters'][k]}})
-        return self.engine.render(record['state'])
+        return self.engine.render(parse_startup_state(record['state']))
 
     def refresh_boot(self):
         self.boot=self.engine.bootstrap();self.preset_ids=[p['id']for p in self.boot['presets']]
@@ -324,19 +324,21 @@ class NativeClient:
         self.folder_name.set('全部同模目录');self.back_button.configure(state='disabled');self.count_note.configure(text=saved['count'])
 
     def begin_drag(self,event,button):
-        if self.ready:self.drag=(event.x,event.y,self.state['yaw'],self.state['pitch'],self.state['pan'],button)
+        if self.ready:self.drag=(event.x,event.y,self.state['yaw'],self.state['pitch'],self.state['pan'],self.state.get('pan_x',0),button)
 
     def move_camera(self,event):
         if self.drag is None:return
-        x,y,yaw,pitch,pan,button=self.drag
-        if button==3:self.state['pan']=max(-1,min(1,pan+(event.y-y)*.0015))
+        x,y,yaw,pitch,pan,pan_x,button=self.drag
+        if button==3:
+            sensitivity=.0015/self.state['zoom']
+            self.state['pan']=max(-1,min(1,pan+(event.y-y)*sensitivity));self.state['pan_x']=max(-1,min(1,pan_x+(event.x-x)*sensitivity))
         else:self.state['yaw']=(yaw+(event.x-x)*.6)%360;self.state['pitch']=max(-65,min(65,pitch+(event.y-y)*.3))
         self.queue_render()
 
     def end_drag(self,event=None):self.drag=None
     def camera_yaw(self,yaw):self.state['yaw']=yaw;self.queue_render()
-    def zoom(self,delta):self.state['zoom']=max(.25,min(6,self.state['zoom']+delta));self.queue_render()
-    def reset_camera(self):self.state.update(yaw=0,pitch=0,pan=0,zoom=1);self.queue_render()
+    def zoom(self,delta):self.state['zoom']=max(.25,min(8,self.state['zoom']+delta));self.queue_render()
+    def reset_camera(self):self.state.update(yaw=0,pitch=0,pan=0,pan_x=0,zoom=1);self.queue_render()
     def toggle_head(self):self.state['head_visible']=self.show_head.get();self.queue_render()
     def remove_slot(self):self.state['equipment'][self.slot_key()]={'item_id':None,'first':0,'second':0};self.update_outfit();self.queue_render()
     def clear_outfit(self):
