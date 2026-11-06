@@ -378,13 +378,33 @@ class QtClient(NativeClient):
         self.submit(draw,self.accept_result)
 
     def open_guide(self):
-        from user_guide import GUIDE
-        dialog=W.QDialog(self.window);dialog.setWindowTitle('操作说明 · 幻化柜');dialog.resize(680,720)
-        layout=vertical(dialog,20,12);browser=W.QTextBrowser();browser.setOpenExternalLinks(False)
-        browser.document().setDefaultStyleSheet('body,p,li { color:#edf1f7; } h2,h3 { color:#a3e4d5; } a { color:#89d5c4; }')
-        browser.document().setDocumentMargin(14);browser.setHtml(GUIDE)
-        layout.addWidget(browser);layout.addWidget(button('知道了',dialog.accept,primary=True));self.show_dialog(dialog)
-        return dialog
+        from user_guide import GUIDE,GUIDE_STYLE,GUIDE_SECTIONS
+        dialog=W.QDialog(self.window);dialog.setWindowTitle('操作说明 · 幻化柜');dialog.resize(880,760);dialog.setMinimumSize(640,480)
+        layout=vertical(dialog,16,12);content=horizontal(spacing=14)
+        sidebar=vertical(spacing=8);sidebar.addWidget(label('使用目录','Section'))
+        navigation=W.QListWidget();navigation.setFixedWidth(154);navigation.setAccessibleName('使用说明章节')
+        navigation.setStyleSheet('QListWidget { background:#191e27;border:1px solid #2b3443;border-radius:8px;padding:4px; } QListWidget::item { padding:10px 8px;border-radius:5px; } QListWidget::item:selected { background:#2e4c48;color:#b8eee2; } QListWidget::item:hover { background:#25323e; }')
+        for anchor,title in GUIDE_SECTIONS:
+            item=W.QListWidgetItem(title);item.setData(C.Qt.UserRole,anchor);navigation.addItem(item)
+        sidebar.addWidget(navigation,1);content.addLayout(sidebar)
+        class GuideBrowser(W.QTextBrowser):
+            def resizeEvent(self,event):
+                super().resizeEvent(event)
+                # Reflow percentage-width tables after the viewport changes.
+                document=self.document();document.markContentsDirty(0,document.characterCount())
+        browser=GuideBrowser();browser.setOpenExternalLinks(False);browser.setAccessibleName('幻化柜使用说明正文')
+        browser.setStyleSheet('QTextBrowser { background:#191e27;color:#dce4ef;border:1px solid #2b3443;border-radius:8px;padding:0px;selection-background-color:#345751; }')
+        document=browser.document();document.setDefaultFont(G.QFont('Microsoft YaHei UI',10))
+        document.setDefaultStyleSheet(GUIDE_STYLE);document.setDocumentMargin(20);browser.setHtml(GUIDE)
+        block=document.begin()
+        while block.isValid():
+            cursor=G.QTextCursor(block);format_=block.blockFormat()
+            format_.setLineHeight(130 if format_.headingLevel()else 145,G.QTextBlockFormat.ProportionalHeight.value)
+            cursor.setBlockFormat(format_);block=block.next()
+        navigation.currentItemChanged.connect(lambda current,_:browser.scrollToAnchor(current.data(C.Qt.UserRole))if current else None)
+        navigation.setCurrentRow(0);content.addWidget(browser,1);layout.addLayout(content,1)
+        actions=horizontal();actions.addStretch();actions.addWidget(button('知道了',dialog.accept,primary=True));layout.addLayout(actions)
+        self.show_dialog(dialog);return dialog
 
     def submit(self,fn,callback,*arguments):
         if self.engine is None or not self.engine.ready.done():
