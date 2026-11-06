@@ -2,7 +2,7 @@
 import hashlib,json,os,re,struct,time,uuid
 from copy import deepcopy
 from pathlib import Path
-from probe_appearance_presets import FIELDS
+from probe_appearance_presets import FIELDS,SUPPORTED_NATIVE_VERSIONS
 from cn_character import reviewed_identity,CLANS
 
 
@@ -18,8 +18,9 @@ def decode(raw):
     magic,version,saved=struct.unpack_from('<III',raw)
     checksum=0
     for i,value in enumerate(raw[16:]):checksum^=value<<(i%24)
-    if magic!=0x2013ff14 or version!=5 or saved!=(checksum&0xffffffff):
-        raise ValueError('预设格式或校验和不正确')
+    if magic!=0x2013ff14:raise ValueError('预设文件标识不正确')
+    if version not in SUPPORTED_NATIVE_VERSIONS:raise ValueError('暂不支持的预设文件版本：'+str(version))
+    if saved!=(checksum&0xffffffff):raise ValueError('预设文件校验和不正确')
     p=dict(zip(FIELDS,raw[16:42]))
     try:reviewed_identity(p)
     except NotImplementedError as error:raise ValueError(str(error))from error
