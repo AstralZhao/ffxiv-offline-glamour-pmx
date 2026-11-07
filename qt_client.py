@@ -148,7 +148,7 @@ class OutfitCard(W.QFrame):
                 dyes.addWidget(self.swap_dyes_slot);self.swap_dyes.hide()
             b=button(f'● {channel}区',lambda ch=channel:self.controller.open_dyes(self.slot,ch));b.setProperty('dye',True)
             b.setContextMenuPolicy(C.Qt.CustomContextMenu)
-            b.customContextMenuRequested.connect(lambda position,ch=channel,w=b:self.controller.dye_context(self.slot,ch,w,position))
+            b.customContextMenuRequested.connect(lambda _position,ch=channel:self.controller.reset_slot_dye(self.slot,ch))
             b.setMinimumWidth(62);b.setFixedHeight(20);dyes.addWidget(b);self.dyes.append(b)
         dyes.addStretch();content.addLayout(dyes)
         self.icon.setPixmap(slot_icon(slot));self.clear.hide()
@@ -535,8 +535,13 @@ class QtClient(NativeClient):
             if self.editor is dialog:self.editor=None
             self.character_manager.update_state()
             dialog.deleteLater()
-        dialog.finished.connect(finished);dialog.show()
-        if near_cursor:self.place_equipment_dialog(dialog)
+        dialog.finished.connect(finished)
+        if near_cursor:
+            dialog.ensurePolished()
+            if dialog.layout():dialog.layout().activate()
+            dialog.winId()
+            self.place_equipment_dialog(dialog)
+        dialog.show()
         return dialog
 
     def place_equipment_dialog(self,dialog):
@@ -1285,17 +1290,12 @@ class QtClient(NativeClient):
         identifier=self.library.dye_icon(stain)if self.library and stain else None
         return self.icon(identifier)if identifier else G.QIcon()
 
-    def dye_context(self,slot,channel,control,position):
+    def reset_slot_dye(self,slot,channel):
+        if not self.ready or self.closing:return
         choice=self.state['equipment'][slot]
         if slot in self.hidden_equipment or self.items.get(choice['item_id'],{}).get('dye_count',0)<channel:return
-        menu=W.QMenu(control);action=menu.addAction('恢复原色')
-        try:
-            if menu.exec(control.mapToGlobal(position))is action:
-                current=self.state['equipment'][slot]
-                if slot in self.hidden_equipment or self.items.get(current['item_id'],{}).get('dye_count',0)<channel:return
-                key='first'if channel==1 else'second';settings=deepcopy(self.dye_settings());settings[slot][key]=0
-                self.save_dye_settings(settings);self.state['equipment'][slot][key]=0;self.update_outfit();self.queue_render()
-        finally:menu.deleteLater()
+        key='first'if channel==1 else'second';settings=deepcopy(self.dye_settings());settings[slot][key]=0
+        self.save_dye_settings(settings);choice[key]=0;self.update_outfit();self.queue_render()
 
     def swap_slot_dyes(self,slot):
         if not self.ready or self.closing:return
