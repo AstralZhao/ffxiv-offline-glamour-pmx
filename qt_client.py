@@ -1516,10 +1516,11 @@ def main():
     if args.game:
         try:game=store.save(validate_game(args.game));error=''
         except Exception as issue:game=None;error=str(issue)
-    if game is None:
-        dialog=FirstRunDialog(store,args.game,error=error)
-        if dialog.exec()!=W.QDialog.Accepted:return 0
-        game=dialog.saved_game
+    automatic_host=store.network_setup_host()if not args.game else None
+    if game is None or automatic_host:
+        from qt_first_run import open_source_setup
+        game=open_source_setup(store,args.game,error=error,automatic_host=automatic_host)
+        if game is None:return 0
     session=DesktopSession(application,store,game,args.preset)
     return application.exec()
 

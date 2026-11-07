@@ -56,12 +56,12 @@ class SettingsStore:
         try:
             data=json.loads(self.path.read_bytes())
             if data.get('version')==3 and data.get('source')=='network':
-                if data.get('cache_policy','disk')!='disk':raise ValueError('仅内存模式已移除，请重新配置网络资源。')
                 from network_resources import BASE,host_url,validate_cached
                 relative=data.get('resource_directory')
                 if not isinstance(relative,str):raise ValueError('网络资源配置格式不正确')
                 path=(self.root/relative).resolve()
                 if not any(path.is_relative_to(p) for p in (self.root/BASE,self.root/'artifacts/network-resources',program_root(self.root)/'artifacts/network-resources')):raise ValueError('网络缓存必须位于软件网络资源目录内')
+                if self.network_setup_host()is not None:return path,''
                 source=validate_cached(path,json.loads((program_root(self.root)/'docs/cn-customization-profile.json').read_bytes()))
                 if source.host!=host_url(data.get('host','')):raise ValueError('网络资源网址与缓存不一致')
                 return validate_game(path,self.root,verify_executable=False),''
@@ -74,6 +74,22 @@ class SettingsStore:
             if data.get('version')!=1 or not isinstance(data.get('game_directory'),str):raise ValueError('配置格式不正确')
             return validate_game(data['game_directory'],self.root,verify_executable=False),''
         except(OSError,ValueError,TypeError,AttributeError,KeyError)as error:return None,str(error)
+
+    def network_setup_host(self):
+        """Read a saved network address; never connect or rewrite configuration."""
+        try:data=json.loads(self.path.read_bytes())
+        except(OSError,ValueError):return None
+        if not isinstance(data,dict)or data.get('version')!=3 or data.get('source')!='network':return None
+        from network_resources import BASE,host_url
+        relative=data.get('resource_directory')
+        if not isinstance(relative,str):return None
+        path=(self.root/relative).resolve()
+        if not any(path.is_relative_to(p)for p in(self.root/BASE,self.root/'artifacts/network-resources',program_root(self.root)/'artifacts/network-resources')):return None
+        from memory_resources import descriptor
+        if data.get('cache_policy')=='memory'or descriptor(path)is not None:
+            try:return host_url(data.get('host',''))
+            except ValueError:return None
+        return None
 
     def studio(self):
         from studio_lighting import options
