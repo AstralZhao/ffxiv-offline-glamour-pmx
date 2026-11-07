@@ -9,9 +9,12 @@ from ff14_readonly import SqPack
 from texture_probe import Texture
 
 
+COLOR_SWATCH_TEXTURE='ui/uld/ListColorChooser.tex'
+
+
 class ItemIcons:
     def __init__(self,game):
-        self.pack=SqPack(game);self.cache=OrderedDict();self.lock=threading.Lock()
+        self.pack=SqPack(game);self.cache=OrderedDict();self.lock=threading.Lock();self.swatch_layers=None
 
     def png(self,identifier):
         if type(identifier)is not int or not 0<identifier<=1000000:raise ValueError('Invalid item icon ID')
@@ -30,3 +33,14 @@ class ItemIcons:
             output=BytesIO();image.save(output,format='PNG');value=output.getvalue();self.cache[identifier]=value
             while len(self.cache)>256:self.cache.popitem(last=False)
             return value
+
+
+    def color_swatch_layers_png(self):
+        """Only native ULD parts18:3 and18:9; omit cross/check/selection glyphs."""
+        with self.lock:
+            if self.swatch_layers is not None:return self.swatch_layers
+            texture=Texture.read(self.pack.read(COLOR_SWATCH_TEXTURE))
+            if(texture.width,texture.height,texture.format)!=(144,136,0x1450):raise ValueError('Native color chooser atlas layout changed')
+            atlas=Image.frombytes('RGBA',(144,136),texture.mip_data[0],'raw','BGRA')
+            layers=Image.new('RGBA',(80,40));layers.paste(atlas.crop((0,48,40,88)),(0,0));layers.paste(atlas.crop((48,88,88,128)),(40,0))
+            output=BytesIO();layers.save(output,format='PNG');self.swatch_layers=output.getvalue();return self.swatch_layers

@@ -178,6 +178,9 @@ def select_resources(indexes,*,callback=None,cancel=None):
         for path in(f'ui/icon/{folder:06}/{identifier:06}.tex',f'ui/icon/{folder:06}/{identifier:06}_hr1.tex',f'ui/icon/{folder:06}/hq/{identifier:06}.tex'):
             value=ui.lookup(path)
             if value is not None:ui.selected.add(value);icon_count+=1
+    from icons import COLOR_SWATCH_TEXTURE
+    value=ui.lookup(COLOR_SWATCH_TEXTURE)
+    if value is not None:ui.selected.add(value)
     # Preserve the whole equipment-effect namespace, then follow its actual
     # string references (plus per-equipment AVFX retained in chara metadata).
     vfx=indexes['vfx']

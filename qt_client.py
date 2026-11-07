@@ -171,7 +171,7 @@ class OutfitCard(W.QFrame):
             name=dye['name']if dye and stain else'原色'
             color='#%06x'%(dye['color']&0xffffff)if dye and stain else'#91a0b4'
             b.setEnabled(count>=ch and not hidden)
-            b.setText(f'{ch}区');b.setIcon(swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(16,16))
+            b.setText(f'{ch}区');b.setIcon(self.controller.color_swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(16,16))
             b.setStyleSheet('QPushButton:disabled { background:#38252b; color:#e3aaa3; border:1px dashed #a46367; font-weight:600; }'if count<ch else'')
             b.setToolTip(f'第{ch}染色区 · '+(name if count>=ch else'不可染色'))
 
@@ -221,7 +221,7 @@ class QtClient(NativeClient):
         self.preset_name=Value('');self.folder_name=Value('全部同模目录');self.appearance_note=Value('');self.selected_note=Value('')
         self.dye_by_id={};self.raw_status='';self.dialogs=[];self.build_ui()
         self.message.callback=self.display_status;self.display_status(self.message.get())
-        self.engine=None;self.icon_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeIcons',initializer=bind,initargs=(self.icon_progress,));self.pending_icons={};self.icon_timer=None
+        self.engine=None;self.icon_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeIcons',initializer=bind,initargs=(self.icon_progress,));self.pending_icons={};self.icon_timer=None;self.swatch_layers=None;self.swatch_failed=False;self.swatch_icons=OrderedDict()
         self.library=None
         from equipment_library import EquipmentLibrary
         self.library_future=self.icon_pool.submit(EquipmentLibrary,self.session_path.parent/'equipment-library.sqlite',ROOT/'artifacts/cn-data/catalog.sqlite',game=game)
@@ -633,6 +633,17 @@ class QtClient(NativeClient):
 
     def search_changed(self,text):self.query.value=text;self.schedule_search()
 
+    def color_swatch_icon(self,color,*,unavailable=False):
+        if unavailable:return swatch_icon(color,unavailable=True)
+        if self.swatch_layers is None and not self.swatch_failed and self.engine and self.engine.item_icons and not self.closing and -1 not in self.pending_icons:
+            self.pending_icons[-1]=self.icon_pool.submit(self.engine.item_icons.color_swatch_layers_png)
+            if self.icon_timer is None:self.icon_timer=self.root.after(30,self.poll_icons)
+        key=(color,self.swatch_layers is not None)
+        if key not in self.swatch_icons:self.swatch_icons[key]=swatch_icon(color,layers=self.swatch_layers)
+        self.swatch_icons.move_to_end(key)
+        while len(self.swatch_icons)>256:self.swatch_icons.popitem(last=False)
+        return self.swatch_icons[key]
+
     def icon(self,identifier):
         if not identifier:return G.QIcon()
         if identifier not in self.icons:
@@ -651,6 +662,13 @@ class QtClient(NativeClient):
         for identifier,future in list(self.pending_icons.items()):
             if not future.done():continue
             self.pending_icons.pop(identifier)
+            if identifier==-1:
+                try:
+                    image=G.QImage.fromData(future.result())
+                    if image.size()!=C.QSize(80,40):raise ValueError('Invalid native swatch layers')
+                    self.swatch_layers=image;self.swatch_icons.clear()
+                except Exception:self.swatch_failed=True
+                changed.add(-1);continue
             try:
                 image=G.QPixmap();image.loadFromData(future.result());self.icons[identifier]=G.QIcon(image)
             except Exception:self.icons[identifier]=G.QIcon()
@@ -662,7 +680,7 @@ class QtClient(NativeClient):
                 if identifier in changed:item.setIcon(self.icons[identifier])
             for card in self.outfit_cards.values():
                 key=getattr(card,'display_key',None)
-                if key and (key[3]in changed or any(self.library.dye_icon(stain)in changed for stain in key[1:3]if stain)):
+                if key and (-1 in changed or key[3]in changed or any(self.library.dye_icon(stain)in changed for stain in key[1:3]if stain)):
                     card.display_key=None
             for dialog in self.dialogs:
                 if getattr(dialog,'icon_id',None)in changed:dialog.icon_label.setPixmap(self.icons[dialog.icon_id].pixmap(60,60))
@@ -1104,8 +1122,10 @@ class QtClient(NativeClient):
         search=W.QLineEdit();search.setPlaceholderText('搜索名称');search.setClearButtonEnabled(True);outer.addWidget(search)
         scroll=W.QScrollArea();scroll.setWidgetResizable(True);scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
         content=W.QWidget();grid=W.QGridLayout(content);grid.setSpacing(3);grid.setAlignment(C.Qt.AlignTop|C.Qt.AlignLeft);scroll.setWidget(content);outer.addWidget(scroll,1)
-        dialog.icon_buttons={}
+        dialog.icon_buttons={};dialog.color_buttons=[]
         def refresh_icons(changed):
+            if -1 in changed:
+                for control,color in dialog.color_buttons:control.setIcon(self.color_swatch_icon(color))
             for identifier in changed:
                 for control in dialog.icon_buttons.get(identifier,[]):control.setIcon(self.icon(identifier))
         dialog.refresh_icons=refresh_icons
@@ -1139,7 +1159,7 @@ class QtClient(NativeClient):
 
         def render(text=''):
 
-            dialog.icon_buttons={}
+            dialog.icon_buttons={};dialog.color_buttons=[]
             while grid.count():
                 item=grid.takeAt(0)
                 if item.widget():item.widget().hide();item.widget().deleteLater()
@@ -1150,7 +1170,8 @@ class QtClient(NativeClient):
                     b.sorting=dialog.sort_button.isChecked();b.setCursor(C.Qt.OpenHandCursor if b.sorting and b.value else C.Qt.PointingHandCursor)
                 border='2px solid #d2fff5'if choice['value']==selected else'1px solid #58626c'
                 b.setFixedSize(28,28);b.setToolTip(choice['label']);b.setAccessibleName(choice['label'])
-                b.setStyleSheet(f'QPushButton {{ background:{color};border:{border};border-radius:0;padding:0; }} QPushButton:hover {{ border:2px solid white; }}')
+                b.setIcon(self.color_swatch_icon(color));b.setIconSize(C.QSize(28,28));dialog.color_buttons.append((b,color))
+                b.setStyleSheet(f'QPushButton {{ background:transparent;border:{border};border-radius:0;padding:0; }} QPushButton:hover {{ border:2px solid white; }}')
                 def pick(c=choice):
                     if dye_sort and dialog.sort_button.isChecked():return
                     callback(c['value']);dialog.accept()
@@ -1446,11 +1467,11 @@ class AppearanceDialog(W.QDialog):
             if field=='hair':choices=hairstyle_choices_with_names(sorted(choices,key=lambda choice:choice['value']))
             if option['kind']=='color':
                 selected=next(choice for choice in choices if choice['value']==value);color=selected.get('color','#333b48')
-                control=button('颜色 '+str(value));control.setIcon(swatch_icon(color));control.setIconSize(C.QSize(16,16));control.setStyleSheet('QPushButton { text-align:left; }')
+                control=button('颜色 '+str(value));control.setIcon(c.color_swatch_icon(color));control.setIconSize(C.QSize(16,16));control.setStyleSheet('QPushButton { text-align:left; }')
                 def palette(o=option,b=control):
                     def pick(v):
                         c.editor_change(o,v);chosen=next(x for x in o['choices']if x['value']==v)
-                        b.setText('颜色 '+str(v));b.setIcon(swatch_icon(chosen.get('color','#fff')))
+                        b.setText('颜色 '+str(v));b.setIcon(c.color_swatch_icon(chosen.get('color','#fff')))
                     c.palette(o['label'],o['choices'],c.draft[o['field']],pick)
                 control.clicked.connect(lambda _=False,p=palette:p())
             elif option['kind']=='slider':
@@ -1517,6 +1538,11 @@ class AppearanceDialog(W.QDialog):
         if active>=0:self.tabs.setCurrentIndex(active)
 
     def refresh_icons(self,changed=None):
+        if changed is None or -1 in changed:
+            for option in self.c.editor_record['fields']:
+                if option['kind']=='color':
+                    selected=next((c for c in option['choices']if c['value']==self.c.draft[option['field']]),{})
+                    self.field_controls[option['field']].setIcon(self.c.color_swatch_icon(selected.get('color','#333b48')))
         for control,choices in self.choice_controls.values():
             for index,choice in enumerate(choices):
                 identifier=choice.get('icon_id')

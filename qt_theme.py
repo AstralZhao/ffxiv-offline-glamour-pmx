@@ -284,11 +284,25 @@ def visibility_icon(hidden=False):
     painter.end();return G.QIcon(image)
 
 
-def swatch_icon(color,*,unavailable=False):
+def swatch_icon(color,*,unavailable=False,layers=None):
+    if layers is not None and not unavailable:
+        # Reuse the authored masks/diagonal relief as UI decoration. Selection
+        # stays software-owned; this does not claim the game's UI shader parity.
+        import numpy as np
+        source=layers.convertToFormat(G.QImage.Format_RGBA8888)
+        pixels=np.frombuffer(source.bits(),dtype=np.uint8).reshape(40,source.bytesPerLine())[:,:320].reshape(40,80,4)
+        mask=pixels[:,:40,3];gradient=pixels[:,40:,:3].astype(np.float32)
+        delta=(gradient[::-1,::-1]-gradient)*(191/255)*.5
+        tint=G.QColor(color);rgb=np.array((tint.red(),tint.green(),tint.blue()),dtype=np.float32)
+        rgba=np.empty((40,40,4),dtype=np.uint8);rgba[:,:,:3]=np.clip(np.rint(rgb+delta),0,255).astype(np.uint8);rgba[:,:,3]=mask
+        native=G.QImage(rgba.data,40,40,160,G.QImage.Format_RGBA8888).copy();return G.QIcon(G.QPixmap.fromImage(native))
     image=G.QPixmap(32,32);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)
     painter.setBrush(G.QColor(color));painter.setPen(G.QPen(G.QColor('#778495'),1))
     painter.drawRect(C.QRectF(1.5,1.5,13,13))
+    if unavailable:
+        painter.setBrush(G.QColor('#38252b'));painter.setPen(G.QPen(G.QColor('#f1aaa1'),1.6))
+        painter.drawEllipse(C.QRectF(1.5,1.5,13,13));painter.drawLine(C.QPointF(3.5,12.5),C.QPointF(12.5,3.5))
     painter.end();icon=G.QIcon(image)
     if unavailable:icon.addPixmap(image,G.QIcon.Disabled)
     return icon
