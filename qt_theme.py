@@ -204,6 +204,43 @@ class PresetComboBox(ComboBox):
             self.setCurrentIndex(index);self.activated.emit(index)
 
 
+class DraggableColorButton(W.QPushButton):
+    mime_type='application/x-hgg-dye-order'
+
+    def __init__(self,value,group,move,parent=None):
+        super().__init__('',parent);self.value=value;self.group=group;self.move=move;self.sorting=False;self.start=None;self.dragged=False;self.setAcceptDrops(True)
+
+    def mousePressEvent(self,event):
+        self.start=event.position().toPoint();self.dragged=False;super().mousePressEvent(event)
+
+    def mouseMoveEvent(self,event):
+        if self.sorting and self.value and event.buttons()&C.Qt.LeftButton and self.start is not None and(event.position().toPoint()-self.start).manhattanLength()>=W.QApplication.startDragDistance():
+            self.dragged=True;drag=G.QDrag(self);mime=C.QMimeData();mime.setData(self.mime_type,f'{self.group}:{self.value}'.encode('ascii'));drag.setMimeData(mime);drag.setPixmap(self.grab());drag.exec(C.Qt.MoveAction);self.setDown(False);self.start=None;return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self,event):
+        if self.dragged:self.dragged=False;self.setDown(False);event.accept();return
+        super().mouseReleaseEvent(event)
+
+    def source_value(self,mime):
+        if not self.sorting or not self.value or not mime.hasFormat(self.mime_type):return None
+        try:
+            group,value=bytes(mime.data(self.mime_type)).decode('ascii').split(':');value=int(value)
+            return value if group==self.group and 0<value<=254 else None
+        except(ValueError,UnicodeError):return None
+
+    def dragEnterEvent(self,event):
+        if self.source_value(event.mimeData())is not None:event.acceptProposedAction()
+        else:event.ignore()
+
+    def dragMoveEvent(self,event):self.dragEnterEvent(event)
+
+    def dropEvent(self,event):
+        value=self.source_value(event.mimeData())
+        if value is not None:self.move(value,self.value);event.acceptProposedAction()
+        else:event.ignore()
+
+
 class HairstyleDelegate(W.QStyledItemDelegate):
     def sizeHint(self,option,index):return C.QSize(420,84)
 

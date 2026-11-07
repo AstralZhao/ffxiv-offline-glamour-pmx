@@ -20,8 +20,8 @@ from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_state
 from client import NativeClient,color_text
 from effect_clock import EffectClock
-from app_paths import paths,migrate
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
+from app_paths import paths,migrate,no_links
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -1083,11 +1083,24 @@ class QtClient(NativeClient):
             self.submit(self.engine.run,done,'create',payload)
         actions.addWidget(button('创建并预览',create,primary=True));outer.addLayout(actions);return self.show_dialog(dialog)
 
-    def palette(self,title,choices,selected,callback):
+    def palette(self,title,choices,selected,callback,*,dye_sort=False):
         parent=self.editor if self.editor and self.editor.isVisible()else self.window
         dialog=W.QDialog(parent);dialog.setWindowTitle(title);dialog.resize(550,610);dialog.setMinimumSize(460,460);dialog.setWindowModality(C.Qt.WindowModal)
         outer=vertical(dialog,22,14);outer.addWidget(label(title,'Title'))
         name=label('选择颜色，立即预览','Muted');outer.addWidget(name)
+        choices=list(choices);defaults=list(choices)
+        if dye_sort:
+            layout=paths();order_path=no_links(layout.user/'dye-order.json',layout.root)
+            try:
+                with order_path.open('rb')as file:record=json.loads(file.read(4097))
+                order=record['order']
+                if type(record['version'])is not int or record['version']!=1 or not isinstance(order,list)or len(order)>255 or any(type(v)is not int or not 0<=v<=254 for v in order)or len(set(order))!=len(order):raise ValueError('Invalid dye order')
+                rank={v:i for i,v in enumerate(order)}
+                choices.sort(key=lambda c:(c['value']!=0,rank.get(c['value'],len(rank)+defaults.index(c))))
+            except(OSError,ValueError,KeyError,TypeError,RecursionError):pass
+            bar=horizontal();dialog.sort_button=button('自定义排序');dialog.sort_button.setCheckable(True);bar.addWidget(dialog.sort_button)
+            dialog.reset_order_button=button('恢复默认顺序');bar.addWidget(dialog.reset_order_button);bar.addStretch();outer.addLayout(bar)
+
         search=W.QLineEdit();search.setPlaceholderText('搜索名称');search.setClearButtonEnabled(True);outer.addWidget(search)
         scroll=W.QScrollArea();scroll.setWidgetResizable(True);scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
         content=W.QWidget();grid=W.QGridLayout(content);grid.setSpacing(3);grid.setAlignment(C.Qt.AlignTop|C.Qt.AlignLeft);scroll.setWidget(content);outer.addWidget(scroll,1)
@@ -1096,20 +1109,65 @@ class QtClient(NativeClient):
             for identifier in changed:
                 for control in dialog.icon_buttons.get(identifier,[]):control.setIcon(self.icon(identifier))
         dialog.refresh_icons=refresh_icons
+        def save_order(rows):
+            order_path.parent.mkdir(parents=True,exist_ok=True);no_links(order_path,layout.root)
+            file=C.QSaveFile(str(order_path));file.setDirectWriteFallback(False)
+            if not file.open(C.QIODevice.WriteOnly):raise OSError(file.errorString())
+            raw=(json.dumps({'version':1,'order':[c['value']for c in rows]},ensure_ascii=False)+'\n').encode('utf8')
+            if file.write(raw)!=len(raw):
+                error=file.errorString();file.cancelWriting();raise OSError(error)
+            if not file.commit():raise OSError(file.errorString())
+
+        def move_color(source,target):
+            if not dye_sort or not dialog.sort_button.isChecked()or source==target or not source or not target:return
+            moved=next((c for c in choices if c['value']==source),None)
+            if moved is None or not any(c['value']==target for c in choices):return
+            rows=[c for c in choices if c['value']!=source];at=next(i for i,c in enumerate(rows)if c['value']==target)
+            # Move before an earlier target, or after a later target.
+            if next(i for i,c in enumerate(choices)if c['value']==source)<next(i for i,c in enumerate(choices)if c['value']==target):at+=1
+            rows.insert(at,moved)
+            try:save_order(rows)
+            except(OSError,ValueError)as error:name.setText('排序未保存：'+str(error));return
+            choices[:]=rows
+            # Keep the active QDrag source alive: move existing widgets only.
+            widgets={}
+            while grid.count():
+                item=grid.takeAt(0);widget=item.widget()
+                if widget is not None:widgets[widget.value]=widget
+            for i,c in enumerate(choices):grid.addWidget(widgets[c['value']],i//12,i%12)
+            name.setText('顺序已保存；可继续拖动，原色固定在首位。')
+
         def render(text=''):
+
             dialog.icon_buttons={}
             while grid.count():
                 item=grid.takeAt(0)
                 if item.widget():item.widget().hide();item.widget().deleteLater()
             rows=[choice for choice in choices if text in choice['label']]
             for i,choice in enumerate(rows):
-                color=choice.get('color','#333b48');b=button('')
+                color=choice.get('color','#333b48');b=DraggableColorButton(choice['value'],str(id(dialog)),move_color)if dye_sort else button('')
+                if dye_sort:
+                    b.sorting=dialog.sort_button.isChecked();b.setCursor(C.Qt.OpenHandCursor if b.sorting and b.value else C.Qt.PointingHandCursor)
                 border='2px solid #d2fff5'if choice['value']==selected else'1px solid #58626c'
                 b.setFixedSize(28,28);b.setToolTip(choice['label']);b.setAccessibleName(choice['label'])
                 b.setStyleSheet(f'QPushButton {{ background:{color};border:{border};border-radius:0;padding:0; }} QPushButton:hover {{ border:2px solid white; }}')
-                def pick(c=choice):callback(c['value']);dialog.accept()
+                def pick(c=choice):
+                    if dye_sort and dialog.sort_button.isChecked():return
+                    callback(c['value']);dialog.accept()
                 b.clicked.connect(lambda _=False,p=pick:p());b.enterEvent=lambda e,c=choice:name.setText(c['label']);grid.addWidget(b,i//12,i%12)
             grid.setRowStretch((len(rows)+11)//12,1)
+        if dye_sort:
+            def sorting(active):
+                search.clear();search.setEnabled(not active);dialog.sort_button.setText('完成排序'if active else'自定义排序')
+                name.setText('拖动色块调整顺序，自动保存；原色固定在首位。'if active else'选择颜色，立即预览');render()
+            def reset_order():
+                try:save_order(defaults)
+                except(OSError,ValueError)as error:name.setText('排序未保存：'+str(error));return
+                choices[:]=defaults
+                if dialog.sort_button.isChecked():dialog.sort_button.setChecked(False)
+                else:render()
+                name.setText('已恢复默认顺序。')
+            dialog.sort_button.toggled.connect(sorting);dialog.reset_order_button.clicked.connect(reset_order)
         search.textChanged.connect(render);render();return self.show_dialog(dialog)
 
     def dye_icon(self,stain):
@@ -1124,7 +1182,7 @@ class QtClient(NativeClient):
         def pick(value):
             if self.state['equipment'][slot]['item_id']!=item_id:return
             self.state['equipment'][slot]['first'if channel==1 else'second']=value;self.update_outfit();self.queue_render()
-        self.palette(SLOTS[slot]+f' · 第{channel}染色区',colors,choice['first'if channel==1 else'second'],pick)
+        self.palette(SLOTS[slot]+f' · 第{channel}染色区',colors,choice['first'if channel==1 else'second'],pick,dye_sort=True)
 
     def open_editor(self,key=None):
         if not self.boot or self.job:return
