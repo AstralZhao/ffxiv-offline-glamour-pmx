@@ -89,13 +89,13 @@ class AppearanceOptions:
             if row[pre+'SubMenuType']!=1 or row[pre+'SubMenuNum']!=5:raise ValueError('硌狮族毛纹菜单已变化')
             result.append({'field':'lip_color_or_fur_pattern','label':'毛纹','kind':'select','mask':255,
                 'choices':[{'value':row[pre+f'SubMenuGraphic[{j}]'],'label':f'毛纹 {j+1}','icon_id':row[pre+f'SubMenuParam[{j}]']}for j in range(5)]})
-        paints=[]
+        paints=self.barber.face_paints(p)
+        creation_paints=set()
         for i in range(28):
             pre=f'CharaMakeStruct[{i}].'
-            if row[pre+'Customize']!=24 or not row[pre+'Menu']:continue
-            for j in range(row[pre+'SubMenuNum']):
-                linked=customs[row[pre+f'SubMenuParam[{j}]']]
-                paints.append({'value':linked['FeatureID'],'label':'无'if linked['FeatureID']==0 else f'彩绘 {j}', 'icon_id':linked['Icon']})
+            if row[pre+'Customize']==24 and row[pre+'Menu']:
+                creation_paints.update(customs[row[pre+f'SubMenuParam[{j}]']]['FeatureID']for j in range(row[pre+'SubMenuNum']))
+        if not creation_paints<={c['value']for c in paints}:raise ValueError('Creation face paints absent from CN barber menu')
         result.append({'field':'face_paint','label':LABELS['face_paint'],'kind':'select','mask':127,'choices':paints})
         self.cache[key]=result;return result
 
