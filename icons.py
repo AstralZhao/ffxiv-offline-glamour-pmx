@@ -2,7 +2,6 @@
 from collections import OrderedDict
 from io import BytesIO
 import threading
-from pathlib import Path
 
 from PIL import Image
 
@@ -11,20 +10,13 @@ from texture_probe import Texture
 
 
 class ItemIcons:
-    def __init__(self,game,*,use_bundled=True):
+    def __init__(self,game):
         self.pack=SqPack(game);self.cache=OrderedDict();self.lock=threading.Lock()
-        self.bundled=Path(__file__).resolve().parents[1]/'artifacts/cn-data/dye-icons'if use_bundled else None
 
     def png(self,identifier):
         if type(identifier)is not int or not 0<identifier<=1000000:raise ValueError('Invalid item icon ID')
         with self.lock:
             if identifier in self.cache:self.cache.move_to_end(identifier);return self.cache[identifier]
-            if self.bundled is not None:
-                prepared=self.bundled/(str(identifier)+'.png')
-                if prepared.is_file():
-                    value=prepared.read_bytes();self.cache[identifier]=value
-                    while len(self.cache)>256:self.cache.popitem(last=False)
-                    return value
             path=f'ui/icon/{identifier//1000*1000:06}/{identifier:06}.tex'
             try:raw=self.pack.read(path[:-4]+'_hr1.tex')
             except FileNotFoundError:raw=self.pack.read(path)

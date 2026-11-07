@@ -223,9 +223,12 @@ def wardrobe_icons(pack):
     mapping=json.loads((__import__('app_paths').program_root(root)/'artifacts/cn-data/schema-mapping.json').read_bytes());data=VerifiedData(pack,mapping)
     slots=dict(data.rows('EquipSlotCategory'));supported={'Head','Body','Gloves','Legs','Feet','Ears','Neck','Wrists','FingerL','FingerR'}
     icons=set()
-    for _,row in data.rows('Item'):
+    item_rows=dict(data.rows('Item'))
+    for row in item_rows.values():
         parts={k for k,v in slots[row['EquipSlotCategory']].items()if v>0}
         if parts and parts<=supported and row['Icon']>0:icons.add(row['Icon'])
+    from dye_icon_map import dye_icons_from_rows
+    icons.update(value['icon_id']for value in dye_icons_from_rows(item_rows,dict(data.rows('Stain'))).values())
     for _,row in data.rows('CharaMakeCustomize'):
         if row['Icon']>0:icons.add(row['Icon'])
     # Some face/feature menu values are direct icon IDs rather than links to
