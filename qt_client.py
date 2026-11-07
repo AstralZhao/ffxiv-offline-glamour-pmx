@@ -535,18 +535,10 @@ class QtClient(NativeClient):
 
     def place_equipment_dialog(self,dialog):
         cursor=G.QCursor.pos();screen=W.QApplication.screenAt(cursor)or self.window.screen()
-        available=screen.availableGeometry();size=dialog.frameGeometry().size()
-        preview=C.QRect(self.viewport.mapToGlobal(C.QPoint(0,0)),self.viewport.size())
-        width,height=size.width(),size.height();margin=10
-        candidates=[C.QPoint(cursor.x()+margin,cursor.y()+margin),C.QPoint(cursor.x()-width-margin,cursor.y()+margin),
-            C.QPoint(preview.left()-width-margin,cursor.y()),C.QPoint(preview.right()+margin,cursor.y())]
-        def clamp(point):
-            return C.QPoint(max(available.left(),min(point.x(),available.right()-width+1)),
-                max(available.top(),min(point.y(),available.bottom()-height+1)))
-        def score(point):
-            overlap=C.QRect(point,size).intersected(preview)
-            return (max(0,overlap.width())*max(0,overlap.height()),abs(point.x()-cursor.x())+abs(point.y()-cursor.y()))
-        dialog.move(min((clamp(p)for p in candidates),key=score))
+        available=screen.availableGeometry();size=dialog.frameGeometry().size();margin=10
+        x=max(available.left(),min(cursor.x()+margin,available.right()-size.width()+1))
+        y=max(available.top(),min(cursor.y()+margin,available.bottom()-size.height()+1))
+        dialog.move(C.QPoint(x,y))
 
     def open_settings(self):
         if self.settings_handler:self.settings_handler();return
