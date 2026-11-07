@@ -432,6 +432,7 @@ class QtClient(NativeClient):
             original_callback=callback
             def callback(result):
                 self.hidden_equipment.clear();original_callback(result)
+                self.save_dye_settings({slot:{key:choice[key]for key in('first','second')}for slot,choice in result['state']['equipment'].items()})
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
@@ -587,6 +588,7 @@ class QtClient(NativeClient):
 
     def update_outfit(self):
         if not self.boot:return
+        if self.library is not None:self.dye_settings()
         for slot,choice in self.state['equipment'].items():
             if choice['item_id']:self.hidden_equipment.pop(slot,None)
             hidden=slot in self.hidden_equipment
@@ -816,8 +818,26 @@ class QtClient(NativeClient):
         if not groups:self.message.set('未找到这件装备的同套关联');return
         return self.show_dialog(RelatedEquipmentDialog(self,identifier,groups))
 
+    def dye_settings(self):
+        if getattr(self,'saved_dye_settings',None)is None:
+            settings={slot:{key:choice[key]for key in('first','second')}for slot,choice in self.state['equipment'].items()}
+            raw=self.library.setting('try_on_dyes_v1')if self.library else None
+            try:
+                saved=json.loads(raw)if raw and len(raw)<=4096 else None
+                if isinstance(saved,dict)and set(saved)==set(SLOTS)and all(
+                    isinstance(v,dict)and set(v)=={'first','second'}and all(type(n)is int and 0<=n<=254 for n in v.values())for v in saved.values()):settings=saved
+            except(ValueError,TypeError):pass
+            self.saved_dye_settings=settings
+        return self.saved_dye_settings
+
+    def save_dye_settings(self,settings):
+        self.saved_dye_settings=deepcopy(settings)
+        if self.library:
+            try:self.library.set_setting('try_on_dyes_v1',json.dumps(settings,separators=(',',':')))
+            except Exception as error:self.message.set('染色已应用，但染色配置未能保存：'+str(error))
+
     def equipment_choice(self,slot,row):
-        previous=self.hidden_equipment.get(slot,self.state['equipment'][slot]);count=row.get('dye_count',0)
+        previous=self.dye_settings()[slot];count=row.get('dye_count',0)
         return {'item_id':row['item_id'],'first':previous['first']if count>=1 else 0,
             'second':previous['second']if count>=2 else 0}
 
@@ -1236,7 +1256,9 @@ class QtClient(NativeClient):
         item_id=choice['item_id']
         def pick(value):
             if self.state['equipment'][slot]['item_id']!=item_id:return
-            self.state['equipment'][slot]['first'if channel==1 else'second']=value;self.update_outfit();self.queue_render()
+            key='first'if channel==1 else'second'
+            settings=deepcopy(self.dye_settings());settings[slot][key]=value;self.save_dye_settings(settings)
+            self.state['equipment'][slot][key]=value;self.update_outfit();self.queue_render()
         self.palette(SLOTS[slot]+f' · 第{channel}染色区',colors,choice['first'if channel==1 else'second'],pick,dye_sort=True)
 
     def open_editor(self,key=None):
