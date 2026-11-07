@@ -138,6 +138,10 @@ class OutfitCard(W.QFrame):
         self.name=label('未装备');self.name.setStyleSheet('font-size:12px;font-weight:500');content.addWidget(self.name)
         dyes=horizontal(spacing=5);self.dyes=[]
         for channel in(1,2):
+            if channel==2:
+                self.swap_dyes=button('⇄',lambda:self.controller.swap_slot_dyes(self.slot),ghost=True)
+                self.swap_dyes.setFixedSize(22,20);self.swap_dyes.setToolTip('交换两个染色区的颜色');self.swap_dyes.setAccessibleName('交换染色区')
+                dyes.addWidget(self.swap_dyes);self.swap_dyes.hide()
             b=button(f'● {channel}区',lambda ch=channel:self.controller.open_dyes(self.slot,ch));b.setProperty('dye',True)
             b.setMinimumWidth(62);b.setFixedHeight(20);dyes.addWidget(b);self.dyes.append(b)
         dyes.addStretch();content.addLayout(dyes)
@@ -166,6 +170,7 @@ class OutfitCard(W.QFrame):
         self.name.setStyleSheet('color:'+('#edf1f7'if item else'#748296')+';font-size:12px;font-weight:500')
         self.icon.setPixmap(self.controller.icon(item.get('icon_id')).pixmap(40,40)if item else slot_icon(self.slot))
         self.clear.setVisible(bool(item));count=item.get('dye_count',0)
+        self.swap_dyes.setVisible(count>=2);self.swap_dyes.setEnabled(count>=2 and not hidden)
         for ch,b in enumerate(self.dyes,1):
             stain=choice['first'if ch==1 else'second'];dye=self.controller.dye_by_id.get(stain)
             name=dye['name']if dye and stain else'原色'
@@ -516,7 +521,7 @@ class QtClient(NativeClient):
             self.closing=True;self.closed=True;self.root.destroy();return
         super().close()
 
-    def show_dialog(self,dialog):
+    def show_dialog(self,dialog,*,near_cursor=False):
         if self.window.testAttribute(C.Qt.WA_DontShowOnScreen):dialog.setAttribute(C.Qt.WA_DontShowOnScreen)
         self.dialogs.append(dialog)
         def finished(_result):
@@ -524,7 +529,24 @@ class QtClient(NativeClient):
             if self.editor is dialog:self.editor=None
             self.character_manager.update_state()
             dialog.deleteLater()
-        dialog.finished.connect(finished);dialog.show();return dialog
+        dialog.finished.connect(finished);dialog.show()
+        if near_cursor:self.place_equipment_dialog(dialog)
+        return dialog
+
+    def place_equipment_dialog(self,dialog):
+        cursor=G.QCursor.pos();screen=W.QApplication.screenAt(cursor)or self.window.screen()
+        available=screen.availableGeometry();size=dialog.frameGeometry().size()
+        preview=C.QRect(self.viewport.mapToGlobal(C.QPoint(0,0)),self.viewport.size())
+        width,height=size.width(),size.height();margin=10
+        candidates=[C.QPoint(cursor.x()+margin,cursor.y()+margin),C.QPoint(cursor.x()-width-margin,cursor.y()+margin),
+            C.QPoint(preview.left()-width-margin,cursor.y()),C.QPoint(preview.right()+margin,cursor.y())]
+        def clamp(point):
+            return C.QPoint(max(available.left(),min(point.x(),available.right()-width+1)),
+                max(available.top(),min(point.y(),available.bottom()-height+1)))
+        def score(point):
+            overlap=C.QRect(point,size).intersected(preview)
+            return (max(0,overlap.width())*max(0,overlap.height()),abs(point.x()-cursor.x())+abs(point.y()-cursor.y()))
+        dialog.move(min((clamp(p)for p in candidates),key=score))
 
     def open_settings(self):
         if self.settings_handler:self.settings_handler();return
@@ -590,6 +612,8 @@ class QtClient(NativeClient):
     def update_outfit(self):
         if not self.boot:return
         if self.library is not None:self.dye_settings()
+        for dialog in self.dialogs:
+            if hasattr(dialog,'dye_slot'):dialog.set_selected(self.dye_settings()[dialog.dye_slot][dialog.dye_channel])
         for slot,choice in self.state['equipment'].items():
             if choice['item_id']:self.hidden_equipment.pop(slot,None)
             hidden=slot in self.hidden_equipment
@@ -817,7 +841,7 @@ class QtClient(NativeClient):
     def open_related_equipment(self,identifier):
         groups=self.library.related_equipment(identifier)
         if not groups:self.message.set('未找到这件装备的同套关联');return
-        return self.show_dialog(RelatedEquipmentDialog(self,identifier,groups))
+        return self.show_dialog(RelatedEquipmentDialog(self,identifier,groups),near_cursor=True)
 
     def dye_settings(self):
         if getattr(self,'saved_dye_settings',None)is None:
@@ -857,7 +881,7 @@ class QtClient(NativeClient):
 
     def open_equipment_details(self,row):
         if not self.library:return
-        dialog=EquipmentDetailsDialog(self,row);self.show_dialog(dialog);return dialog
+        dialog=EquipmentDetailsDialog(self,row);self.show_dialog(dialog,near_cursor=True);return dialog
 
     def sync_pagination(self):
         self.page_number.blockSignals(True);self.page_number.setRange(1,self.page_count);self.page_number.setValue(self.page_index+1);self.page_number.blockSignals(False)
@@ -1158,7 +1182,7 @@ class QtClient(NativeClient):
 
     def palette(self,title,choices,selected,callback,*,dye_sort=False):
         parent=self.editor if self.editor and self.editor.isVisible()else self.window
-        dialog=W.QDialog(parent);dialog.setWindowTitle(title);dialog.resize(550,610);dialog.setMinimumSize(460,460);dialog.setWindowModality(C.Qt.WindowModal)
+        dialog=W.QDialog(parent);dialog.setWindowTitle(title);dialog.resize(550,610);dialog.setMinimumSize(460,460);dialog.setWindowModality(C.Qt.NonModal if dye_sort else C.Qt.WindowModal)
         outer=vertical(dialog,22,14);outer.addWidget(label(title,'Title'))
         name=label('选择颜色，立即预览','Muted');outer.addWidget(name)
         choices=list(choices);defaults=list(choices)
@@ -1228,11 +1252,21 @@ class QtClient(NativeClient):
                 metallic=bool(choice.get('metallic',False));b.setIcon(self.color_swatch_icon(color,metallic=metallic));b.setIconSize(C.QSize(28,28));dialog.color_buttons.append((b,color,metallic))
                 b.setStyleSheet(f'QPushButton {{ background:transparent;border:{border};border-radius:0;padding:0; }} QPushButton:hover {{ border:2px solid white; }}')
                 def pick(c=choice):
+                    nonlocal selected
                     if dye_sort and dialog.sort_button.isChecked():return
-                    callback(c['value']);dialog.accept()
+                    callback(c['value'])
+                    if dye_sort:
+                        selected=c['value'];position=scroll.verticalScrollBar().value();render(search.text())
+                        scroll.verticalScrollBar().setValue(position);name.setText(c['label'])
+                    else:dialog.accept()
                 b.clicked.connect(lambda _=False,p=pick:p());b.enterEvent=lambda e,c=choice:name.setText(c['label']);grid.addWidget(b,i//12,i%12)
             grid.setRowStretch((len(rows)+11)//12,1)
         if dye_sort:
+            def set_selected(value):
+                nonlocal selected
+                if selected==value:return
+                selected=value;position=scroll.verticalScrollBar().value();render(search.text());scroll.verticalScrollBar().setValue(position)
+            dialog.set_selected=set_selected
             def sorting(active):
                 search.clear();search.setEnabled(not active);dialog.sort_button.setText('完成排序'if active else'自定义排序')
                 name.setText('拖动色块调整顺序，自动保存；原色固定在首位。'if active else'选择颜色，立即预览');render()
@@ -1244,23 +1278,36 @@ class QtClient(NativeClient):
                 else:render()
                 name.setText('已恢复默认顺序。')
             dialog.sort_button.toggled.connect(sorting);dialog.reset_order_button.clicked.connect(reset_order)
-        search.textChanged.connect(render);render();return self.show_dialog(dialog)
+        search.textChanged.connect(render);render()
+        if dye_sort:
+            actions=horizontal();actions.addStretch();actions.addWidget(button('关闭',dialog.close,ghost=True));outer.addLayout(actions)
+        return self.show_dialog(dialog,near_cursor=True)
 
     def dye_icon(self,stain):
         identifier=self.library.dye_icon(stain)if self.library and stain else None
         return self.icon(identifier)if identifier else G.QIcon()
 
+    def swap_slot_dyes(self,slot):
+        if not self.ready or self.closing:return
+        choice=self.state['equipment'][slot]
+        if self.items.get(choice['item_id'],{}).get('dye_count',0)<2:return
+        settings=deepcopy(self.dye_settings());values=settings[slot]
+        values['first'],values['second']=values['second'],values['first'];self.save_dye_settings(settings)
+        choice.update(values);self.update_outfit();self.queue_render()
+
     def open_dyes(self,slot,channel):
         choice=self.state['equipment'][slot];item=self.items.get(choice['item_id'],{})
         if item.get('dye_count',0)<channel:return
         colors=[{'value':0,'label':'原色','color':UNDYED_SWATCH_COLOR}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff),'metallic':bool(d['metallic']),'icon_id':self.library.dye_icon(d['stain_id'])if self.library else None}for d in self.boot['dyes']if d['stain_id']]
-        item_id=choice['item_id']
         def pick(value):
-            if self.state['equipment'][slot]['item_id']!=item_id:return
             key='first'if channel==1 else'second'
             settings=deepcopy(self.dye_settings());settings[slot][key]=value;self.save_dye_settings(settings)
-            self.state['equipment'][slot][key]=value;self.update_outfit();self.queue_render()
-        self.palette(SLOTS[slot]+f' · 第{channel}染色区',colors,choice['first'if channel==1 else'second'],pick,dye_sort=True)
+            current=self.state['equipment'][slot];supported=self.items.get(current['item_id'],{}).get('dye_count',0)>=channel
+            current[key]=value if supported else 0;self.update_outfit();self.queue_render()
+        key='first'if channel==1 else'second'
+        dialog=self.palette(SLOTS[slot]+f' · 第{channel}染色区',colors,self.dye_settings()[slot][key],pick,dye_sort=True)
+        dialog.dye_slot=slot;dialog.dye_channel=key
+        return dialog
 
     def open_editor(self,key=None):
         if not self.boot or self.job:return
