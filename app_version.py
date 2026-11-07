@@ -9,9 +9,14 @@ API='https://gitee.com/api/v5/repos/'+REPOSITORY+'/releases'
 
 
 def version_key(value):
-    if not isinstance(value,str) or not re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)',value):
-        raise ValueError('版本必须为 v主版本.次版本.修订号')
-    return tuple(map(int,value[1:].split('.')))
+    match=re.fullmatch(r'v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-beta\.(0|[1-9][0-9]*))?',value)if isinstance(value,str)else None
+    if match is None:raise ValueError('版本必须为 v主版本.次版本.修订号，测试版使用 -beta.数字')
+    major,minor,patch,beta=match.groups()
+    return int(major),int(minor),int(patch),int(beta is None),int(beta or 0)
+
+
+def is_beta(value):
+    return version_key(value)[3]==0
 
 
 def current_version():

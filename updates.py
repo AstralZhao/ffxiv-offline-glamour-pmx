@@ -6,7 +6,7 @@ shuts down. A separate native helper owns replacement/rollback after exit.
 from pathlib import Path,PurePosixPath
 import hashlib,json,os,re,shutil,subprocess,urllib.parse,urllib.request,uuid,zipfile
 from app_paths import paths,no_links,_atomic_json
-from app_version import API,RELEASES,version_key,current_version,can_install
+from app_version import API,RELEASES,version_key,current_version,can_install,is_beta
 
 MANIFEST='update-manifest.json'
 LIMIT=8*1024**2
@@ -54,23 +54,27 @@ def _open(request,*,local=False):
     return urllib.request.build_opener(Redirect()).open(request,timeout=15)
 
 
-def check(current=None,*,api=API,local=False):
+def check(current=None,*,api=API,local=False,channel="stable",return_to_stable=False):
     current=current or current_version();version_key(current);releases=[]
+    if channel not in('stable','beta'):raise ValueError('更新通道不正确')
+    if return_to_stable and(channel!='stable'or not is_beta(current)):raise ValueError('仅测试版可返回正式版')
     for page in range(1,101):
         rows=_read_json(api+('?'+urllib.parse.urlencode({'page':page,'per_page':100})),local=local)
         if not isinstance(rows,list):raise ValueError('发行列表格式不正确')
         for r in rows:
-            if not isinstance(r,dict) or r.get('prerelease') or r.get('draft'):continue
+            if not isinstance(r,dict) or r.get('draft'):continue
             try:version_key(r.get('tag_name'))
             except ValueError:continue
+            beta=is_beta(r['tag_name'])
+            if channel=='stable'and beta or r.get('prerelease')and not beta:continue
             releases.append(r)
         if len(rows)<100:break
     else:raise ValueError('发行列表超出检查上限')
-    newer=[r for r in releases if version_key(r['tag_name'])>version_key(current)]
+    newer=[r for r in releases if return_to_stable or version_key(r['tag_name'])>version_key(current)]
     if not newer:return {'status':'current','current':current,'latest':current}
     release=max(newer,key=lambda r:version_key(r['tag_name']))
     result={'current':current,'latest':release['tag_name'],'notes':str(release.get('body')or'')[:20000],
-        'page':RELEASES,'status':'no_package'}
+        'page':RELEASES,'status':'no_package','channel':channel,'return_to_stable':return_to_stable}
     assets=release.get('assets',[])
     if not isinstance(assets,list):raise ValueError('发行附件格式不正确')
     choices=[a for a in assets if isinstance(a,dict) and distribution_name(a.get('name'))]
@@ -95,7 +99,7 @@ def _hash(value):return isinstance(value,str) and re.fullmatch('[0-9a-f]{64}',va
 def _validate_patch(p):
     version_key(p['from'])
     if not _hash(p.get('sha256')) or type(p.get('bytes')) is not int or not 0<p['bytes']<=1024**3:raise ValueError('补丁大小或摘要不正确')
-    if not re.fullmatch(r'hgg-update-v[0-9.]+-to-v[0-9.]+\.zip',p.get('asset','')):raise ValueError('补丁附件名称不正确')
+    if not re.fullmatch(r'hgg-update-v[0-9.]+(?:-beta\.[0-9]+)?-to-v[0-9.]+(?:-beta\.[0-9]+)?\.zip',p.get('asset','')):raise ValueError('补丁附件名称不正确')
     files=p.get('files');removed=p.get('removed')
     if not isinstance(files,dict) or not files or len(files)>20000 or not isinstance(removed,dict):raise ValueError('补丁文件清单不正确')
     names=list(files)+list(removed)
@@ -184,11 +188,13 @@ def _local_files(p,current):
     return owned
 
 
-def prepare(info,*,layout=None,progress=None,cancel=None,local=False):
+def prepare(info,*,layout=None,progress=None,cancel=None,local=False,allow_stable_return=False):
     p=layout or paths()
     if layout is None and not can_install():raise ValueError('开发版直接运行源码，请通过 Git 更新源码；不会覆盖开发目录')
     if info.get('status')!='available' or not distribution_name(info.get('asset')):raise ValueError('没有可用的完整软件发行包')
-    if version_key(info['latest'])<=version_key(info['current']):raise ValueError('不允许降级或重复更新')
+    stable_return=allow_stable_return is True and info.get('return_to_stable')is True and is_beta(info['current'])and not is_beta(info['latest'])
+    if info.get('return_to_stable')and not stable_return:raise ValueError('返回正式版需要明确确认')
+    if version_key(info['latest'])<=version_key(info['current'])and not stable_return:raise ValueError('不允许降级或重复更新')
     old=_local_files(p,info['current'])
     folder=no_links(p.derived('updates')/uuid.uuid4().hex,p.root);folder.mkdir(parents=True)
     package=folder/'release.zip';received=0;total=info.get('bytes')
