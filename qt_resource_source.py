@@ -22,11 +22,11 @@ class ResourceSourcePanel(W.QWidget):
         packed=bool(not network and game and(Path(game)/'resource-pack.json').is_file())
         self._mode='network'if network else'pack'if packed else'game'
         host=''
-        policy='memory'
+        policy='disk'
         if network:
             from memory_resources import descriptor
             memory=descriptor(game)
-            if memory:host=memory['host']
+            if memory:host=memory['host'];policy='memory'
             else:
                 from network_resources import NetworkSource
                 host=NetworkSource(game).host;policy='disk'
@@ -41,7 +41,7 @@ class ResourceSourcePanel(W.QWidget):
         self.browse=button('',self.choose);row.addWidget(self.browse);outer.addLayout(row)
         self.note=label('','Muted');self.note.setWordWrap(True);outer.addWidget(self.note)
         self.disk_cache=W.QCheckBox('启用磁盘缓存');self.disk_cache.setChecked(policy=='disk');outer.addWidget(self.disk_cache)
-        self.disk_cache.setToolTip('默认不勾选，下载的原始资源仅保留内存，重新打开需联网。勾选后下载的资源会缓存到软件目录。角色准备缓存、预设和模版照常保留。')
+        self.disk_cache.setToolTip('默认勾选，已下载的资源会缓存到软件目录供后续复用。取消勾选则仅保留内存，重新打开需联网。角色准备缓存、预设和模版照常保留。')
         self.export_button=None
         if export:
             self.export_button=button('导出精简资源包…',ghost=True);line=horizontal();line.addWidget(self.export_button);line.addStretch();outer.addLayout(line)
@@ -65,7 +65,7 @@ class ResourceSourcePanel(W.QWidget):
         self.browse.setVisible(not network)
         self.disk_cache.setVisible(network)
         self.browse.setText('选择资源包'if packed else'选择目录')
-        self.note.setText('网址下需有 resource-pack.json 和原目录的 game 文件夹。默认仅使用内存，重新打开需联网；勾选下方选项可启用磁盘缓存。'if network else'导入后保存在软件 resources 目录，无需安装游戏。'if packed else'直接读取本机游戏文件，无需复制资源。')
+        self.note.setText('网址下需有 resource-pack.json 和原目录的 game 文件夹。默认启用磁盘缓存，已下载内容可复用；取消勾选则仅保留内存，重新打开需联网。'if network else'导入后保存在软件 resources 目录，无需安装游戏。'if packed else'直接读取本机游戏文件，无需复制资源。')
         if self.export_button:self.export_button.setVisible(not(packed or network))
 
 

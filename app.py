@@ -417,9 +417,9 @@ class DemoEngine:
             self.characters=CharacterCache(self.pack,self.store,self.hair)
             from gpu_selection import preferred_adapter
             self.renderer=PreviewRenderer(640,840,preferred_adapter(),reverse_depth=True)
+            from resource_residency import Residency
+            self.renderer.memory_residency=Residency(self.renderer,strict=self.pack.memory_only)
             if self.pack.memory_only:
-                from resource_residency import Residency
-                self.renderer.memory_residency=Residency(self.renderer)
                 from memory_resources import release_pending
                 release_pending(self.game)
             from presets import PresetLibrary
@@ -533,7 +533,7 @@ class DemoEngine:
                 'indices':freeze(np.ascontiguousarray(mesh['indices'],dtype='<u4'))}for mesh in scene.meshes]
             while len(self.scene_cache)>6:self.scene_cache.popitem(last=False)
         if scene.pending_meshes or scene.omitted:raise NotImplementedError('当前装备含尚未接入的可见部件')
-        residency=getattr(self.renderer,'memory_residency',None)if getattr(getattr(self,'pack',None),'memory_only',False)is True else None
+        residency=getattr(self.renderer,'memory_residency',None)
         transition=residency.begin(scene)if residency else False
         self.renderer.zoom=state['zoom'];self.renderer.pitch=state['pitch'];self.renderer.pan=state['pan'];self.renderer.pan_x=state['pan_x']
         try:
