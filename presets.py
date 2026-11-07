@@ -94,6 +94,11 @@ class PresetLibrary:
         if origin in self.metadata['seeded']and self.path(self.metadata['seeded'][origin]).is_file():return
         if not source.is_file():return
         raw=source.read_bytes();decode(raw);key=digest(str(source).encode())[:24]
+        # Migration may enumerate this library after seeding its default.
+        # An already-owned file is registered in place, never imported again.
+        if source.parent==self.root:
+            path=self.path(source.name);self.metadata['files'].setdefault(path.name,{'id':key})
+            self.metadata['seeded'][origin]=path.name;self.save_index();return
         # An existing app-owned test.dat may already contain user edits.
         if default and self.path('test.dat').is_file():
             path=self.path('test.dat');decode(path.read_bytes());self.metadata['files'].setdefault(path.name,{'id':key})
