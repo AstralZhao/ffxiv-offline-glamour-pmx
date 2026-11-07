@@ -629,7 +629,7 @@ class QtClient(NativeClient):
         group=ARMOR if slot in ARMOR else ACCESSORIES
         self.slot.set(SLOTS[slot]);self.folder=None;self.outer=None;self.cancel_search()
         if group!=self.group:self.switch_group(group)
-        self.update_outfit();self.load_catalog()
+        self.update_outfit();self.load_catalog(locate_item=self.state['equipment'][slot]['item_id'])
 
     def search_changed(self,text):self.query.value=text;self.schedule_search()
 
@@ -843,7 +843,7 @@ class QtClient(NativeClient):
         if self.catalog_loading or page==self.page_index or not 0<=page<self.page_count:return
         self.load_catalog(page=page)
 
-    def load_catalog(self,append=False,*,page=None,restore=None):
+    def load_catalog(self,append=False,*,page=None,restore=None,locate_item=None):
         self.cancel_search()
         self.level_timer.stop()
         if not self.boot or self.closing:return
@@ -856,16 +856,37 @@ class QtClient(NativeClient):
         request={'serial':self.catalog_serial,'slot':self.slot_key(),'query':self.query.get(),'offset':page*60,'page':page,'new_query':new_query,
             'grouped':self.folder is None,'model_set':self.folder,'library':self.library,'favorites_only':self.favorite_filter.isChecked(),
             'tags':tuple(self.active_tags),'min_level':self.level_bounds()[0],'max_level':self.level_bounds()[1],
-            'favorite_snapshot':None if new_query else getattr(self,'favorite_snapshot',None),'restore':restore}
+            'favorite_snapshot':None if new_query else getattr(self,'favorite_snapshot',None),'restore':restore,
+            'locate_item':locate_item,'locate_model':self.items.get(locate_item,{}).get('model_set')}
         if self.catalog_job is not None:self.catalog_queued=request
         else:self.start_catalog_request(request)
 
     def fetch_catalog(self,request):
         snapshot=request['favorite_snapshot']
         if request['new_query']and request['library']:snapshot=request['library'].favorite_ids()
-        result=equipment_rows(request['slot'],request['query'],request['offset'],grouped=request['grouped'],model_set=request['model_set'],
-            library=request['library'],favorites_only=request['favorites_only'],tags=request['tags'],favorite_snapshot=snapshot,
-            min_level=request['min_level'],max_level=request['max_level'])
+        def rows(offset,limit=60):
+            return equipment_rows(request['slot'],request['query'],offset,limit,grouped=request['grouped'],model_set=request['model_set'],
+                library=request['library'],favorites_only=request['favorites_only'],tags=request['tags'],favorite_snapshot=snapshot,
+                min_level=request['min_level'],max_level=request['max_level'])
+        target=request.get('locate_item');model=request.get('locate_model')
+        if target and request['grouped']and model is None:
+            match=equipment_rows(request['slot'],str(target),library=request['library'])
+            model=next((row['model_set']for row in match['items']if row['item_id']==target),None)
+        # Only local catalogue metadata is inspected; no model/icon resources
+        # are loaded for the pages passed while locating the worn equipment.
+        if target:
+            offset=0
+            while True:
+                batch=rows(offset,100)
+                index=next((i for i,row in enumerate(batch['items'])if
+                    (row['model_set']==model if request['grouped']else row['item_id']==target)),None)
+                if index is not None:
+                    position=offset+index;result=rows((position//60)*60)
+                    result['located_index']=position%60
+                    return result,snapshot
+                if not batch['more']or not batch['items']:break
+                offset+=len(batch['items'])
+        result=rows(request['offset'])
         return result,snapshot
 
     def start_catalog_request(self,request):
@@ -893,7 +914,7 @@ class QtClient(NativeClient):
         self.favorite_snapshot=snapshot;self.catalog_total=result['total'];self.page_count=max(1,(self.catalog_total+59)//60)
         if request['page']>=self.page_count:
             self.catalog_loading=False;self.load_catalog(page=self.page_count-1,restore=request['restore']);return
-        self.page_index=request['page'];self.rows=list(result['items']);self.offset=request['offset']+len(self.rows);self.more=result['more']
+        self.page_index=result['offset']//60;self.rows=list(result['items']);self.offset=result['offset']+len(self.rows);self.more=result['more']
         self.items.update({r['item_id']:r for r in self.rows})
         self.populate_catalog(self.rows);self.back_button.setVisible(self.folder is not None)
         text='全部装备'if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
@@ -906,6 +927,13 @@ class QtClient(NativeClient):
         restore=request['restore']
         if restore:
             self.catalog.doItemsLayout();self.catalog.verticalScrollBar().setValue(restore['scroll'])
+        elif 'located_index'in result:self.focus_catalog_item(result['located_index'])
+
+    def focus_catalog_item(self,index):
+        item=self.catalog.item(index)
+        if item is None:return
+        self.catalog.doItemsLayout();self.catalog.setCurrentItem(item)
+        self.catalog.scrollToItem(item,W.QAbstractItemView.PositionAtCenter)
 
     def activate_item(self,item):
         if not self.ready:return
