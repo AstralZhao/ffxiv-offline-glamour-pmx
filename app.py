@@ -811,6 +811,26 @@ class DemoEngine:
             record['name']=_name(name)
         return self.save(record)[0]
 
+    def release_memory(self):
+        """Called only on the GPU owner, retaining a freshly drawn current scene."""
+        if not self.last or self.renderer is None:raise RuntimeError('请等待角色加载完成')
+        from resource_residency import release_inactive_cpu
+        from copy import deepcopy
+        owner=self.renderer.memory_residency;before=len(self.renderer.resources)
+        strict=owner.strict;previous=owner.active_scene;owner.active_scene=None;owner.strict=True
+        self.renderer.character_layer.invalidate()
+        try:self.render(deepcopy(self.last['state']),effect_frame=self.effect_frame)
+        except Exception:
+            owner.active_scene=previous;raise
+        finally:owner.strict=strict
+        scene=owner.active_scene;release_inactive_cpu(self,scene,force=True)
+        for key,entry in list(self.characters.entries.items()):
+            if entry['character']is not self.character:
+                self.characters.entries.pop(key);entry['character'].close()
+        import gc
+        gc.collect()
+        return {'released_resources':max(0,before-len(self.renderer.resources))}
+
     def close_gpu(self):
         self._network_input_scene=None
         memory=bool(getattr(getattr(self,'pack',None),'memory_only',False))

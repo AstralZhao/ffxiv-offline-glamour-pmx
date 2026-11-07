@@ -119,9 +119,9 @@ def prune_effect_resources(renderer):
         effect._owned_gpu={token:pointer for token,pointer in effect._owned_gpu.items()if token in live}
 
 
-def release_inactive_cpu(engine,scene):
+def release_inactive_cpu(engine,scene,*,force=False):
     """The current scene owns selected immutable meshes; discard look-back caches."""
-    if not getattr(engine.pack,'memory_only',True):return
+    if not force and not getattr(engine.pack,'memory_only',True):return
     for key,value in list(engine.scene_cache.items()):
         if value is not scene:engine.scene_cache.pop(key)
     outfit=engine.character.outfit
@@ -134,4 +134,4 @@ def release_inactive_cpu(engine,scene):
         if value is not None:value.clear()
     if getattr(outfit,'head_parts',None) is not None:outfit.head_parts.cache.clear()
     engine.accessories.prepared.clear()
-    if hasattr(engine.pack,'release_idle'):engine.pack.release_idle()
+    if hasattr(engine.pack,'release_idle'):engine.pack.release_idle(force=True)if force else engine.pack.release_idle()

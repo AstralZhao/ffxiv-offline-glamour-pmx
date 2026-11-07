@@ -6,7 +6,7 @@ from qt_storage import StoragePanel
 
 
 class SettingsDialog(ResourceDialog):
-    def __init__(self,store,game=None,*,parent=None,storage_context=None,update_controller=None):
+    def __init__(self,store,game=None,*,parent=None,storage_context=None,update_controller=None,memory_release=None):
         super().__init__(store,parent);self.setWindowTitle('设置 · 幻化柜');self.resize(760,640);self.setMinimumSize(640,520)
         outer=vertical(self,22,14);outer.addWidget(label('设置','Title'));outer.addWidget(label('资源、场景、存储空间与软件更新。','Muted'))
         self.tabs=W.QTabWidget();outer.addWidget(self.tabs,1)
@@ -21,7 +21,7 @@ class SettingsDialog(ResourceDialog):
         self.studio_brightness.valueChanged.connect(lambda value:self.brightness_label.setText(str(value)+'%'))
         form.addRow('背景',self.studio_background);form.addRow('打光方式',self.studio_light);form.addRow('灯光亮度',intensity);content.addLayout(form)
         hint=label('背景和灯光可独立选择。点击“保存并应用”更新预览，下次启动会恢复。','Muted');hint.setWordWrap(True);content.addWidget(hint);content.addStretch()
-        self.add_page(studio,'场景');self.storage=StoragePanel(store.root,storage_context);self.add_page(self.storage,'存储')
+        self.add_page(studio,'场景');self.storage=StoragePanel(store.root,storage_context,memory_release=memory_release);self.add_page(self.storage,'存储')
         if update_controller is not None:
             from qt_updates import UpdatePanel
             self.updates=UpdatePanel(update_controller);self.add_page(self.updates,'更新')

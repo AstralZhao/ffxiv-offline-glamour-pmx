@@ -515,9 +515,26 @@ class QtClient(NativeClient):
         if self.settings_handler:self.settings_handler();return
         from settings import SettingsStore
         from qt_settings import SettingsDialog
-        dialog=SettingsDialog(SettingsStore(),self.game,parent=self.window,storage_context=self.storage_identity)
+        dialog=SettingsDialog(SettingsStore(),self.game,parent=self.window,storage_context=self.storage_identity,memory_release=self.release_memory)
         dialog.accepted.connect(lambda:self.apply_studio(dialog.saved_studio)if dialog.saved_game==self.game else self.message.set('资源来源已保存，下次启动软件时生效'))
         self.show_dialog(dialog)
+
+    def release_memory(self):
+        from concurrent.futures import Future
+        result=Future()
+        if not self.ready or self.engine is None or self.closing:
+            result.set_exception(RuntimeError('请等待角色加载完成'));return result
+        def work():
+            try:return self.engine.release_memory(),None
+            except Exception as error:return None,error
+        def done(record):
+            value,error=record
+            if error is not None:
+                self.message.set('释放内存未完成：'+str(error));result.set_exception(error)
+            else:
+                self.message.set('闲置内存缓存已清理，当前预览保留。');result.set_result(value)
+        if not self.submit(work,done):result.set_exception(RuntimeError('请等待当前操作完成后重试'))
+        return result
 
     def storage_identity(self):
         cache=getattr(self.engine,'characters',None)if self.engine is not None else None
@@ -1464,7 +1481,7 @@ class DesktopSession(C.QObject):
     def open_settings(self):
         if self.settings_dialog:self.settings_dialog.raise_();return
         from qt_settings import SettingsDialog
-        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window,storage_context=self.controller.storage_identity,update_controller=self.updates)
+        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window,storage_context=self.controller.storage_identity,update_controller=self.updates,memory_release=self.controller.release_memory)
         self.settings_dialog=dialog
         def finish(result):
             self.settings_dialog=None
