@@ -1,7 +1,8 @@
 """On-demand original item icons, decoded on CPU without the character GPU."""
 from collections import OrderedDict
 from io import BytesIO
-import threading
+import threading,hashlib
+from pathlib import Path
 
 from PIL import Image
 
@@ -10,6 +11,30 @@ from texture_probe import Texture
 
 
 COLOR_SWATCH_TEXTURE='ui/uld/ListColorChooser.tex'
+# Temporary UI-only bundling exception, explicitly requested by the user.
+BUNDLED_UI_ASSETS={COLOR_SWATCH_TEXTURE:{'file':'demo/assets/ui/ListColorChooser.tex',
+    'sha256':'f3cc6cb2cc89f5d3d43384d2a49a06046c28164f9b9c09a8ddc0db65387d9fdd'}}
+UI_RESOURCE_ORDER={'game':('source','bundled'),'resource_pack':('bundled','source'),'network':('bundled','source')}
+
+
+def read_bundled_ui_asset(virtual_path,program=None):
+    record=BUNDLED_UI_ASSETS.get(virtual_path)
+    if record is None:return None
+    root=Path(program)if program is not None else Path(__file__).resolve().parents[1]
+    path=root/record['file']
+    try:raw=path.read_bytes()
+    except FileNotFoundError:return None
+    if hashlib.sha256(raw).hexdigest()!=record['sha256']:raise ValueError('Bundled UI resource checksum differs: '+record['file'])
+    return raw
+
+
+def bundled_ui_asset_files(program):
+    root=Path(program);result=[]
+    for virtual_path,record in BUNDLED_UI_ASSETS.items():
+        if read_bundled_ui_asset(virtual_path,root)is None:raise FileNotFoundError('Missing bundled UI resource: '+record['file'])
+        result.append(root/record['file'])
+    return result
+
 
 
 class ItemIcons:
@@ -35,11 +60,25 @@ class ItemIcons:
             return value
 
 
+    def read_ui_resource(self,virtual_path):
+        root=self.pack.game_root
+        mode='network'if(root/'network-source.json').is_file()else'resource_pack'if(root/'resource-pack.json').is_file()else'game'
+        order=UI_RESOURCE_ORDER[mode]if virtual_path in BUNDLED_UI_ASSETS else('source',)
+        for provider in order:
+            if provider=='bundled':
+                raw=read_bundled_ui_asset(virtual_path)
+                if raw is not None:return raw
+            elif provider=='source':
+                try:return self.pack.read(virtual_path)
+                except FileNotFoundError:pass
+            else:raise ValueError('Unsupported UI resource provider')
+        raise FileNotFoundError(virtual_path)
+
     def color_swatch_layers_png(self):
         """Only native ULD parts18:3 and18:9; omit cross/check/selection glyphs."""
         with self.lock:
             if self.swatch_layers is not None:return self.swatch_layers
-            texture=Texture.read(self.pack.read(COLOR_SWATCH_TEXTURE))
+            texture=Texture.read(self.read_ui_resource(COLOR_SWATCH_TEXTURE))
             if(texture.width,texture.height,texture.format)!=(144,136,0x1450):raise ValueError('Native color chooser atlas layout changed')
             atlas=Image.frombytes('RGBA',(144,136),texture.mip_data[0],'raw','BGRA')
             layers=Image.new('RGBA',(80,40));layers.paste(atlas.crop((0,48,40,88)),(0,0));layers.paste(atlas.crop((48,88,88,128)),(40,0))

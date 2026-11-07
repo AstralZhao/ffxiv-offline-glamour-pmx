@@ -4,6 +4,7 @@ enable()
 from PySide6 import QtCore as C,QtGui as G,QtWidgets as W
 
 BG='#101319';PANEL='#191e27';RAISED='#222936';BORDER='#2b3443';TEXT='#edf1f7';MUTED='#8c9bad';ACCENT='#89d5c4'
+UNDYED_SWATCH_COLOR='#333b48'
 
 STYLE='''
 QWidget { color:#edf1f7; font-family:"Microsoft YaHei UI"; font-size:13px; }

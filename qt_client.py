@@ -21,7 +21,7 @@ from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_s
 from client import NativeClient,color_text
 from effect_clock import EffectClock
 from app_paths import paths,migrate,no_links
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,UNDYED_SWATCH_COLOR,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -169,7 +169,7 @@ class OutfitCard(W.QFrame):
         for ch,b in enumerate(self.dyes,1):
             stain=choice['first'if ch==1 else'second'];dye=self.controller.dye_by_id.get(stain)
             name=dye['name']if dye and stain else'原色'
-            color='#%06x'%(dye['color']&0xffffff)if dye and stain else'#91a0b4'
+            color='#%06x'%(dye['color']&0xffffff)if dye and stain else UNDYED_SWATCH_COLOR
             b.setEnabled(count>=ch and not hidden)
             b.setText(f'{ch}区');b.setIcon(self.controller.color_swatch_icon(color,unavailable=count<ch,metallic=bool(dye and stain and dye.get('metallic',False))));b.setIconSize(C.QSize(16,16))
             b.setStyleSheet('QPushButton:disabled { background:#38252b; color:#e3aaa3; border:1px dashed #a46367; font-weight:600; }'if count<ch else'')
@@ -1198,7 +1198,7 @@ class QtClient(NativeClient):
     def open_dyes(self,slot,channel):
         choice=self.state['equipment'][slot];item=self.items.get(choice['item_id'],{})
         if item.get('dye_count',0)<channel:return
-        colors=[{'value':0,'label':'原色','color':'#333b48'}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff),'metallic':bool(d['metallic']),'icon_id':self.library.dye_icon(d['stain_id'])if self.library else None}for d in self.boot['dyes']if d['stain_id']]
+        colors=[{'value':0,'label':'原色','color':UNDYED_SWATCH_COLOR}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff),'metallic':bool(d['metallic']),'icon_id':self.library.dye_icon(d['stain_id'])if self.library else None}for d in self.boot['dyes']if d['stain_id']]
         item_id=choice['item_id']
         def pick(value):
             if self.state['equipment'][slot]['item_id']!=item_id:return
