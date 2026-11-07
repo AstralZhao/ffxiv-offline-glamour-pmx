@@ -124,8 +124,7 @@ def _stamp(path):
 def prepare(host,root,*,callback=None,cancel=None,cache_policy='disk'):
     """Settings worker: refresh manifest, verify small files, probe each DAT's Range/ETag."""
     if cache_policy=='memory':
-        from memory_resources import connect
-        return connect(host,root,callback=callback,cancel=cancel)
+        raise ValueError('网络资源仅支持磁盘缓存')
     if cache_policy!='disk':raise ValueError('未知的网络缓存方式')
     from resource_pack import manifest_data
     root=Path(root).resolve(strict=True);host=host_url(host)
@@ -163,8 +162,8 @@ class NetworkSource:
     cache_policy='disk'
 
     def __new__(cls,root):
-        from memory_resources import descriptor,open_root
-        if descriptor(root)is not None:return open_root(root)
+        from memory_resources import descriptor
+        if descriptor(root)is not None:raise ValueError('仅内存模式已移除，请重新配置网络资源。')
         return super().__new__(cls)
 
     def __init__(self,root):

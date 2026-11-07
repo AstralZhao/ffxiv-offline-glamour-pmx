@@ -22,26 +22,22 @@ class ResourceSourcePanel(W.QWidget):
         packed=bool(not network and game and(Path(game)/'resource-pack.json').is_file())
         self._mode='network'if network else'pack'if packed else'game'
         host=''
-        policy='disk'
         if network:
             from memory_resources import descriptor
             memory=descriptor(game)
-            if memory:host=memory['host'];policy='memory'
+            if memory:raise ValueError('仅内存模式已移除，请重新配置网络资源。')
             else:
                 from network_resources import NetworkSource
-                host=NetworkSource(game).host;policy='disk'
+                host=NetworkSource(game).host
         self._paths={'game':str(game or'')if not(packed or network)else'','pack':str(game or'')if packed else'','network':host}
         remembered=remembered or{}
         for key in self._paths:
             if isinstance(remembered.get(key),str):self._paths[key]=remembered[key]
-        if not network and type(remembered.get('disk_cache'))is bool:policy='disk'if remembered['disk_cache']else'memory'
         self.game_mode.setChecked(self._mode=='game');self.pack_mode.setChecked(packed);self.network_mode.setChecked(network)
         self.path_label=label('','Section');outer.addWidget(self.path_label);row=horizontal()
         self.path=W.QLineEdit(self._paths[self._mode]);self.path.setClearButtonEnabled(True);row.addWidget(self.path,1)
         self.browse=button('',self.choose);row.addWidget(self.browse);outer.addLayout(row)
         self.note=label('','Muted');self.note.setWordWrap(True);outer.addWidget(self.note)
-        self.disk_cache=W.QCheckBox('启用磁盘缓存');self.disk_cache.setChecked(policy=='disk');outer.addWidget(self.disk_cache)
-        self.disk_cache.setToolTip('默认勾选，已下载的资源会缓存到软件目录供后续复用。取消勾选则仅保留内存，重新打开需联网。角色准备缓存、预设和模版照常保留。')
         self.export_button=None
         if export:
             self.export_button=button('导出精简资源包…',ghost=True);line=horizontal();line.addWidget(self.export_button);line.addStretch();outer.addLayout(line)
@@ -49,7 +45,7 @@ class ResourceSourcePanel(W.QWidget):
         self.mode_changed()
 
     def input_values(self):
-        return {**self._paths,self._mode:self.path.text(),'disk_cache':self.disk_cache.isChecked()}
+        return {**self._paths,self._mode:self.path.text()}
 
     def choose(self):
         if self.pack_mode.isChecked():path,_=W.QFileDialog.getOpenFileName(self,'导入幻化柜资源包','','幻化柜资源包 (*.ff14resources *.zip)')
@@ -63,9 +59,8 @@ class ResourceSourcePanel(W.QWidget):
         self.path_label.setText('资源根网址（Host）'if network else'幻化柜资源包'if packed else'国服游戏目录')
         self.path.setPlaceholderText('https://资源域名/版本目录/'if network else'选择 .ff14resources 文件'if packed else'包含 game 文件夹的安装目录')
         self.browse.setVisible(not network)
-        self.disk_cache.setVisible(network)
         self.browse.setText('选择资源包'if packed else'选择目录')
-        self.note.setText('网址下需有 resource-pack.json 和原目录的 game 文件夹。默认启用磁盘缓存，已下载内容可复用；取消勾选则仅保留内存，重新打开需联网。'if network else'导入后保存在软件 resources 目录，无需安装游戏。'if packed else'直接读取本机游戏文件，无需复制资源。')
+        self.note.setText('网址下需有 resource-pack.json 和原目录的 game 文件夹。下载内容按需保存到磁盘缓存，已下载部分可复用。'if network else'导入后保存在软件 resources 目录，无需安装游戏。'if packed else'直接读取本机游戏文件，无需复制资源。')
         if self.export_button:self.export_button.setVisible(not(packed or network))
 
 
@@ -123,7 +118,7 @@ class ResourceDialog(W.QDialog):
         self.busy(True);self.cancel_event.clear();self.progress_record=None;self.operation='save';value=self.path.text()
         if self.network_mode.isChecked():
             self.status.setText('正在检查并准备网络资源…')
-            policy='disk'if self.source_panel.disk_cache.isChecked()else'memory'
+            policy='disk'
             self.future=self.pool.submit(self.network_source,value,policy,self.source_panel.current_network_path)
         elif self.pack_mode.isChecked()and Path(value).is_file():
             from resource_pack import import_resource_pack

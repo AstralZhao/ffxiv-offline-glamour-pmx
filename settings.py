@@ -27,8 +27,7 @@ def validate_game(value,root=ROOT,*,verify_executable=True):
         from memory_resources import descriptor
         if descriptor(path)is not None:
             if root.is_relative_to(path):raise ValueError('软件不能放在资源目录内')
-            from network_resources import validate_cached
-            validate_cached(path,profile);return path
+            raise ValueError('仅内存模式已移除，请重新配置网络资源。')
     version=(path/'game/ffxivgame.ver').read_text(encoding='utf8').strip()
     if version!=profile['client_version']:
         raise ValueError(f"当前游戏版本 {version} 与软件支持的国服版本 {profile['client_version']} 不一致，请使用对应版本的软件包")
@@ -57,18 +56,12 @@ class SettingsStore:
         try:
             data=json.loads(self.path.read_bytes())
             if data.get('version')==3 and data.get('source')=='network':
+                if data.get('cache_policy','disk')!='disk':raise ValueError('仅内存模式已移除，请重新配置网络资源。')
                 from network_resources import BASE,host_url,validate_cached
                 relative=data.get('resource_directory')
                 if not isinstance(relative,str):raise ValueError('网络资源配置格式不正确')
                 path=(self.root/relative).resolve()
                 if not any(path.is_relative_to(p) for p in (self.root/BASE,self.root/'artifacts/network-resources',program_root(self.root)/'artifacts/network-resources')):raise ValueError('网络缓存必须位于软件网络资源目录内')
-                from memory_resources import descriptor
-                memory=descriptor(path)
-                if memory is not None:
-                    profile=json.loads((program_root(self.root)/'docs/cn-customization-profile.json').read_bytes())
-                    if any(memory[k]!=profile[k]for k in('client_version','executable_sha256')):raise ValueError('网络连接与软件支持的国服版本不一致')
-                    if memory['host']!=host_url(data.get('host','')):raise ValueError('网络资源网址与连接记录不一致')
-                    return path,''
                 source=validate_cached(path,json.loads((program_root(self.root)/'docs/cn-customization-profile.json').read_bytes()))
                 if source.host!=host_url(data.get('host','')):raise ValueError('网络资源网址与缓存不一致')
                 return validate_game(path,self.root,verify_executable=False),''
@@ -102,10 +95,9 @@ class SettingsStore:
                         candidate=(self.root/relative).resolve()
                         if candidate.is_relative_to(self.root):result[key]=str(candidate)
                 elif isinstance(value,str)and len(value)<=8192:result[key]=value
-            if type(saved.get('disk_cache'))is bool:result['disk_cache']=saved['disk_cache']
         # Preserve the previous active source when upgrading an old config.
         if data.get('source')=='network':
-            result.setdefault('network',data.get('host',''));result.setdefault('disk_cache',data.get('cache_policy','disk')=='disk')
+            result.setdefault('network',data.get('host',''))
         elif data.get('source')=='resource_pack':
             relative=data.get('resource_directory')
             if isinstance(relative,str):
@@ -123,8 +115,9 @@ class SettingsStore:
             if not any(path.is_relative_to(p) for p in (self.root/BASE,self.root/'artifacts/network-resources',program_root(self.root)/'artifacts/network-resources')):raise ValueError('网络资源缓存不在软件目录内')
             from memory_resources import descriptor
             memory=descriptor(path)
-            host=memory['host']if memory else NetworkSource(path).host
-            data={'version':3,'source':'network','host':host,'resource_directory':path.relative_to(self.root).as_posix(),'cache_policy':'memory'if memory else'disk'}
+            if memory:raise ValueError('仅内存模式已移除，请重新配置网络资源。')
+            host=NetworkSource(path).host
+            data={'version':3,'source':'network','host':host,'resource_directory':path.relative_to(self.root).as_posix(),'cache_policy':'disk'}
         elif (path/'resource-pack.json').is_file():
             if not any(path.is_relative_to(p) for p in (self.root/'resources',program_root(self.root)/'resources')):raise ValueError('请先通过“导入资源包”将资源包导入软件目录')
             data={'version':2,'source':'resource_pack','resource_directory':path.relative_to(self.root).as_posix()}
@@ -136,11 +129,9 @@ class SettingsStore:
             if not isinstance(resource_inputs,dict):raise ValueError('资源输入记录格式不正确')
             for key,value in resource_inputs.items():
                 if key in('game','pack','network')and isinstance(value,str)and len(value)<=8192:remembered[key]=value
-                elif key=='disk_cache'and type(value)is bool:remembered[key]=value
         current='network'if data.get('source')=='network'else'pack'if data.get('source')=='resource_pack'else'game'
         if resource_inputs is None or current not in resource_inputs:
             remembered[current]=data['host']if current=='network'else str(path)
-        if current=='network':remembered['disk_cache']=data['cache_policy']=='disk'
         # Internal directory/file hints move with the software; external paths
         # and unfinished text remain exactly as the user entered them.
         for key in('game','pack'):
