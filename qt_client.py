@@ -969,7 +969,7 @@ class QtClient(NativeClient):
             self.outer={'query':self.query.get(),'rows':list(self.rows),'offset':self.offset,'more':self.more,'scroll':self.catalog.verticalScrollBar().value(),
                 'name':row['name'],'count':self.count_note.text(),'page':self.page_index,'pages':self.page_count,'total':self.catalog_total,
                 'filters':self.filter_signature(),'favorite_snapshot':self.favorite_snapshot}
-            self.folder=row['model_set'];self.query.set('');self.load_catalog();return
+            self.folder=row['model_set'];self.load_catalog();return
         slot=self.slot_key();self.state['equipment'][slot]=self.equipment_choice(slot,row);self.update_outfit();self.queue_render()
 
     def back_folder(self):
