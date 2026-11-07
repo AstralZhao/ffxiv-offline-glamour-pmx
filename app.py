@@ -791,18 +791,46 @@ class DemoEngine:
 
     def inspect_template_code(self,code):
         from template_code import decode
-        record=decode(code)
+        record=decode(code);self.validate_template_records([record]);return record
+
+    def validate_template_records(self,records):
         with closing(database())as conn:
-            stains={r[0]for r in conn.execute('SELECT stain_id FROM dyes')}
-            for slot,choice in record['state']['equipment'].items():
-                if choice['item_id']is None:continue
-                item=conn.execute('SELECT slot,dye_count FROM equipment WHERE item_id=?',(choice['item_id'],)).fetchone()
-                if item is None:raise ValueError('当前国服目录没有装备 #'+str(choice['item_id']))
-                if item['slot']!=('FingerL'if slot=='FingerR'else slot):raise ValueError('装备 #'+str(choice['item_id'])+' 的部位与模版码不符')
-                for channel,key in enumerate(('first','second'),1):
-                    if choice[key]not in stains:raise ValueError('当前国服目录没有染剂 #'+str(choice[key]))
-                    if choice[key]and channel>item['dye_count']:raise ValueError('模版码对不可染色的区域设置了染剂')
-        return record
+            stains={r[0]for r in conn.execute('SELECT stain_id FROM dyes')};items={}
+            for record in records:
+                for slot,choice in record['state']['equipment'].items():
+                    identifier=choice['item_id']
+                    if identifier is None:continue
+                    if identifier not in items:items[identifier]=conn.execute('SELECT slot,dye_count FROM equipment WHERE item_id=?',(identifier,)).fetchone()
+                    item=items[identifier]
+                    if item is None:raise ValueError('当前国服目录没有装备 #'+str(identifier))
+                    if item['slot']!=('FingerL'if slot=='FingerR'else slot):raise ValueError('装备 #'+str(identifier)+' 的部位与模版码不符')
+                    for channel,key in enumerate(('first','second'),1):
+                        if choice[key]not in stains:raise ValueError('当前国服目录没有染剂 #'+str(choice[key]))
+                        if choice[key]and channel>item['dye_count']:raise ValueError('模版码对不可染色的区域设置了染剂')
+
+    def export_template_batch(self,identifiers):
+        from template_code import encode_batch
+        if not isinstance(identifiers,list)or not identifiers or any(not isinstance(i,str)for i in identifiers)or len(set(identifiers))!=len(identifiers):
+            raise ValueError('请选择需要导出的模版')
+        records={r['id']:r for r in self.saved()}
+        if any(i not in records for i in identifiers):raise ValueError('部分模版已不存在，请刷新列表')
+        return encode_batch([records[i]for i in identifiers])
+
+    def inspect_template_batch(self,raw):
+        from template_code import decode_batch
+        records=decode_batch(raw);self.validate_template_records(records);return records
+
+    def import_template_batch(self,raw,indices):
+        records=self.inspect_template_batch(raw)
+        if not isinstance(indices,list)or not indices or any(type(i)is not int or not 0<=i<len(records)for i in indices)or len(set(indices))!=len(indices):
+            raise ValueError('请选择需要导入的模版')
+        old=self.saved();used={r['id']for r in old};added=[];stamp=time.strftime('%Y-%m-%d %H:%M')
+        for i in indices:
+            identifier=secrets.token_hex(6)
+            while identifier in used:identifier=secrets.token_hex(6)
+            used.add(identifier);record=records[i]
+            added.append({'id':identifier,'name':record['name'],'state':record['state'],'time':stamp})
+        self.write_saved([*added,*old]);return added
 
     def import_template_code(self,code,name=None):
         record=self.inspect_template_code(code)

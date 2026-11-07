@@ -20,7 +20,9 @@ class SavedOutfitsDialog(W.QDialog):
         self.resize(960,730);self.setMinimumSize(780,580);self.page_index=0;self.selected_id=None
         self.list_icons=[];self.detail_icons=[];self.records=[];self.matches=[];self.metadata={}
         outer=vertical(self,22,14);heading=horizontal();heading.addWidget(label('投影模版','Title'));heading.addStretch()
-        self.total=label('','Badge');heading.addWidget(self.total);outer.addLayout(heading)
+        self.total=label('','Badge');heading.addWidget(self.total)
+        self.batch_export_button=button('批量导出',self.export_batch);heading.addWidget(self.batch_export_button)
+        self.batch_import_button=button('批量导入',self.import_batch);heading.addWidget(self.batch_import_button);outer.addLayout(heading)
         outer.addWidget(label('仅应用装备和染色，保留当前角色与观察视角。','Muted'))
         tools=horizontal();self.search=W.QLineEdit();self.search.setPlaceholderText('搜索模版名称、装备名称或编号');self.search.setClearButtonEnabled(True)
         tools.addWidget(self.search,1);self.sort=ComboBox();self.sort.addItem('最近保存','recent');self.sort.addItem('最早保存','oldest');self.sort.addItem('名称排序','name');tools.addWidget(self.sort)
@@ -60,7 +62,7 @@ class SavedOutfitsDialog(W.QDialog):
                 for identifier,name,icon in db.execute('SELECT item_id,name,icon_id FROM equipment WHERE item_id IN ('+','.join('?'for _ in chunk)+')',chunk):
                     self.metadata[identifier]={'name':name,'icon_id':icon}
         self.search_text={r['id']:normalized(r['name']+' '+r.get('time','')+' '+' '.join(str(c['item_id'])+' '+self.metadata.get(c['item_id'],{}).get('name','')for c in r['state']['equipment'].values()if c.get('item_id')))for r in self.records}
-        self.total.setText(f'{len(self.records):,} 套');self.filter(reset=False)
+        self.total.setText(f'{len(self.records):,} 套');self.batch_export_button.setEnabled(bool(self.records));self.filter(reset=False)
 
     def filter(self,*,reset=True):
         terms=normalized(self.search.text()).split();self.matches=[r for r in self.records if all(term in self.search_text[r['id']]for term in terms)]
@@ -158,6 +160,20 @@ class SavedOutfitsDialog(W.QDialog):
 
     def import_code(self):return self.open_code_dialog(TemplateImportDialog(self))
 
+    def export_batch(self):
+        if not self.records:return
+        return self.open_code_dialog(TemplateBatchDialog(self,self.records))
+
+    def import_batch(self):
+        path,_=W.QFileDialog.getOpenFileName(self,'批量导入模版','','幻化柜模版文件 (*.hggtemplates);;所有文件 (*)')
+        if not path:return
+        try:
+            from template_code import MAX_BATCH_BYTES
+            with Path(path).open('rb')as file:raw=file.read(MAX_BATCH_BYTES+1)
+            records=self.c.engine.inspect_template_batch(raw)
+        except Exception as error:self.notice.setText(str(error));return
+        return self.open_code_dialog(TemplateBatchDialog(self,records,raw=raw))
+
     def open_code_dialog(self,dialog):
         dialog.setWindowModality(C.Qt.WindowModal)
         if self.testAttribute(C.Qt.WA_DontShowOnScreen):dialog.setAttribute(C.Qt.WA_DontShowOnScreen,True)
@@ -204,3 +220,68 @@ class TemplateImportDialog(W.QDialog):
         except Exception as error:self.error.setText(str(error));return
         b=self.browser;b.search.clear();b.search_timer.stop();b.sort.setCurrentIndex(0);b.page_index=0;b.selected_id=record['id'];b.reload()
         b.notice.setText('模版已新增，尚未应用到角色。');self.accept()
+
+
+class TemplateBatchDialog(W.QDialog):
+    """Checkable selection persists across name filtering; no preview/render work."""
+    def __init__(self,browser,records,*,raw=None):
+        super().__init__(browser);self.browser=browser;self.records=records;self.raw=raw;self.importing=raw is not None
+        title='批量导入模版'if self.importing else'批量导出模版';self.setWindowTitle(title);self.resize(620,520);self.setMinimumSize(460,370)
+        outer=vertical(self,22,12);outer.addWidget(label(title,'Title'))
+        hint=label('勾选需要导入的模版。同名模版也会新增，不覆盖已有记录，不立即换装。'if self.importing else'勾选需要导出的模版，保存为一个文件；包含名称、装备与双染色。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
+        tools=horizontal();self.search=W.QLineEdit();self.search.setPlaceholderText('搜索模版名称');self.search.setClearButtonEnabled(True);tools.addWidget(self.search,1)
+        self.all_button=button('全选结果',lambda:self.check_visible(True));tools.addWidget(self.all_button)
+        self.none_button=button('取消勾选',lambda:self.check_visible(False));tools.addWidget(self.none_button);outer.addLayout(tools)
+        self.list=W.QListWidget();self.list.setSpacing(3);self.list.setSelectionMode(W.QAbstractItemView.NoSelection)
+        self.list.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel);outer.addWidget(self.list,1)
+        for i,record in enumerate(records):
+            count=sum(bool(c.get('item_id'))for c in record['state']['equipment'].values())
+            item=W.QListWidgetItem(record['name']+f'  ·  {count} 件装备');item.setToolTip(record['name']);item.setData(C.Qt.UserRole,i)
+            item.setFlags(C.Qt.ItemIsEnabled|C.Qt.ItemIsUserCheckable);item.setCheckState(C.Qt.Checked);item.setSizeHint(C.QSize(100,36));self.list.addItem(item)
+        self.count=label('','Muted');outer.addWidget(self.count);self.error=label('','Warning');self.error.setWordWrap(True);outer.addWidget(self.error)
+        actions=horizontal();actions.addStretch();actions.addWidget(button('取消',self.reject,ghost=True))
+        self.action_button=button('导入所选'if self.importing else'导出所选',self.execute,primary=True);actions.addWidget(self.action_button);outer.addLayout(actions)
+        self.search.textChanged.connect(self.filter);self.list.itemChanged.connect(self.update_count);self.update_count()
+
+    def selected_indices(self):
+        return [self.list.item(i).data(C.Qt.UserRole)for i in range(self.list.count())if self.list.item(i).checkState()==C.Qt.Checked]
+
+    def update_count(self,*_):
+        count=len(self.selected_indices());visible=sum(not self.list.item(i).isHidden()for i in range(self.list.count()))
+        self.count.setText(f'已选择 {count:,} / 共 {len(self.records):,} 套 · 搜索结果 {visible:,} 套');self.action_button.setEnabled(count>0)
+
+    def filter(self,text):
+        terms=normalized(text).split()
+        for i,record in enumerate(self.records):self.list.item(i).setHidden(not all(t in normalized(record['name'])for t in terms))
+        self.update_count()
+
+    def check_visible(self,checked):
+        self.list.blockSignals(True)
+        for i in range(self.list.count()):
+            item=self.list.item(i)
+            if not item.isHidden():item.setCheckState(C.Qt.Checked if checked else C.Qt.Unchecked)
+        self.list.blockSignals(False);self.update_count()
+
+    def execute(self):
+        indices=self.selected_indices()
+        if not indices:return
+        self.error.clear();b=self.browser
+        try:
+            if self.importing:
+                added=b.c.engine.import_template_batch(self.raw,indices)
+                b.search.clear();b.search_timer.stop();b.sort.setCurrentIndex(0);b.page_index=0;b.selected_id=added[0]['id'];b.reload()
+                b.notice.setText(f'已新增 {len(added)} 套模版，尚未应用到角色。')
+            else:
+                raw=b.c.engine.export_template_batch([self.records[i]['id']for i in indices])
+                name='幻化柜-投影模版-'+C.QDate.currentDate().toString('yyyyMMdd')+'.hggtemplates'
+                path,_=W.QFileDialog.getSaveFileName(self,'保存模版文件',name,'幻化柜模版文件 (*.hggtemplates)')
+                if not path:return
+                if not Path(path).suffix:path+='.hggtemplates'
+                file=C.QSaveFile(path);file.setDirectWriteFallback(False)
+                if not file.open(C.QIODevice.WriteOnly):raise OSError(file.errorString())
+                if file.write(raw)!=len(raw):
+                    error=file.errorString();file.cancelWriting();raise OSError(error)
+                if not file.commit():raise OSError(file.errorString())
+                b.notice.setText(f'已导出 {len(indices)} 套模版。')
+        except Exception as error:self.error.setText(str(error));return
+        self.accept()
