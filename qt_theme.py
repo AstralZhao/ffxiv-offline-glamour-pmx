@@ -299,11 +299,12 @@ def swatch_icon(color,*,unavailable=False,layers=None,metallic=False):
         native=G.QImage(rgba.data,40,40,160,G.QImage.Format_RGBA8888).copy();return G.QIcon(G.QPixmap.fromImage(native))
     image=G.QPixmap(32,32);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)
-    painter.setBrush(G.QColor(color));painter.setPen(G.QPen(G.QColor('#778495'),1))
-    painter.drawRect(C.QRectF(1.5,1.5,13,13))
     if unavailable:
-        painter.setBrush(G.QColor('#38252b'));painter.setPen(G.QPen(G.QColor('#f1aaa1'),1.6))
+        painter.setBrush(C.Qt.NoBrush);painter.setPen(G.QPen(G.QColor('#f1aaa1'),1.6))
         painter.drawEllipse(C.QRectF(1.5,1.5,13,13));painter.drawLine(C.QPointF(3.5,12.5),C.QPointF(12.5,3.5))
+    else:
+        painter.setBrush(G.QColor(color));painter.setPen(G.QPen(G.QColor('#778495'),1))
+        painter.drawRect(C.QRectF(1.5,1.5,13,13))
     painter.end();icon=G.QIcon(image)
     if unavailable:icon.addPixmap(image,G.QIcon.Disabled)
     return icon
