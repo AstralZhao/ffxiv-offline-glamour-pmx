@@ -62,7 +62,7 @@ def example_dat(race,tribe,hair,label,gender=1):
     p.update(race=race,gender=gender,body_type=1,tribe=tribe,face=1,hair=hair,tail_or_ear_type=0 if race in(1,5)else 1,
         height=50,bust=50 if gender else 0,ear_muscle_tail_size=50,skin_color=50,hair_color=20,left_eye_color=7,right_eye_color=7)
     if race==7:p.update(face=5,lip_color_or_fur_pattern=1)
-    data=bytearray(212);struct.pack_into('<II',data,0,0x2013ff14,5);data[16:42]=bytes(p.values())
+    data=bytearray(212);struct.pack_into('<II',data,0,0x2013ff14,8);data[16:42]=bytes(p.values())
     comment=(label+CLANS[tribe]+' · 示例预设').encode('utf8');data[48:48+len(comment)]=comment
     checksum=0
     for i,value in enumerate(data[16:]):checksum^=value<<(i%24)
