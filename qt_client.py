@@ -1258,10 +1258,8 @@ class QtClient(NativeClient):
                     nonlocal selected
                     if dye_sort and dialog.sort_button.isChecked():return
                     callback(c['value'])
-                    if dye_sort:
-                        selected=c['value'];position=scroll.verticalScrollBar().value();render(search.text())
-                        scroll.verticalScrollBar().setValue(position);name.setText(c['label'])
-                    else:dialog.accept()
+                    selected=c['value'];position=scroll.verticalScrollBar().value();render(search.text())
+                    scroll.verticalScrollBar().setValue(position);name.setText(c['label'])
                 b.clicked.connect(lambda _=False,p=pick:p());b.enterEvent=lambda e,c=choice:name.setText(c['label']);grid.addWidget(b,i//12,i%12)
             grid.setRowStretch((len(rows)+11)//12,1)
         if dye_sort:
@@ -1282,8 +1280,7 @@ class QtClient(NativeClient):
                 name.setText('已恢复默认顺序。')
             dialog.sort_button.toggled.connect(sorting);dialog.reset_order_button.clicked.connect(reset_order)
         search.textChanged.connect(render);render()
-        if dye_sort:
-            actions=horizontal();actions.addStretch();actions.addWidget(button('关闭',dialog.close,ghost=True));outer.addLayout(actions)
+        actions=horizontal();actions.addStretch();actions.addWidget(button('关闭',dialog.close,ghost=True));outer.addLayout(actions)
         return self.show_dialog(dialog,near_cursor=True)
 
     def dye_icon(self,stain):
