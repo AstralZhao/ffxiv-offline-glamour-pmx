@@ -204,6 +204,34 @@ class PresetComboBox(ComboBox):
             self.setCurrentIndex(index);self.activated.emit(index)
 
 
+class HairstyleDelegate(W.QStyledItemDelegate):
+    def sizeHint(self,option,index):return C.QSize(420,84)
+
+    def paint(self,painter,option,index):
+        painter.save();rect=option.rect
+        selected=bool(option.state&W.QStyle.State_Selected);hovered=bool(option.state&W.QStyle.State_MouseOver)
+        painter.fillRect(rect,G.QColor('#294344'if selected else'#222d39'if hovered else'#191e27'))
+        icon=index.data(C.Qt.DecorationRole)
+        if isinstance(icon,G.QIcon):icon.paint(painter,C.QRect(rect.x()+6,rect.y()+6,72,72))
+        text=str(index.data(C.Qt.DisplayRole)or'');number,_,name=text.partition(' · ')
+        width=max(30,rect.width()-100);font=G.QFont(option.font);font.setBold(True);painter.setFont(font);painter.setPen(G.QColor('#edf1f7'))
+        painter.drawText(rect.x()+90,rect.y()+31,G.QFontMetrics(font).elidedText(number,C.Qt.ElideRight,width))
+        font.setBold(False);painter.setFont(font);painter.setPen(G.QColor('#b3c5d4'))
+        painter.drawText(rect.x()+90,rect.y()+57,G.QFontMetrics(font).elidedText(name,C.Qt.ElideRight,width));painter.restore()
+
+
+class HairstyleComboBox(PresetComboBox):
+    """Hair ID/name substring search with the same large-thumbnail popup on both routes."""
+    def __init__(self,parent=None):
+        super().__init__(parent);self.lineEdit().setPlaceholderText('搜索发型编号或名称…')
+        self.setIconSize(C.QSize(44,44));self.setMinimumHeight(52);self.setMaxVisibleItems(5)
+        self.completer().setMaxVisibleItems(5)
+        for view in(self.view(),self.completer().popup()):
+            view.setItemDelegate(HairstyleDelegate(view));view.setIconSize(C.QSize(72,72));view.setUniformItemSizes(True)
+            view.setMinimumWidth(420);view.setMaximumHeight(430);view.setTextElideMode(C.Qt.ElideRight)
+            view.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff);view.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel)
+
+
 def visibility_icon(hidden=False):
     image=G.QPixmap(40,40);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)
@@ -223,10 +251,7 @@ def swatch_icon(color,*,unavailable=False):
     image=G.QPixmap(32,32);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)
     painter.setBrush(G.QColor(color));painter.setPen(G.QPen(G.QColor('#778495'),1))
-    painter.drawRoundedRect(C.QRectF(1.5,1.5,13,13),3,3)
-    if unavailable:
-        painter.setBrush(G.QColor('#38252b'));painter.setPen(G.QPen(G.QColor('#f1aaa1'),1.6))
-        painter.drawEllipse(C.QRectF(1.5,1.5,13,13));painter.drawLine(C.QPointF(3.5,12.5),C.QPointF(12.5,3.5))
+    painter.drawRect(C.QRectF(1.5,1.5,13,13))
     painter.end();icon=G.QIcon(image)
     if unavailable:icon.addPixmap(image,G.QIcon.Disabled)
     return icon

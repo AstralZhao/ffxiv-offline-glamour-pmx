@@ -21,7 +21,7 @@ from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_s
 from client import NativeClient,color_text
 from effect_clock import EffectClock
 from app_paths import paths,migrate
-from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -110,6 +110,20 @@ class NativeView(W.QWidget):
         event.accept()
 
 
+def hairstyle_choices_with_names(choices):
+    try:
+        profile=json.loads((ROOT/'artifacts/cn-data/hairstyle-names.json').read_bytes())
+        expected=json.loads((ROOT/'docs/cn-barber-hair-menu.json').read_bytes())['client_version']
+        names=profile['hairstyles']if profile['version']==1 and profile['region']=='CN'and profile['client_version']==expected else{}
+    except(OSError,ValueError,KeyError):names={}
+    rows=[]
+    for choice in choices:
+        key=f"{choice.get('icon_id',0)}:{choice.get('unlock_link',0)}:{choice['value']}";record=names.get(key)
+        name=record['name']if record else'当前预设'if not choice.get('icon_id')else'基础发型'if not choice.get('unlock_link')else'未命名发型'
+        rows.append({**choice,'label':f"发型 {choice['value']} · {name}"})
+    return rows
+
+
 class OutfitCard(W.QFrame):
     selected=C.Signal(str)
     def __init__(self,slot,controller):
@@ -157,8 +171,7 @@ class OutfitCard(W.QFrame):
             name=dye['name']if dye and stain else'原色'
             color='#%06x'%(dye['color']&0xffffff)if dye and stain else'#91a0b4'
             b.setEnabled(count>=ch and not hidden)
-            b.setText(f'{ch}区');native_icon=self.controller.dye_icon(stain)if count>=ch and stain else G.QIcon()
-            b.setIcon(native_icon if not native_icon.isNull()else swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(16,16))
+            b.setText(f'{ch}区');b.setIcon(swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(16,16))
             b.setStyleSheet('QPushButton:disabled { background:#38252b; color:#e3aaa3; border:1px dashed #a46367; font-weight:600; }'if count<ch else'')
             b.setToolTip(f'第{ch}染色区 · '+(name if count>=ch else'不可染色'))
 
@@ -1077,7 +1090,7 @@ class QtClient(NativeClient):
         name=label('选择颜色，立即预览','Muted');outer.addWidget(name)
         search=W.QLineEdit();search.setPlaceholderText('搜索名称');search.setClearButtonEnabled(True);outer.addWidget(search)
         scroll=W.QScrollArea();scroll.setWidgetResizable(True);scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
-        content=W.QWidget();grid=W.QGridLayout(content);grid.setSpacing(8);scroll.setWidget(content);outer.addWidget(scroll,1)
+        content=W.QWidget();grid=W.QGridLayout(content);grid.setSpacing(3);grid.setAlignment(C.Qt.AlignTop|C.Qt.AlignLeft);scroll.setWidget(content);outer.addWidget(scroll,1)
         dialog.icon_buttons={}
         def refresh_icons(changed):
             for identifier in changed:
@@ -1090,16 +1103,13 @@ class QtClient(NativeClient):
                 if item.widget():item.widget().hide();item.widget().deleteLater()
             rows=[choice for choice in choices if text in choice['label']]
             for i,choice in enumerate(rows):
-                color=choice.get('color','#333b48');b=button('✓'if choice['value']==selected else'')
-                b.setFixedSize(40,40);b.setToolTip(choice['label']);b.setAccessibleName(choice['label']);b.setStyleSheet(f'QPushButton {{ background:{color};color:{color_text(color)};border:1px solid #657387;border-radius:7px;font-size:18px; }} QPushButton:hover {{ border:2px solid white; }}')
-                if choice.get('icon_id'):
-                    selected_border='2px solid #a6e7d8'if choice['value']==selected else'1px solid #465366'
-                    b.setText('');b.setIcon(self.icon(choice['icon_id']));b.setIconSize(C.QSize(32,32))
-                    b.setStyleSheet('QPushButton { background:#202733;padding:2px;border:'+selected_border+';border-radius:6px; } QPushButton:hover { border:2px solid white; }')
-                    dialog.icon_buttons.setdefault(choice['icon_id'],[]).append(b)
+                color=choice.get('color','#333b48');b=button('')
+                border='2px solid #d2fff5'if choice['value']==selected else'1px solid #58626c'
+                b.setFixedSize(28,28);b.setToolTip(choice['label']);b.setAccessibleName(choice['label'])
+                b.setStyleSheet(f'QPushButton {{ background:{color};border:{border};border-radius:0;padding:0; }} QPushButton:hover {{ border:2px solid white; }}')
                 def pick(c=choice):callback(c['value']);dialog.accept()
-                b.clicked.connect(lambda _=False,p=pick:p());b.enterEvent=lambda e,c=choice:name.setText(c['label']);grid.addWidget(b,i//8,i%8)
-            grid.setRowStretch((len(rows)+7)//8,1)
+                b.clicked.connect(lambda _=False,p=pick:p());b.enterEvent=lambda e,c=choice:name.setText(c['label']);grid.addWidget(b,i//12,i%12)
+            grid.setRowStretch((len(rows)+11)//12,1)
         search.textChanged.connect(render);render();return self.show_dialog(dialog)
 
     def dye_icon(self,stain):
@@ -1375,7 +1385,7 @@ class AppearanceDialog(W.QDialog):
                 from cn_barber_hair import hair_compatible
                 choices=[choice for choice in choices if hair_compatible(choice,c.draft)]
             if not any(choice['value']==value for choice in choices):choices.append({'value':value,'label':str(value)+'（当前预设）'})
-            if field=='hair':choices.sort(key=lambda choice:choice['value'])
+            if field=='hair':choices=hairstyle_choices_with_names(sorted(choices,key=lambda choice:choice['value']))
             if option['kind']=='color':
                 selected=next(choice for choice in choices if choice['value']==value);color=selected.get('color','#333b48')
                 control=button('颜色 '+str(value));control.setIcon(swatch_icon(color));control.setIconSize(C.QSize(16,16));control.setStyleSheet('QPushButton { text-align:left; }')
@@ -1391,10 +1401,10 @@ class AppearanceDialog(W.QDialog):
                 control.valueChanged.connect(lambda v,o=option,n=number:(n.setText(str(v)),c.editor_change(o,v)))
                 self.field_controls[field]=container;rows[field]=(option['label'],container);continue
             else:
-                control=ComboBox()
+                control=HairstyleComboBox()if field=='hair'else ComboBox()
                 control.setProperty('appearance_field',field)
                 if field=='hair':control.setToolTip(f'共 {len(choices)} 款；包含理发店解锁发型，无需游戏内已解锁。按当前种族、性别和脸型筛选。')
-                if any(choice.get('icon_id')for choice in choices):
+                if field!='hair'and any(choice.get('icon_id')for choice in choices):
                     control.setIconSize(C.QSize(44,44));control.setMinimumHeight(50);control.setMaxVisibleItems(7)
                     control.setStyleSheet('QComboBox { combobox-popup:0; }')
                     view=W.QListView(control);view.setIconSize(C.QSize(44,44));view.setUniformItemSizes(True);view.setMaximumHeight(380)
