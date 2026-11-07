@@ -816,6 +816,11 @@ class QtClient(NativeClient):
         if not groups:self.message.set('未找到这件装备的同套关联');return
         return self.show_dialog(RelatedEquipmentDialog(self,identifier,groups))
 
+    def equipment_choice(self,slot,row):
+        previous=self.hidden_equipment.get(slot,self.state['equipment'][slot]);count=row.get('dye_count',0)
+        return {'item_id':row['item_id'],'first':previous['first']if count>=1 else 0,
+            'second':previous['second']if count>=2 else 0}
+
     def try_equipment_rows(self,rows):
         if not self.ready or self.closing:return
         slots=[row['slot']for row in rows]
@@ -823,9 +828,10 @@ class QtClient(NativeClient):
         for row in rows:
             slot=row['slot']
             if slot not in SLOTS:continue
-            self.items[row['item_id']]=row;self.hidden_equipment.pop(slot,None)
+            self.items[row['item_id']]=row
             if self.state['equipment'][slot]['item_id']!=row['item_id']:
-                self.state['equipment'][slot]={'item_id':row['item_id'],'first':0,'second':0}
+                self.state['equipment'][slot]=self.equipment_choice(slot,row)
+            self.hidden_equipment.pop(slot,None)
         self.update_outfit();self.queue_render()
 
     def open_equipment_details(self,row):
@@ -943,7 +949,7 @@ class QtClient(NativeClient):
                 'name':row['name'],'count':self.count_note.text(),'page':self.page_index,'pages':self.page_count,'total':self.catalog_total,
                 'filters':self.filter_signature(),'favorite_snapshot':self.favorite_snapshot}
             self.folder=row['model_set'];self.query.set('');self.load_catalog();return
-        self.state['equipment'][self.slot_key()]={'item_id':row['item_id'],'first':0,'second':0};self.update_outfit();self.queue_render()
+        slot=self.slot_key();self.state['equipment'][slot]=self.equipment_choice(slot,row);self.update_outfit();self.queue_render()
 
     def back_folder(self):
         if self.folder is None or not self.outer:return
