@@ -284,7 +284,7 @@ def visibility_icon(hidden=False):
     painter.end();return G.QIcon(image)
 
 
-def swatch_icon(color,*,unavailable=False,layers=None):
+def swatch_icon(color,*,unavailable=False,layers=None,metallic=False):
     if layers is not None and not unavailable:
         # Reuse the authored masks/diagonal relief as UI decoration. Selection
         # stays software-owned; this does not claim the game's UI shader parity.
@@ -292,7 +292,7 @@ def swatch_icon(color,*,unavailable=False,layers=None):
         source=layers.convertToFormat(G.QImage.Format_RGBA8888)
         pixels=np.frombuffer(source.bits(),dtype=np.uint8).reshape(40,source.bytesPerLine())[:,:320].reshape(40,80,4)
         mask=pixels[:,:40,3];gradient=pixels[:,40:,:3].astype(np.float32)
-        delta=(gradient[::-1,::-1]-gradient)*(191/255)*.5
+        delta=(gradient[::-1,::-1]-gradient)*(191/255)*.5 if metallic else 0
         tint=G.QColor(color);rgb=np.array((tint.red(),tint.green(),tint.blue()),dtype=np.float32)
         rgba=np.empty((40,40,4),dtype=np.uint8);rgba[:,:,:3]=np.clip(np.rint(rgb+delta),0,255).astype(np.uint8);rgba[:,:,3]=mask
         native=G.QImage(rgba.data,40,40,160,G.QImage.Format_RGBA8888).copy();return G.QIcon(G.QPixmap.fromImage(native))

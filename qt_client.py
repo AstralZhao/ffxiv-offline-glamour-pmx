@@ -171,7 +171,7 @@ class OutfitCard(W.QFrame):
             name=dye['name']if dye and stain else'原色'
             color='#%06x'%(dye['color']&0xffffff)if dye and stain else'#91a0b4'
             b.setEnabled(count>=ch and not hidden)
-            b.setText(f'{ch}区');b.setIcon(self.controller.color_swatch_icon(color,unavailable=count<ch));b.setIconSize(C.QSize(16,16))
+            b.setText(f'{ch}区');b.setIcon(self.controller.color_swatch_icon(color,unavailable=count<ch,metallic=bool(dye and stain and dye.get('metallic',False))));b.setIconSize(C.QSize(16,16))
             b.setStyleSheet('QPushButton:disabled { background:#38252b; color:#e3aaa3; border:1px dashed #a46367; font-weight:600; }'if count<ch else'')
             b.setToolTip(f'第{ch}染色区 · '+(name if count>=ch else'不可染色'))
 
@@ -633,13 +633,13 @@ class QtClient(NativeClient):
 
     def search_changed(self,text):self.query.value=text;self.schedule_search()
 
-    def color_swatch_icon(self,color,*,unavailable=False):
+    def color_swatch_icon(self,color,*,unavailable=False,metallic=False):
         if unavailable:return swatch_icon(color,unavailable=True)
         if self.swatch_layers is None and not self.swatch_failed and self.engine and self.engine.item_icons and not self.closing and -1 not in self.pending_icons:
             self.pending_icons[-1]=self.icon_pool.submit(self.engine.item_icons.color_swatch_layers_png)
             if self.icon_timer is None:self.icon_timer=self.root.after(30,self.poll_icons)
-        key=(color,self.swatch_layers is not None)
-        if key not in self.swatch_icons:self.swatch_icons[key]=swatch_icon(color,layers=self.swatch_layers)
+        key=(color,bool(metallic),self.swatch_layers is not None)
+        if key not in self.swatch_icons:self.swatch_icons[key]=swatch_icon(color,layers=self.swatch_layers,metallic=metallic)
         self.swatch_icons.move_to_end(key)
         while len(self.swatch_icons)>256:self.swatch_icons.popitem(last=False)
         return self.swatch_icons[key]
@@ -1125,7 +1125,7 @@ class QtClient(NativeClient):
         dialog.icon_buttons={};dialog.color_buttons=[]
         def refresh_icons(changed):
             if -1 in changed:
-                for control,color in dialog.color_buttons:control.setIcon(self.color_swatch_icon(color))
+                for control,color,metallic in dialog.color_buttons:control.setIcon(self.color_swatch_icon(color,metallic=metallic))
             for identifier in changed:
                 for control in dialog.icon_buttons.get(identifier,[]):control.setIcon(self.icon(identifier))
         dialog.refresh_icons=refresh_icons
@@ -1170,7 +1170,7 @@ class QtClient(NativeClient):
                     b.sorting=dialog.sort_button.isChecked();b.setCursor(C.Qt.OpenHandCursor if b.sorting and b.value else C.Qt.PointingHandCursor)
                 border='2px solid #d2fff5'if choice['value']==selected else'1px solid #58626c'
                 b.setFixedSize(28,28);b.setToolTip(choice['label']);b.setAccessibleName(choice['label'])
-                b.setIcon(self.color_swatch_icon(color));b.setIconSize(C.QSize(28,28));dialog.color_buttons.append((b,color))
+                metallic=bool(choice.get('metallic',False));b.setIcon(self.color_swatch_icon(color,metallic=metallic));b.setIconSize(C.QSize(28,28));dialog.color_buttons.append((b,color,metallic))
                 b.setStyleSheet(f'QPushButton {{ background:transparent;border:{border};border-radius:0;padding:0; }} QPushButton:hover {{ border:2px solid white; }}')
                 def pick(c=choice):
                     if dye_sort and dialog.sort_button.isChecked():return
@@ -1198,7 +1198,7 @@ class QtClient(NativeClient):
     def open_dyes(self,slot,channel):
         choice=self.state['equipment'][slot];item=self.items.get(choice['item_id'],{})
         if item.get('dye_count',0)<channel:return
-        colors=[{'value':0,'label':'原色','color':'#333b48'}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff),'icon_id':self.library.dye_icon(d['stain_id'])if self.library else None}for d in self.boot['dyes']if d['stain_id']]
+        colors=[{'value':0,'label':'原色','color':'#333b48'}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff),'metallic':bool(d['metallic']),'icon_id':self.library.dye_icon(d['stain_id'])if self.library else None}for d in self.boot['dyes']if d['stain_id']]
         item_id=choice['item_id']
         def pick(value):
             if self.state['equipment'][slot]['item_id']!=item_id:return
