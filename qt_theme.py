@@ -125,6 +125,12 @@ class LoadingSpinner(W.QWidget):
                 painter.drawText(self.rect(),C.Qt.AlignCenter,f'{self.progress:.0%}')
 
 
+class AppearanceSlider(W.QSlider):
+    def wheelEvent(self,event):
+        # Wheel belongs to the scrollable appearance page, even when focused.
+        event.ignore()
+
+
 class ComboBox(W.QComboBox):
     def wheelEvent(self,event):
         # Let the surrounding page scroll without changing the selected value.

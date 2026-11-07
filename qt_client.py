@@ -21,7 +21,7 @@ from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_s
 from client import NativeClient,color_text
 from effect_clock import EffectClock
 from app_paths import paths,migrate,no_links
-from qt_theme import STYLE,ACCENT,MUTED,UNDYED_SWATCH_COLOR,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,dye_swap_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,UNDYED_SWATCH_COLOR,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,dye_swap_icon,AppearanceSlider,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -1185,7 +1185,8 @@ class QtClient(NativeClient):
 
     def palette(self,title,choices,selected,callback,*,dye_sort=False):
         parent=self.editor if self.editor and self.editor.isVisible()else self.window
-        dialog=W.QDialog(parent);dialog.setWindowTitle(title);dialog.resize(550,610);dialog.setMinimumSize(460,460);dialog.setWindowModality(C.Qt.NonModal if dye_sort else C.Qt.WindowModal)
+        dialog=W.QDialog(parent);dialog.setWindowTitle(title);dialog.resize(550,610);dialog.setMinimumSize(460,460);dialog.setWindowModality(C.Qt.NonModal)
+        if parent is self.editor:parent.finished.connect(dialog.close)
         outer=vertical(dialog,22,14);outer.addWidget(label(title,'Title'))
         name=label('选择颜色，立即预览','Muted');outer.addWidget(name)
         choices=list(choices);defaults=list(choices)
@@ -1318,12 +1319,12 @@ class QtClient(NativeClient):
 
     def open_editor(self,key=None):
         if not self.boot or self.job:return
-        if self.editor and self.editor.isVisible():self.editor.raise_();return
+        if self.editor and self.editor.isVisible():self.character_manager.close();self.editor.raise_();return
         key=key or self.boot['preset_id']
         def done(record):
             self.editor_record=record;self.draft=deepcopy(record['appearance']['rendered_parameters']if record['appearance']['is_preview']else record['parameters'])
             self.editor_menu_tribe=None
-            self.editor=AppearanceDialog(self);self.show_dialog(self.editor)
+            self.editor=AppearanceDialog(self);self.show_dialog(self.editor);self.character_manager.close()
         self.submit(self.engine.describe_appearance,done,key)
 
     def editor_change(self,option,value):
@@ -1595,6 +1596,8 @@ class AppearanceDialog(W.QDialog):
         self.tabs.setEnabled(not busy or live);self.save_button.setEnabled(not busy);self.update_button.setEnabled(not busy);self.restore_button.setEnabled(not busy)
 
     def build_fields(self):
+        for dialog in self.c.dialogs[:]:
+            if dialog.parent()is self:dialog.close()
         active=self.tabs.currentIndex()
         while self.tabs.count():
             page=self.tabs.widget(0);self.tabs.removeTab(0);page.deleteLater()
@@ -1625,7 +1628,7 @@ class AppearanceDialog(W.QDialog):
                     c.palette(o['label'],colors,selected,pick)
                 control.clicked.connect(lambda _=False,p=palette:p())
             elif option['kind']=='slider':
-                container=W.QWidget();row=horizontal(container,0);control=W.QSlider(C.Qt.Horizontal);control.setRange(min(x['value']for x in choices),max(x['value']for x in choices));control.setValue(value)
+                container=W.QWidget();row=horizontal(container,0);control=AppearanceSlider(C.Qt.Horizontal);control.setRange(min(x['value']for x in choices),max(x['value']for x in choices));control.setValue(value)
                 number=label(str(value),'Muted');number.setFixedWidth(28);row.addWidget(control,1);row.addWidget(number)
                 control.valueChanged.connect(lambda v,o=option,n=number:(n.setText(str(v)),c.editor_change(o,v)))
                 self.field_controls[field]=container;rows[field]=(option['label'],container);continue
