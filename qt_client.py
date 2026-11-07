@@ -433,6 +433,7 @@ class QtClient(NativeClient):
             def callback(result):
                 self.hidden_equipment.clear();original_callback(result)
                 self.save_dye_settings({slot:{key:choice[key]for key in('first','second')}for slot,choice in result['state']['equipment'].items()})
+                self.applied_template_id=arguments[1]['id']
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
@@ -1324,12 +1325,37 @@ class QtClient(NativeClient):
         self.live_edit_job=live
         self.submit(self.engine.run,done,'appearance_preview'if preview else'appearance_save',payload)
 
+    def store_outfit(self,name,identifier=None):
+        name=name.strip()[:32]
+        if not name:raise ValueError('请为模版起个名字')
+        if identifier is None:
+            rows=self.engine.save({'name':name,'state':self.good});identifier=rows[0]['id']
+        else:
+            rows=self.engine.saved();record=next((row for row in rows if row['id']==identifier),None)
+            if record is None:raise ValueError('这套模版已不存在，请另存为新模版')
+            record.update(name=name,state={'equipment':parse_state(self.good)['equipment']},time=time.strftime('%Y-%m-%d %H:%M'))
+            self.engine.write_saved(rows)
+        self.applied_template_id=identifier
+
     def save_outfit(self):
-        if not self.ready or self.job:return
-        name,ok=W.QInputDialog.getText(self.window,'保存模版','给这套模版起个名字')
-        if ok and name.strip():
-            try:self.engine.save({'name':name,'state':self.good});self.message.set('模版已保存')
-            except Exception as error:self.message.set(str(error))
+        if not self.ready:return
+        if self.job or self.dirty or self.effect_deferred is not None:
+            self.message.set('预览正在更新，请完成后再保存模版');return
+        try:
+            identifier=getattr(self,'applied_template_id',None)
+            record=next((row for row in self.engine.saved()if row['id']==identifier),None)if identifier else None
+            if record:
+                dialog=W.QMessageBox(self.window);dialog.setWindowTitle('保存模版')
+                dialog.setText('将当前装备和染色更新到“'+record['name']+'”？')
+                update=dialog.addButton('更新此模版',W.QMessageBox.AcceptRole)
+                save_as=dialog.addButton('另存为新模版',W.QMessageBox.ActionRole)
+                dialog.addButton('取消',W.QMessageBox.RejectRole);dialog.setDefaultButton(update);dialog.exec()
+                if dialog.clickedButton()is update:
+                    self.store_outfit(record['name'],record['id']);self.message.set('模版已更新');return
+                if dialog.clickedButton()is not save_as:return
+            name,ok=W.QInputDialog.getText(self.window,'另存为新模版'if record else'保存模版','给这套模版起个名字',text=record['name']if record else'')
+            if ok and name.strip():self.store_outfit(name);self.message.set('新模版已保存')
+        except Exception as error:self.message.set('模版未能保存：'+str(error))
 
     def saved_dialog(self):
         if not self.boot:return
