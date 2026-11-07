@@ -270,6 +270,15 @@ class HairstyleComboBox(PresetComboBox):
             view.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff);view.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel)
 
 
+def dye_swap_icon():
+    pixmap=G.QPixmap(18,18);pixmap.fill(C.Qt.transparent)
+    painter=G.QPainter(pixmap);painter.setRenderHint(G.QPainter.Antialiasing)
+    painter.setPen(G.QPen(G.QColor(ACCENT),1.6,C.Qt.SolidLine,C.Qt.RoundCap,C.Qt.RoundJoin))
+    for points in(((3,6),(15,6),(12,3)),((15,12),(3,12),(6,15))):
+        painter.drawLine(C.QPointF(*points[0]),C.QPointF(*points[1]));painter.drawLine(C.QPointF(*points[1]),C.QPointF(*points[2]))
+    painter.end();return G.QIcon(pixmap)
+
+
 def visibility_icon(hidden=False):
     image=G.QPixmap(40,40);image.setDevicePixelRatio(2);image.fill(C.Qt.transparent)
     painter=G.QPainter(image);painter.setRenderHint(G.QPainter.Antialiasing)

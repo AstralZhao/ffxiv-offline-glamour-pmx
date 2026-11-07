@@ -21,7 +21,7 @@ from app import DemoEngine,GAME,DEFAULT_PRESET,ROOT,SLOTS,equipment_rows,parse_s
 from client import NativeClient,color_text
 from effect_clock import EffectClock
 from app_paths import paths,migrate,no_links
-from qt_theme import STYLE,ACCENT,MUTED,UNDYED_SWATCH_COLOR,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,LoadingSpinner
+from qt_theme import STYLE,ACCENT,MUTED,UNDYED_SWATCH_COLOR,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,dye_swap_icon,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
 
@@ -139,9 +139,13 @@ class OutfitCard(W.QFrame):
         dyes=horizontal(spacing=5);self.dyes=[]
         for channel in(1,2):
             if channel==2:
-                self.swap_dyes=button('⇄',lambda:self.controller.swap_slot_dyes(self.slot),ghost=True)
+                self.swap_dyes=button('',lambda:self.controller.swap_slot_dyes(self.slot),ghost=True)
+                self.swap_dyes.setIcon(dye_swap_icon());self.swap_dyes.setIconSize(C.QSize(18,18))
+                self.swap_dyes.setStyleSheet('padding:0;')
                 self.swap_dyes.setFixedSize(22,20);self.swap_dyes.setToolTip('交换两个染色区的颜色');self.swap_dyes.setAccessibleName('交换染色区')
-                dyes.addWidget(self.swap_dyes);self.swap_dyes.hide()
+                self.swap_dyes_slot=W.QWidget();self.swap_dyes_slot.setFixedSize(22,20)
+                horizontal(self.swap_dyes_slot,0,0).addWidget(self.swap_dyes)
+                dyes.addWidget(self.swap_dyes_slot);self.swap_dyes.hide()
             b=button(f'● {channel}区',lambda ch=channel:self.controller.open_dyes(self.slot,ch));b.setProperty('dye',True)
             b.setMinimumWidth(62);b.setFixedHeight(20);dyes.addWidget(b);self.dyes.append(b)
         dyes.addStretch();content.addLayout(dyes)
@@ -1344,6 +1348,15 @@ class QtClient(NativeClient):
         if self.engine.active_preset==self.editor_record['id']and self.draft==self.engine.rendered_parameters:return
         self.submit_editor(True,live=True)
 
+    def restore_editor(self):
+        if not self.editor or self.job is not None:return
+        self.editor.preview_timer.stop()
+        def done(record):
+            if not self.editor:return
+            self.editor_record=record;self.draft=deepcopy(record['parameters']);self.editor_menu_tribe=None
+            self.editor.build_fields();self.editor.update_status();self.submit_editor(True)
+        if self.submit(self.engine.describe_appearance,done,self.editor_record['id']):self.editor.set_busy(True)
+
     def submit_editor(self,preview,*,live=False):
         if self.job:return
         record=self.editor_record;draft=deepcopy(self.draft)
@@ -1558,7 +1571,8 @@ class AppearanceDialog(W.QDialog):
         self.realtime.toggled.connect(lambda active:controller.queue_appearance_preview()if active else self.preview_timer.stop())
         progress=horizontal();self.spinner=LoadingSpinner(18);progress.addWidget(self.spinner)
         self.status=label('','Warning');progress.addWidget(self.status,1);outer.addLayout(progress)
-        actions=horizontal();actions.addWidget(button('关闭',self.reject,ghost=True));actions.addStretch()
+        actions=horizontal();actions.addWidget(button('关闭',self.reject,ghost=True))
+        self.restore_button=button('复原未保存修改',controller.restore_editor,ghost=True);actions.addWidget(self.restore_button);actions.addStretch()
         self.save_button=button('保存预设',lambda:controller.submit_editor(False));actions.addWidget(self.save_button)
         self.update_button=button('更新模型',lambda:controller.submit_editor(True),primary=True);actions.addWidget(self.update_button);outer.addLayout(actions)
         self.update_status()
@@ -1567,13 +1581,13 @@ class AppearanceDialog(W.QDialog):
         if self.c.job is None:super().reject()
 
     def set_busy(self,busy,*,live=False):
-        self.tabs.setEnabled(not busy or live);self.save_button.setEnabled(not busy);self.update_button.setEnabled(not busy)
+        self.tabs.setEnabled(not busy or live);self.save_button.setEnabled(not busy);self.update_button.setEnabled(not busy);self.restore_button.setEnabled(not busy)
 
     def build_fields(self):
         active=self.tabs.currentIndex()
         while self.tabs.count():
             page=self.tabs.widget(0);self.tabs.removeTab(0);page.deleteLater()
-        self.forms={};self.choice_controls={};self.feature_controls={};self.field_controls={};self.toggle_controls={};c=self.c
+        self.forms={};self.choice_controls={};self.feature_controls={};self.field_controls={};self.toggle_controls={};self.strength_controls={};c=self.c
         for name in('发型与体型','五官细节','特征与彩绘'):
             scroll=W.QScrollArea();scroll.setWidgetResizable(True);content=W.QWidget();form=W.QFormLayout(content)
             form.setContentsMargins(8,20,16,20);form.setHorizontalSpacing(24);form.setVerticalSpacing(18);form.setFieldGrowthPolicy(W.QFormLayout.AllNonFixedFieldsGrow)
@@ -1588,12 +1602,16 @@ class AppearanceDialog(W.QDialog):
             if field=='hair':choices=hairstyle_choices_with_names(sorted(choices,key=lambda choice:choice['value']))
             if option['kind']=='color':
                 selected=next(choice for choice in choices if choice['value']==value);color=selected.get('color','#333b48')
-                control=button('颜色 '+str(value));control.setIcon(c.color_swatch_icon(color));control.setIconSize(C.QSize(16,16));control.setStyleSheet('QPushButton { text-align:left; }')
-                def palette(o=option,b=control):
+                strength=field=='face_paint_color'or field=='lip_color_or_fur_pattern'and c.draft['race']!=7
+                control=button('颜色 '+str(value&127 if strength else value));control.setIcon(c.color_swatch_icon(color));control.setIconSize(C.QSize(16,16));control.setStyleSheet('QPushButton { text-align:left; }')
+                def palette(o=option,b=control,has_strength=strength):
                     def pick(v):
+                        v=v|(c.draft[o['field']]&128)if has_strength else v
                         c.editor_change(o,v);chosen=next(x for x in o['choices']if x['value']==v)
-                        b.setText('颜色 '+str(v));b.setIcon(c.color_swatch_icon(chosen.get('color','#fff')))
-                    c.palette(o['label'],o['choices'],c.draft[o['field']],pick)
+                        b.setText('颜色 '+str(v&127 if has_strength else v));b.setIcon(c.color_swatch_icon(chosen.get('color','#fff')))
+                    colors=[x for x in o['choices']if x['value']<128]if has_strength else o['choices']
+                    selected=c.draft[o['field']]&(127 if has_strength else 255)
+                    c.palette(o['label'],colors,selected,pick)
                 control.clicked.connect(lambda _=False,p=palette:p())
             elif option['kind']=='slider':
                 container=W.QWidget();row=horizontal(container,0);control=W.QSlider(C.Qt.Horizontal);control.setRange(min(x['value']for x in choices),max(x['value']for x in choices));control.setValue(value)
@@ -1615,8 +1633,7 @@ class AppearanceDialog(W.QDialog):
                 control.setCurrentIndex(next(i for i,x in enumerate(choices)if x['value']==value))
                 control.activated.connect(lambda index,o=option,w=control:c.editor_change(o,w.itemData(index)))
             self.field_controls[field]=control;rows[field]=(option['label'],control)
-        toggles=[('highlight_flags',128,'启用挑染'),('mouth',128,'启用唇色'),('eyes',128,'使用小虹膜'),('face_paint',128,'镜像彩绘')]+[('facial_features',1<<i,f'面部特征 {i+1}')for i in range(7)]
-        if c.draft['race']==7:toggles=[t for t in toggles if t[:2]!=('mouth',128)]
+        toggles=[('highlight_flags',128,'启用挑染'),('eyes',128,'使用小虹膜'),('face_paint',128,'镜像彩绘')]+[('facial_features',1<<i,f'面部特征 {i+1}')for i in range(7)]
         for field,bit,text in toggles:
             control=W.QCheckBox(text);control.setChecked(bool(c.draft[field]&bit))
             if field=='facial_features':
@@ -1625,6 +1642,16 @@ class AppearanceDialog(W.QDialog):
                 c.draft[f]=(c.draft[f]|b)if checked else(c.draft[f]&~b);self.update_status();c.queue_appearance_preview()
             control.toggled.connect(toggle)
             self.toggle_controls[field,bit]=control;rows[field,bit]=('',control)
+        for field,key,title,allow_none in(('lip_color_or_fur_pattern','lip_strength','唇色浓淡',True),('face_paint_color','paint_strength','面妆浓淡',False)):
+            if field not in rows or field=='lip_color_or_fur_pattern'and c.draft['race']==7:continue
+            control=ComboBox()
+            if allow_none:control.addItem('无','none')
+            control.addItem('淡','light');control.addItem('浓','dark')
+            current='none'if allow_none and not c.draft['mouth']&128 else'light'if c.draft[field]&128 else'dark'
+            control.setCurrentIndex(control.findData(current))
+            control.activated.connect(lambda index,w=control,f=field:self.set_color_strength(f,w.itemData(index)))
+            self.strength_controls[field]=control;rows[key]=(title,control)
+            if allow_none:self.field_controls[field].setEnabled(bool(c.draft['mouth']&128))
         # Place each color and switch beside the appearance it changes. These
         # are the original controls/callbacks; resource and DAT values are intact.
         layout=[('发型与体型',[
@@ -1634,11 +1661,11 @@ class AppearanceDialog(W.QDialog):
             ('五官细节',[
                 ('脸部轮廓',['face','jaw']),
                 ('眉眼',['eyebrows','eyes',('eyes',128),'right_eye_color','left_eye_color']),
-                ('鼻与嘴',['nose','mouth',('mouth',128)]+([]if c.draft['race']==7 else['lip_color_or_fur_pattern']))]),
+                ('鼻与嘴',['nose','mouth','lip_strength']+([]if c.draft['race']==7 else['lip_color_or_fur_pattern']))]),
             ('特征与彩绘',[
                 ('面部特征',[('facial_features',1<<i)for i in range(7)]+['facial_feature_color']),
                 ('毛纹',['lip_color_or_fur_pattern']if c.draft['race']==7 else[]),
-                ('面部彩绘',['face_paint',('face_paint',128),'face_paint_color'])])]
+                ('面部彩绘',['face_paint',('face_paint',128),'paint_strength','face_paint_color'])])]
         for tab,sections in layout:
             form=self.forms[tab]
             for title,keys in sections:
@@ -1657,6 +1684,15 @@ class AppearanceDialog(W.QDialog):
         for text,control in rows.values():self.forms['特征与彩绘'].addRow(text,control)
         self.refresh_icons()
         if active>=0:self.tabs.setCurrentIndex(active)
+
+    def set_color_strength(self,field,mode):
+        c=self.c
+        if field=='lip_color_or_fur_pattern':
+            if c.draft['race']==7:return
+            c.draft['mouth']=(c.draft['mouth']&127)if mode=='none'else(c.draft['mouth']|128)
+            self.field_controls[field].setEnabled(mode!='none')
+        if mode!='none':c.draft[field]=(c.draft[field]&127)|(128 if mode=='light'else 0)
+        self.update_status();c.queue_appearance_preview()
 
     def refresh_icons(self,changed=None):
         if changed is None or -1 in changed:
