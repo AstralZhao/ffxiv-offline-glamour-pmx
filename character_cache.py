@@ -76,7 +76,7 @@ class CharacterCache:
         self.live_root=self.root/'live'/uuid.uuid4().hex;self.live_directories=set()
         code,profiles=application_files();native=native_static_assets()
         ui_only={'qt_client','qt_theme','qt_runtime','qt_settings','launch','client','settings','catalogue','catalogue_cache',
-            'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection','effect_clock','appearance_options','qt_saved_outfits',
+            'equipment_library','equipment_tag_features','user_guide','icons','gpu_selection','effect_clock','appearance_options','qt_saved_outfits','qt_facewear',
             'qt_resource_source','qt_first_run','qt_storage','storage_management',
             'app_paths','app_version','qt_updates','updates','client-version'}
         self.identity={'format':3,'client':pack.source_version(),

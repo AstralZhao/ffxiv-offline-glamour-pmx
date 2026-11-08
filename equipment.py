@@ -87,7 +87,8 @@ class DemoOutfit(DemoMaterials,PresetOutfit):
             if arrays['skeleton_parents'][index]>=0 else None)for name,index in self.names.items()}
 
     def extra_source(self,item):
-        kind={'Head':('extra_met','met','m'),'Body':('extra_top','top','t')}.get(item['slot'])
+        kind={'Head':('extra_met','met','m'),'Facewear0':('extra_met','met','m'),
+            'Facewear1':('extra_met','met','m'),'Body':('extra_top','top','t')}.get(item['slot'])
         if kind is None:raise NotImplementedError('当前部位没有可连接的原生装备骨架')
         table,folder,prefix=kind
         if table not in self.est:

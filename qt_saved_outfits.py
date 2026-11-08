@@ -23,7 +23,7 @@ class SavedOutfitsDialog(W.QDialog):
         self.total=label('','Badge');heading.addWidget(self.total)
         self.batch_export_button=button('批量导出',self.export_batch);heading.addWidget(self.batch_export_button)
         self.batch_import_button=button('批量导入',self.import_batch);heading.addWidget(self.batch_import_button);outer.addLayout(heading)
-        outer.addWidget(label('仅应用装备和染色，保留当前角色与观察视角。','Muted'))
+        outer.addWidget(label('应用装备、染色和面部配饰，保留当前角色与观察视角。','Muted'))
         tools=horizontal();self.search=W.QLineEdit();self.search.setPlaceholderText('搜索模版名称、装备名称或编号');self.search.setClearButtonEnabled(True)
         tools.addWidget(self.search,1);self.sort=ComboBox();self.sort.addItem('最近保存','recent');self.sort.addItem('最早保存','oldest');self.sort.addItem('名称排序','name');tools.addWidget(self.sort)
         tools.addWidget(button('刷新',self.reload,ghost=True));self.import_code_button=button('导入模版码',self.import_code);tools.addWidget(self.import_code_button);outer.addLayout(tools)
@@ -62,6 +62,9 @@ class SavedOutfitsDialog(W.QDialog):
                 for identifier,name,icon in db.execute('SELECT item_id,name,icon_id FROM equipment WHERE item_id IN ('+','.join('?'for _ in chunk)+')',chunk):
                     self.metadata[identifier]={'name':name,'icon_id':icon}
         self.search_text={r['id']:normalized(r['name']+' '+r.get('time','')+' '+' '.join(str(c['item_id'])+' '+self.metadata.get(c['item_id'],{}).get('name','')for c in r['state']['equipment'].values()if c.get('item_id')))for r in self.records}
+        from facewear import catalogue
+        facewear=catalogue()[2]
+        for r in self.records:self.search_text[r['id']]+=' '+normalized(' '.join(facewear.get(i,{}).get('name','')for i in r['state'].get('facewear',[0,0])))
         self.total.setText(f'{len(self.records):,} 套');self.batch_export_button.setEnabled(bool(self.records));self.filter(reset=False)
 
     def filter(self,*,reset=True):
@@ -86,7 +89,8 @@ class SavedOutfitsDialog(W.QDialog):
             identifier=self.metadata.get(choices[slot]['item_id'],{}).get('icon_id')if slot else None
             self.list_icons.append((image,identifier));row.addWidget(image)
             text=vertical(spacing=5);name=label(record['name']);name.setToolTip(record['name']);name.setStyleSheet('font-weight:600;');text.addWidget(name)
-            text.addWidget(label(f"{record.get('time','')} · {len(nonempty)} 件装备",'Muted'));row.addLayout(text,1)
+            faces=sum(bool(i)for i in record['state'].get('facewear',[0,0]))
+            text.addWidget(label(f"{record.get('time','')} · {len(nonempty)} 件装备"+(f' · {faces} 件面饰'if faces else''),'Muted'));row.addLayout(text,1)
             self.list.setItemWidget(item,widget)
         self.list.blockSignals(False)
         selected=next((i for i,r in enumerate(shown)if r['id']==self.selected_id),0)
@@ -122,6 +126,8 @@ class SavedOutfitsDialog(W.QDialog):
                     if stain:dyes.append(f'{index}区：'+self.c.dye_by_id.get(stain,{}).get('name',str(stain)))
                 if dyes:text.addWidget(label(' · '.join(dyes),'Muted'))
             row.addLayout(text,1);self.gear_layout.addWidget(card)
+        from qt_facewear import add_template_facewear
+        add_template_facewear(self,record)
         self.gear_layout.addStretch();self.refresh_icons()
 
     def refresh_icons(self,changed=None):
@@ -185,7 +191,7 @@ class TemplateExportDialog(W.QDialog):
         super().__init__(browser);self.setWindowTitle('模版导出码');self.resize(570,330)
         outer=vertical(self,22,14);outer.addWidget(label('模版导出码','Title'));name_label=label(name,'Muted');name_label.setWordWrap(True);outer.addWidget(name_label)
         self.code=W.QPlainTextEdit();self.code.setReadOnly(True);self.code.setPlainText(code);outer.addWidget(self.code,1)
-        note=label('包含装备和双染色；对方可在“投影模版 → 导入模版码”新增模版。','Muted');note.setWordWrap(True);outer.addWidget(note)
+        note=label('包含装备、双染色和面部配饰；对方可在“投影模版 → 导入模版码”新增模版。','Muted');note.setWordWrap(True);outer.addWidget(note)
         actions=horizontal();self.status=label('','Muted');actions.addWidget(self.status,1)
         actions.addWidget(button('关闭',self.reject,ghost=True));self.copy_button=button('复制导出码',self.copy,primary=True);actions.addWidget(self.copy_button);outer.addLayout(actions)
 
@@ -197,7 +203,7 @@ class TemplateImportDialog(W.QDialog):
         super().__init__(browser);self.browser=browser;self.setWindowTitle('导入模版码');self.resize(570,430);self.record=None
         outer=vertical(self,22,14);outer.addWidget(label('导入模版码','Title'))
         hint=label('粘贴完整导出码，校验后新增一份模版。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
-        self.code=W.QPlainTextEdit();self.code.setPlaceholderText('HGG1.…');outer.addWidget(self.code,1)
+        self.code=W.QPlainTextEdit();self.code.setPlaceholderText('HGG1.… / HGG2.…');outer.addWidget(self.code,1)
         self.name=W.QLineEdit();self.name.setMaxLength(32);self.name.setPlaceholderText('模版名称');outer.addWidget(self.name)
         self.info=label('','Muted');self.info.setWordWrap(True);outer.addWidget(self.info)
         self.error=label('','Warning');self.error.setWordWrap(True);outer.addWidget(self.error)
@@ -213,7 +219,8 @@ class TemplateImportDialog(W.QDialog):
         try:self.record=self.browser.c.engine.inspect_template_code(self.code.toPlainText())
         except Exception as error:self.error.setText(str(error));return
         self.name.setText(self.record['name']);count=sum(c['item_id']is not None for c in self.record['state']['equipment'].values())
-        self.info.setText(f'{count} 件装备 · 含两个染色区 · 新增后可在列表中选择应用到当前角色。');self.add_button.setEnabled(True)
+        faces=sum(bool(i)for i in self.record['state'].get('facewear',[0,0]))
+        self.info.setText(f'{count} 件装备 · {faces} 件面饰 · 含两个染色区 · 新增后可在列表中选择应用到当前角色。');self.add_button.setEnabled(True)
 
     def add(self):
         try:record=self.browser.c.engine.import_template_code(self.code.toPlainText(),self.name.text())
@@ -228,7 +235,7 @@ class TemplateBatchDialog(W.QDialog):
         super().__init__(browser);self.browser=browser;self.records=records;self.raw=raw;self.importing=raw is not None
         title='批量导入模版'if self.importing else'批量导出模版';self.setWindowTitle(title);self.resize(620,520);self.setMinimumSize(460,370)
         outer=vertical(self,22,12);outer.addWidget(label(title,'Title'))
-        hint=label('勾选需要导入的模版。同名模版也会新增，不覆盖已有记录，不立即换装。'if self.importing else'勾选需要导出的模版，保存为一个文件；包含名称、装备与双染色。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
+        hint=label('勾选需要导入的模版。同名模版也会新增，不覆盖已有记录，不立即换装。'if self.importing else'勾选需要导出的模版，保存为一个文件；包含名称、装备、双染色与面部配饰。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
         tools=horizontal();self.search=W.QLineEdit();self.search.setPlaceholderText('搜索模版名称');self.search.setClearButtonEnabled(True);tools.addWidget(self.search,1)
         self.all_button=button('全选结果',lambda:self.check_visible(True));tools.addWidget(self.all_button)
         self.none_button=button('取消勾选',lambda:self.check_visible(False));tools.addWidget(self.none_button);outer.addLayout(tools)
@@ -236,7 +243,8 @@ class TemplateBatchDialog(W.QDialog):
         self.list.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel);outer.addWidget(self.list,1)
         for i,record in enumerate(records):
             count=sum(bool(c.get('item_id'))for c in record['state']['equipment'].values())
-            item=W.QListWidgetItem(record['name']+f'  ·  {count} 件装备');item.setToolTip(record['name']);item.setData(C.Qt.UserRole,i)
+            faces=sum(bool(v)for v in record['state'].get('facewear',[0,0]))
+            item=W.QListWidgetItem(record['name']+f'  ·  {count} 件装备'+(f' · {faces} 件面饰'if faces else''));item.setToolTip(record['name']);item.setData(C.Qt.UserRole,i)
             item.setFlags(C.Qt.ItemIsEnabled|C.Qt.ItemIsUserCheckable);item.setCheckState(C.Qt.Checked);item.setSizeHint(C.QSize(100,36));self.list.addItem(item)
         self.count=label('','Muted');outer.addWidget(self.count);self.error=label('','Warning');self.error.setWordWrap(True);outer.addWidget(self.error)
         actions=horizontal();actions.addStretch();actions.addWidget(button('取消',self.reject,ghost=True))

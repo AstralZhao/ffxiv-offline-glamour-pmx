@@ -51,7 +51,7 @@ def apply_pose(scene,outfit,pose_id,*,time_seconds=0.,pose_path=None):
         palette=np.asarray(mesh['palette']);old=mesh.get('joint_matrices')
         if old is None:old=scene.skinning[palette]
         if np.any(palette>=len(names)):
-            item=outfit.item_metadata(mesh['item_id'],mesh['slot']);attached=outfit.attachment(item)
+            item=mesh.get('attachment_item')or outfit.item_metadata(mesh['item_id'],mesh['slot']);attached=outfit.attachment(item)
             reverse={index:name for name,index in attached['names'].items()};owners=[]
             for index in palette:
                 name=reverse[int(index)]

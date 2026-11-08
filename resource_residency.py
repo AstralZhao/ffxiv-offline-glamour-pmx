@@ -134,4 +134,6 @@ def release_inactive_cpu(engine,scene,*,force=False):
         if value is not None:value.clear()
     if getattr(outfit,'head_parts',None) is not None:outfit.head_parts.cache.clear()
     engine.accessories.prepared.clear()
+    facewear=getattr(engine.character,'facewear',None)
+    if facewear is not None:facewear.prepared.clear()
     if hasattr(engine.pack,'release_idle'):engine.pack.release_idle(force=True)if force else engine.pack.release_idle()

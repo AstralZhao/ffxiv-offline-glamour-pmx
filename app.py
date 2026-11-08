@@ -78,9 +78,12 @@ def parse_state(raw):
     if type(pan_x)not in(int,float)or not math.isfinite(pan_x)or not -1<=pan_x<=1:raise ValueError('相机水平平移范围不正确')
     from pose_preview import validate_pose
     pose=validate_pose(raw.get('pose','default'))
+    from facewear import selection as facewear_selection
+    facewear=facewear_selection(raw.get('facewear'))
     state={'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan),'pan_x':float(pan_x)}
     if pose!='default':state['pose']=pose
     if visor:state['visor']=True
+    if any(facewear):state['facewear']=facewear
     return state
 
 
@@ -516,6 +519,7 @@ class DemoEngine:
         pose_id=state.get('pose','default')
         if pose_id!='default':selection.append(pose_id)
         if state.get('visor',False):selection.append('visor')
+        if state.get('facewear'):selection.append(['facewear',state['facewear']])
         key=json.dumps(selection,sort_keys=True)
         if key in self.scene_cache:
             scene=self.scene_cache[key];self.scene_cache.move_to_end(key)
@@ -524,6 +528,9 @@ class DemoEngine:
             scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
                 head=chosen['Head'],head_visible=state['head_visible'])
             scene=self.accessories.resolve(scene,state,info)
+            from facewear import Facewear
+            if not hasattr(self.character,'facewear'):self.character.facewear=Facewear(self.character)
+            scene=self.character.facewear.resolve(scene,state.get('facewear'))
             if pose_id!='default':
                 from pose_preview import apply_pose
                 scene=apply_pose(scene,self.character.outfit,pose_id,pose_path=self.character.pose_path)
@@ -765,10 +772,11 @@ class DemoEngine:
         return json.loads(path.read_bytes())if path.exists()else[]
 
     def save(self,payload):
+        from facewear import template_state
         name=payload.get('name','').strip()[:32]
         if not name:raise ValueError('请为模版起个名字')
         state=parse_state(payload['state']);rows=self.saved()
-        row={'id':secrets.token_hex(6),'name':name,'state':{'equipment':state['equipment']},
+        row={'id':secrets.token_hex(6),'name':name,'state':template_state(state),
             'time':time.strftime('%Y-%m-%d %H:%M')}
         rows=[row,*rows];self.write_saved(rows)
         return rows
@@ -786,6 +794,8 @@ class DemoEngine:
         record=self.saved_record(payload['id'])
         current=parse_state(payload.get('state',self.last['state']if self.last else self.initial_state))
         current['equipment']=parse_state(record['state'])['equipment']
+        current.pop('facewear',None)
+        if record['state'].get('facewear'):current['facewear']=record['state']['facewear']
         # Legacy preset_id/camera fields remain readable but have no effect
         # when a saved outfit is applied to the currently previewed character.
         return self.render(current)
@@ -805,7 +815,7 @@ class DemoEngine:
     def export_template_code(self,identifier):
         from template_code import encode
         record=self.saved_record(identifier)
-        return encode(record['name'],parse_state(record['state'])['equipment'])
+        return encode(record['name'],parse_state(record['state'])['equipment'],facewear=record['state'].get('facewear'))
 
     def inspect_template_code(self,code):
         from template_code import decode
@@ -815,6 +825,8 @@ class DemoEngine:
         with closing(database())as conn:
             stains={r[0]for r in conn.execute('SELECT stain_id FROM dyes')};items={}
             for record in records:
+                from facewear import selection as facewear_selection
+                facewear_selection(record['state'].get('facewear'))
                 for slot,choice in record['state']['equipment'].items():
                     identifier=choice['item_id']
                     if identifier is None:continue

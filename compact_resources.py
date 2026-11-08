@@ -232,6 +232,9 @@ def wardrobe_icons(pack):
         if parts and parts<=supported and row['Icon']>0:icons.add(row['Icon'])
     from dye_icon_map import dye_icons_from_rows
     icons.update(value['icon_id']for value in dye_icons_from_rows(item_rows,dict(data.rows('Stain'))).values())
+    from build_facewear_catalogue import build as facewear_catalogue
+    for style in facewear_catalogue(pack)['styles']:
+        icons.add(style['icon_id']);icons.update(item['icon_id']for item in style['variants'])
     for _,row in data.rows('CharaMakeCustomize'):
         if row['Icon']>0:icons.add(row['Icon'])
     # Some face/feature menu values are direct icon IDs rather than links to

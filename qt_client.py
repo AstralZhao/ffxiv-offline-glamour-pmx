@@ -228,7 +228,7 @@ class QtClient(NativeClient):
         self.session_timer=None;self.accept_baseline=None;self.boot=None;self.ready=False
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
         self.catalog_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeSearch')
-        self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict();self.hidden_equipment={}
+        self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict();self.hidden_equipment={};self.hidden_facewear={};self.facewear_dialog=None
         self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
         self.page_index=0;self.page_count=1;self.catalog_total=0
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None;self.group=ARMOR
@@ -359,6 +359,11 @@ class QtClient(NativeClient):
             card.setContextMenuPolicy(C.Qt.CustomContextMenu)
             card.customContextMenuRequested.connect(lambda point,s=slot:self.outfit_context(s,point))
         cards.addStretch()
+        from qt_facewear import FacewearCard
+        from facewear import catalogue as facewear_catalogue
+        self.facewear_cards={}
+        for slot in sorted({row['slot']for row in facewear_catalogue()[0]['styles']}):
+            card=FacewearCard(self,slot);right.addWidget(card);self.facewear_cards[slot]=card
         self.head_check=W.QCheckBox('调整头部装备');self.head_check.hide();self.head_check.setEnabled(False);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
         self.effects_check=W.QCheckBox('显示装备特效');self.effects_check.setChecked(True)
         self.effects_check.setToolTip('默认定格显示。可播放装备特效，角色保持静态；尚未支持的特效分支会提示。')
@@ -452,13 +457,13 @@ class QtClient(NativeClient):
         if fn==self.engine.run and arguments and arguments[0]=='outfit':
             original_callback=callback
             def callback(result):
-                self.hidden_equipment.clear();original_callback(result)
+                self.hidden_equipment.clear();self.hidden_facewear.clear();original_callback(result)
                 self.save_dye_settings({slot:{key:choice[key]for key in('first','second')}for slot,choice in result['state']['equipment'].items()})
                 self.applied_template_id=arguments[1]['id']
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
-                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))and self.state.get('visor',False)==self.good.get('visor',False)
+                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))and self.state.get('visor',False)==self.good.get('visor',False)and self.state.get('facewear')==self.good.get('facewear')
                 self.loading_kind='正在调整视角…'if same_outfit else'正在绘制模版…'
             else:
                 operation=arguments[0]if arguments and isinstance(arguments[0],str)else''
@@ -628,7 +633,37 @@ class QtClient(NativeClient):
         self.update_outfit();self.queue_render()
 
     def clear_outfit(self):
-        self.hidden_equipment.clear();super().clear_outfit()
+        self.hidden_equipment.clear();self.hidden_facewear.clear();self.state.pop('facewear',None);super().clear_outfit()
+
+    def open_facewear(self):
+        if not self.ready or self.closing:return
+        from qt_facewear import FacewearDialog
+        if self.facewear_dialog is not None:
+            self.facewear_dialog.raise_();self.facewear_dialog.activateWindow();return
+        dialog=FacewearDialog(self);self.facewear_dialog=dialog
+        dialog.finished.connect(lambda _result:setattr(self,'facewear_dialog',None))
+        self.show_dialog(dialog,near_cursor=True)
+
+    def choose_facewear(self,identifier,slot=None):
+        if not self.ready or self.closing:return
+        from facewear import catalogue,selection
+        if identifier:slot=catalogue()[2][identifier]['slot']
+        if slot not in(0,1):return
+        chosen=selection(self.state.get('facewear'));chosen[slot]=identifier;self.hidden_facewear.pop(slot,None)
+        if any(chosen):self.state['facewear']=chosen
+        else:self.state.pop('facewear',None)
+        self.update_outfit();self.queue_render()
+
+    def toggle_facewear(self,slot):
+        if not self.ready or self.closing:return
+        from facewear import selection
+        chosen=selection(self.state.get('facewear'))
+        if chosen[slot]:self.hidden_facewear[slot]=chosen[slot];chosen[slot]=0
+        elif slot in self.hidden_facewear:chosen[slot]=self.hidden_facewear.pop(slot)
+        else:return
+        if any(chosen):self.state['facewear']=chosen
+        else:self.state.pop('facewear',None)
+        self.update_outfit();self.queue_render()
 
     def update_outfit(self):
         if not self.boot:return
@@ -642,7 +677,8 @@ class QtClient(NativeClient):
             if choice['item_id']and choice['item_id']not in self.items:
                 result=equipment_rows(slot,str(choice['item_id']),library=self.library);self.items.update({r['item_id']:r for r in result['items']})
             self.outfit_cards[slot].display(choice,self.items.get(choice['item_id'],{}),slot==self.slot_key(),hidden)
-        self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values()))+' 件')
+        self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values())+sum(bool(i)for i in self.state.get('facewear',[0,0])))+' 件')
+        for card in self.facewear_cards.values():card.refresh()
         self.pose_picker.setEnabled(self.ready and not self.closing)
         self.pose_picker.setCurrentIndex(self.pose_picker.findData(self.state.get('pose','default')))
         self.head_check.blockSignals(True);self.head_check.setChecked(self.state.get('visor',False));self.head_check.blockSignals(False)
@@ -1426,7 +1462,8 @@ class QtClient(NativeClient):
         else:
             rows=self.engine.saved();record=next((row for row in rows if row['id']==identifier),None)
             if record is None:raise ValueError('这套模版已不存在，请另存为新模版')
-            record.update(name=name,state={'equipment':parse_state(self.good)['equipment']},time=time.strftime('%Y-%m-%d %H:%M'))
+            from facewear import template_state
+            record.update(name=name,state=template_state(parse_state(self.good)),time=time.strftime('%Y-%m-%d %H:%M'))
             self.engine.write_saved(rows)
         self.applied_template_id=identifier
 
@@ -1439,7 +1476,7 @@ class QtClient(NativeClient):
             record=next((row for row in self.engine.saved()if row['id']==identifier),None)if identifier else None
             if record:
                 dialog=W.QMessageBox(self.window);dialog.setWindowTitle('保存模版')
-                dialog.setText('将当前装备和染色更新到“'+record['name']+'”？')
+                dialog.setText('将当前装备、染色和面部配饰更新到“'+record['name']+'”？')
                 update=dialog.addButton('更新此模版',W.QMessageBox.AcceptRole)
                 save_as=dialog.addButton('另存为新模版',W.QMessageBox.ActionRole)
                 dialog.addButton('取消',W.QMessageBox.RejectRole);dialog.setDefaultButton(update);dialog.exec()
