@@ -393,10 +393,11 @@ class EquipmentDelegate(EquipmentHoverDelegate):
         if row.get('favorite'):
             painter.setPen(G.QColor('#e9cb86'));painter.drawText(C.QRect(right-15,area.top()+12,18,24),C.Qt.AlignCenter,'★')
         painter.setFont(G.QFont('Microsoft YaHei UI',8));painter.setPen(G.QColor(ACCENT if row.get('is_group')else MUTED))
-        detail=(f"同模 · {row['group_count']} 款"if row.get('is_group')and row.get('group_count',1)>1 else f"Lv.{row['level']} · {row['category_name']}")
+        detail=(f"{row.get('group_label','同模')} · {row['group_count']} 款"if row.get('is_group')and row.get('group_count',1)>1 else'面饰 · 原始颜色'if row.get('facewear')else f"Lv.{row['level']} · {row['category_name']}")
         detail=painter.fontMetrics().elidedText(detail,C.Qt.ElideRight,max(10,right-x-47))
         painter.drawText(C.QRect(x,area.top()+39,right-x-45,22),C.Qt.AlignVCenter,detail)
         for i in range(2):
+            if row.get('facewear'):break
             painter.setBrush(G.QColor(ACCENT if row['dye_count']>i else'#384353'));painter.setPen(C.Qt.NoPen)
             painter.drawEllipse(C.QPointF(right-22+i*13,area.top()+51),3,3)
         painter.restore()

@@ -23,7 +23,8 @@ from effect_clock import EffectClock
 from app_paths import paths,migrate,no_links
 from qt_theme import STYLE,ACCENT,MUTED,UNDYED_SWATCH_COLOR,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,dye_swap_icon,AppearanceSlider,LoadingSpinner
 
-ARMOR=['Head','Body','Gloves','Legs','Feet'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
+ARMOR=['Head','Body','Gloves','Legs','Feet','Facewear'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
+UI_SLOTS={**SLOTS,'Facewear':'面饰'}
 
 
 class Value:
@@ -228,7 +229,7 @@ class QtClient(NativeClient):
         self.session_timer=None;self.accept_baseline=None;self.boot=None;self.ready=False
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
         self.catalog_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeSearch')
-        self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict();self.hidden_equipment={};self.hidden_facewear={};self.facewear_dialog=None
+        self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict();self.hidden_equipment={};self.hidden_facewear={}
         self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
         self.page_index=0;self.page_count=1;self.catalog_total=0
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None;self.group=ARMOR
@@ -353,17 +354,17 @@ class QtClient(NativeClient):
             b=button(text,lambda p=parts:self.switch_group(p));b.setCheckable(True);b.setChecked(parts==ARMOR);tabs.addWidget(b);self.outfit_tabs.append(b)
         right.addLayout(tabs);self.outfit_cards={}
         card_scroll=W.QScrollArea();card_scroll.setWidgetResizable(True);card_scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
-        card_content=W.QWidget();cards=vertical(card_content,0,8);card_scroll.setWidget(card_content);right.addWidget(card_scroll,1)
+        card_content=W.QWidget();cards=vertical(card_content,0,8);card_scroll.setWidget(card_content);right.addWidget(card_scroll,1);self.outfit_scroll=card_scroll
         for slot in SLOTS:
             card=OutfitCard(slot,self);card.selected.connect(self.select_slot);cards.addWidget(card);self.outfit_cards[slot]=card;card.setVisible(slot in ARMOR)
             card.setContextMenuPolicy(C.Qt.CustomContextMenu)
             card.customContextMenuRequested.connect(lambda point,s=slot:self.outfit_context(s,point))
-        cards.addStretch()
         from qt_facewear import FacewearCard
         from facewear import catalogue as facewear_catalogue
         self.facewear_cards={}
         for slot in sorted({row['slot']for row in facewear_catalogue()[0]['styles']}):
-            card=FacewearCard(self,slot);right.addWidget(card);self.facewear_cards[slot]=card
+            card=FacewearCard(self,slot);cards.addWidget(card);self.facewear_cards[slot]=card
+        cards.addStretch()
         self.head_check=W.QCheckBox('调整头部装备');self.head_check.hide();self.head_check.setEnabled(False);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
         self.effects_check=W.QCheckBox('显示装备特效');self.effects_check.setChecked(True)
         self.effects_check.setToolTip('默认定格显示。可播放装备特效，角色保持静态；尚未支持的特效分支会提示。')
@@ -636,13 +637,9 @@ class QtClient(NativeClient):
         self.hidden_equipment.clear();self.hidden_facewear.clear();self.state.pop('facewear',None);super().clear_outfit()
 
     def open_facewear(self):
-        if not self.ready or self.closing:return
-        from qt_facewear import FacewearDialog
-        if self.facewear_dialog is not None:
-            self.facewear_dialog.raise_();self.facewear_dialog.activateWindow();return
-        dialog=FacewearDialog(self);self.facewear_dialog=dialog
-        dialog.finished.connect(lambda _result:setattr(self,'facewear_dialog',None))
-        self.show_dialog(dialog,near_cursor=True)
+        if self.ready and not self.closing:self.select_slot('Facewear')
+
+    def slot_key(self):return next(s for s,n in UI_SLOTS.items()if n==self.slot.get())
 
     def choose_facewear(self,identifier,slot=None):
         if not self.ready or self.closing:return
@@ -693,34 +690,48 @@ class QtClient(NativeClient):
         self.zoom_label.setText(f"{self.state['zoom']*100:.0f}%")
         for yaw,b in self.camera_buttons:b.setChecked(abs(self.state['yaw']-yaw)<.01)
         for s,b in self.slot_buttons.items():b.setChecked(s==self.slot_key())
-        current=self.state['equipment'][self.slot_key()]['item_id'];model=self.items.get(current,{}).get('model_set')
+        face=self.slot_key()=='Facewear'
+        current=self.state.get('facewear',[0,0])[0]if face else self.state['equipment'][self.slot_key()]['item_id']
+        if face:
+            from facewear import catalogue
+            model=catalogue()[2].get(current,{}).get('style_id')
+        else:model=self.items.get(current,{}).get('model_set')
         for i in range(self.catalog.count()):
             item=self.catalog.item(i);row=item.data(C.Qt.UserRole)
-            item.setData(C.Qt.UserRole+1,row['model_set']==model if row.get('is_group')else row['item_id']==current)
+            item.setData(C.Qt.UserRole+1,bool(row.get('facewear'))==face and(row['model_set']==model if row.get('is_group')else row['item_id']==current))
+        for card in self.facewear_cards.values():card.setProperty('selected',face);polish(card)
 
     def rebuild_part_tabs(self):
         while self.part_bar.count():
             item=self.part_bar.takeAt(0)
-            if item.widget():item.widget().deleteLater()
+            if item.widget():item.widget().hide();item.widget().deleteLater()
         self.slot_buttons={}
         for slot in self.group:
-            b=button(SLOTS[slot],lambda s=slot:self.select_slot(s));b.setProperty('slotTab',True);b.setCheckable(True)
-            b.setChecked(SLOTS[slot]==self.slot.get());self.part_bar.addWidget(b,1);self.slot_buttons[slot]=b
+            b=button(UI_SLOTS[slot],lambda s=slot:self.select_slot(s));b.setProperty('slotTab',True);b.setCheckable(True)
+            b.setStyleSheet('padding:7px 3px;');b.setMinimumWidth(0)
+            b.setChecked(UI_SLOTS[slot]==self.slot.get());self.part_bar.addWidget(b,1);self.slot_buttons[slot]=b
 
     def switch_group(self,group):
         self.group=group
         for buttons in(self.browse_groups,self.outfit_tabs):
             for i,b in enumerate(buttons):b.setChecked((i==0)==(group==ARMOR))
         for slot,card in self.outfit_cards.items():card.setVisible(slot in group)
+        for card in self.facewear_cards.values():card.setVisible(group==ARMOR)
         self.rebuild_part_tabs()
         if self.slot_key()not in group:self.select_slot(group[0])
 
     def select_slot(self,slot):
         if not self.boot:return
         group=ARMOR if slot in ARMOR else ACCESSORIES
-        self.slot.set(SLOTS[slot]);self.folder=None;self.outer=None;self.cancel_search()
+        self.slot.set(UI_SLOTS[slot]);self.folder=None;self.outer=None;self.cancel_search()
         if group!=self.group:self.switch_group(group)
-        self.update_outfit();self.load_catalog(locate_item=self.state['equipment'][slot]['item_id'])
+        face=slot=='Facewear'
+        for control in(self.min_level,self.max_level,self.tag_picker,self.favorite_filter,self.tag_summary):control.setEnabled(not face)
+        self.search.setToolTip('搜索面饰名称、颜色或编号；同款颜色归在一个目录。'if face else'空格分隔多个条件（同时满足）。#标签、标签:礼服 只搜索标签。')
+        self.update_outfit()
+        card=self.facewear_cards.get(0)if face else self.outfit_cards[slot]
+        if card is not None:self.outfit_scroll.ensureWidgetVisible(card)
+        self.load_catalog(locate_item=self.state.get('facewear',[0,0])[0]if face else self.state['equipment'][slot]['item_id'])
 
     def search_changed(self,text):self.query.value=text;self.schedule_search()
 
@@ -786,6 +797,7 @@ class QtClient(NativeClient):
             item.setToolTip(self.equipment_tooltip(row));self.catalog.addItem(item)
 
     def equipment_tooltip(self,row):
+        if row.get('facewear'):return row['name']+(' · '+str(row['group_count'])+' 色 · 点击进入颜色目录'if row.get('is_group')else'\n面饰 · 点击试穿')
         folder=row.get('is_group')and row.get('group_count',1)>1
         tooltip=row['name']+(f" · 同模 {row['group_count']} 款"if folder else'')
         return tooltip+'\n'+(('含收藏款式\n'if folder else'已收藏\n')if row.get('favorite')else'')+('代表款标签：'if folder else'标签：')+(' / '.join(row.get('tags',[]))or'暂无标签')+'\n右键查看详情、编辑标签和收藏'
@@ -841,6 +853,7 @@ class QtClient(NativeClient):
         self.tag_summary.setToolTip('同时满足：'+text+'\n点击清除标签筛选');self.load_catalog()
 
     def refresh_library(self):
+        if self.slot_key()=='Facewear':self.refresh_tag_picker();self.update_outfit();return
         self.refresh_tag_picker();self.library.refresh_annotations(self.rows,self.slot_key())
         for i,row in enumerate(self.rows):
             if i>=self.catalog.count():break
@@ -860,7 +873,15 @@ class QtClient(NativeClient):
 
     def catalog_context(self,position):
         item=self.catalog.itemAt(position)
-        if not item or not self.library:return
+        if not item:return
+        if item.data(C.Qt.UserRole).get('facewear'):
+            row=item.data(C.Qt.UserRole);menu=W.QMenu(self.catalog)
+            menu.addAction('复制面饰名称',lambda:W.QApplication.clipboard().setText(row['name']))
+            menu.addAction('打开颜色目录'if row.get('is_group')else'试穿',lambda:self.activate_item(item))
+            try:menu.exec(self.catalog.viewport().mapToGlobal(position))
+            finally:menu.deleteLater()
+            return
+        if not self.library:return
         menu=self.equipment_context_menu(item)
         try:menu.exec(self.catalog.viewport().mapToGlobal(position))
         finally:menu.deleteLater()
@@ -977,6 +998,9 @@ class QtClient(NativeClient):
         else:self.start_catalog_request(request)
 
     def fetch_catalog(self,request):
+        if request['slot']=='Facewear':
+            from qt_facewear import catalogue_rows
+            return catalogue_rows(request),None
         snapshot=request['favorite_snapshot']
         if request['new_query']and request['library']:snapshot=request['library'].favorite_ids()
         def rows(offset,limit=60):
@@ -1030,11 +1054,12 @@ class QtClient(NativeClient):
         if request['page']>=self.page_count:
             self.catalog_loading=False;self.load_catalog(page=self.page_count-1,restore=request['restore']);return
         self.page_index=result['offset']//60;self.rows=list(result['items']);self.offset=result['offset']+len(self.rows);self.more=result['more']
-        self.items.update({r['item_id']:r for r in self.rows})
+        if request['slot']!='Facewear':self.items.update({r['item_id']:r for r in self.rows})
         self.populate_catalog(self.rows);self.back_button.setVisible(self.folder is not None)
-        text='全部装备'if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
-        self.search.setPlaceholderText('名称、编号、标签 · 多词组合'if self.folder is None else'搜索此目录的款式或标签')
-        self.count_note.setText(f"{result['total']:,} "+('项 · 收藏优先 · 右键查看详情'if self.folder is None else'款装备 · 收藏优先'))
+        face=request['slot']=='Facewear'
+        text=('面饰'if face else'全部装备')if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
+        self.search.setPlaceholderText('名称、颜色、编号 · 多词组合'if face else'名称、编号、标签 · 多词组合'if self.folder is None else'搜索此目录的款式或标签')
+        self.count_note.setText(f"{result['total']:,} "+(('个款式目录'if self.folder is None else'个颜色变体')if face else'项 · 收藏优先 · 右键查看详情'if self.folder is None else'款装备 · 收藏优先'))
         self.catalog.verticalScrollBar().setValue(0)
         self.catalog_loading=False;self.catalog_spinner.set_running(False);self.catalog.setEnabled(True)
         self.sync_pagination()
@@ -1058,6 +1083,7 @@ class QtClient(NativeClient):
                 'name':row['name'],'count':self.count_note.text(),'page':self.page_index,'pages':self.page_count,'total':self.catalog_total,
                 'filters':self.filter_signature(),'favorite_snapshot':self.favorite_snapshot}
             self.folder=row['model_set'];self.load_catalog();return
+        if row.get('facewear'):self.choose_facewear(row['item_id']);return
         slot=self.slot_key();self.state['equipment'][slot]=self.equipment_choice(slot,row);self.update_outfit();self.queue_render()
 
     def back_folder(self):
@@ -1071,9 +1097,9 @@ class QtClient(NativeClient):
             self.rows=record['rows'];self.offset=record['offset'];self.more=record['more'];self.favorite_snapshot=record['favorite_snapshot'];self.populate_catalog(self.rows)
             self.page_index=record['page'];self.page_count=record['pages'];self.catalog_total=record['total'];self.sync_pagination()
         self.catalog.doItemsLayout();self.catalog.verticalScrollBar().setValue(record['scroll'])
-        self.breadcrumb.setText('全部装备');self.back_button.hide()
+        self.breadcrumb.setText('面饰'if self.slot_key()=='Facewear'else'全部装备');self.back_button.hide()
         if not rebuild:self.count_note.setText(record['count'])
-        self.search.setPlaceholderText('名称、编号、标签 · 多词组合');self.update_outfit()
+        self.search.setPlaceholderText('名称、颜色、编号 · 多词组合'if self.slot_key()=='Facewear'else'名称、编号、标签 · 多词组合');self.update_outfit()
 
     def head_toggled(self,checked):
         if not self.ready or self.closing or not self.head_check.isEnabled():return
