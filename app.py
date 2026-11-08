@@ -522,7 +522,7 @@ class DemoEngine:
             scene=self.accessories.resolve(scene,state,info)
             if pose_id!='default':
                 from pose_preview import apply_pose
-                scene=apply_pose(scene,self.character.outfit,pose_id)
+                scene=apply_pose(scene,self.character.outfit,pose_id,pose_path=self.character.pose_path)
             # Keep the preset framing as a minimum, expanding only for actual
             # referenced geometry such as wings. Dye changes reuse this scene.
             import numpy as np

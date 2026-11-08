@@ -1,7 +1,7 @@
-"""Static preview poses over immutable, already customized source skeletons.
+"""Original game standing poses over immutable character and equipment meshes.
 
 sample_pose is the time-based provider boundary for future emote animation.
-The current authored examples are static offsets, not native game emotes.
+Current samples come from original standing loops; transition playback is absent.
 """
 from dataclasses import dataclass
 import copy
@@ -10,71 +10,41 @@ import math
 
 import numpy as np
 
-POSES=(('default','默认站姿'),('arms_open','双臂舒展'),('left_arm','抬起左臂'),('head_turn','头部侧转'))
-_OFFSETS={
-    'default':(),
-    'arms_open':(('j_ude_a_l',2,35.),('j_ude_a_r',2,-35.)),
-    'left_arm':(('j_ude_a_l',2,65.),),
-    'head_turn':(('j_kao',1,20.),),
-}
+POSES=(('default','默认站姿'),*((f'pose_{i}',f'站姿 {i}')for i in range(1,7)))
 
 
 def validate_pose(value):
-    if not isinstance(value,str)or value not in _OFFSETS:raise ValueError('姿势选项不正确')
+    if not isinstance(value,str)or value not in {key for key,_ in POSES}:raise ValueError('姿势选项不正确')
     return value
 
 
 @dataclass(frozen=True)
 class PoseSample:
-    offsets:tuple
-    # Future animated providers return the transforms at this timestamp.
+    world:object
     time_seconds:float
+    provenance:dict
 
 
-def sample_pose(pose_id,time_seconds=0.):
+def sample_pose(pose_id,time_seconds=0.,*,scene=None,outfit=None,pose_path=None):
     validate_pose(pose_id)
     if type(time_seconds)not in(int,float)or not math.isfinite(time_seconds)or time_seconds<0:
         raise ValueError('姿势采样时间不正确')
-    return PoseSample(_OFFSETS[pose_id],float(time_seconds))
+    # The time boundary is reserved; current decoder only evaluates loop start.
+    if time_seconds!=0:raise NotImplementedError('当前站姿仅支持原始循环起点，尚未接入动画播放')
+    if pose_id=='default':return PoseSample(None,0.,{'provider':'original-default'})
+    if scene is None or outfit is None or pose_path is None:raise ValueError('原生站姿需要角色和原始动作资源')
+    from native_standing_pose import standing_world
+    world,source=standing_world(scene,outfit,pose_id,pose_path)
+    return PoseSample(world,0.,source)
 
 
-def posed_world(world,names,parents,sample):
-    """Preserve current proportions and secondary locals; rotate at joint pivots.
-
-    Example rotations use character/model axes. Descendants inherit their
-    actual parent transformation, including the existing static hair result.
-    """
-    lookup={name:i for i,name in enumerate(names)}
-    if len(lookup)!=len(names)or len(parents)!=len(names)or world.shape!=(len(names),4,4)or not np.isfinite(world).all():
-        raise ValueError('姿势骨架数据不正确')
-    rotations={}
-    for name,axis,degrees in sample.offsets:
-        if name not in lookup:raise NotImplementedError('当前角色缺少姿势骨骼：'+name)
-        radians=math.radians(degrees);c=math.cos(radians);s=math.sin(radians)
-        rotation=np.eye(3);a,b=((1,2),(2,0),(0,1))[axis]
-        rotation[a,a]=rotation[b,b]=c;rotation[a,b]=-s;rotation[b,a]=s
-        rotations[lookup[name]]=rotation
-    result=world.copy();changed=np.zeros(len(names),dtype=bool)
-    for i,parent in enumerate(parents):
-        if not -1<=parent<i:raise ValueError('姿势骨架父级顺序不正确')
-        if parent>=0 and changed[parent]:
-            result[i]=result[parent]@np.linalg.solve(world[parent],world[i]);changed[i]=True
-        if i in rotations:
-            result[i,:3,:3]=rotations[i]@result[i,:3,:3];changed[i]=True
-    if not np.isfinite(result).all():raise ValueError('姿势变换产生非有限值')
-    delta=np.repeat(np.eye(4)[None],len(names),axis=0)
-    delta[changed]=result[changed]@np.linalg.inv(world[changed])
-    return result,delta
-
-
-def apply_pose(scene,outfit,pose_id,*,time_seconds=0.):
-    sample=sample_pose(pose_id,time_seconds)
-    if not sample.offsets:return scene
+def apply_pose(scene,outfit,pose_id,*,time_seconds=0.,pose_path=None):
+    sample=sample_pose(pose_id,time_seconds,scene=scene,outfit=outfit,pose_path=pose_path)
+    if sample.world is None:return scene
     names=[None]*len(outfit.names)
     for name,index in outfit.names.items():names[index]=name
-    parents=[outfit.names[outfit.parents[name]]if outfit.parents[name]is not None else -1 for name in names]
     world=scene.skinning@outfit.bind
-    _,delta=posed_world(world,names,parents,sample)
+    delta=sample.world@np.linalg.inv(world)
     result=copy.copy(scene);result.meshes=[];result.skinning=delta@scene.skinning
     result.skinning.setflags(write=False)
     for mesh in scene.meshes:
@@ -101,6 +71,6 @@ def apply_pose(scene,outfit,pose_id,*,time_seconds=0.):
         result.meshes.append({**mesh,'joint_matrices':joints,'posed_positions':posed})
     result.bounds=np.vstack([scene.bounds,*[m['posed_positions'][np.unique(m['indices'])]for m in result.meshes if len(m['indices'])]])
     identity=getattr(scene,'outfit_cache_identity','')
-    result.outfit_cache_identity=hashlib.sha256((identity+pose_id+repr(sample.offsets)).encode()).hexdigest()
-    result.preview_pose={'id':pose_id,'time_seconds':sample.time_seconds,'provider':'static-offset-v1'}
+    result.outfit_cache_identity=hashlib.sha256((identity+pose_id+sample.provenance['source_sha256']).encode()).hexdigest()
+    result.preview_pose={'id':pose_id,'time_seconds':sample.time_seconds,**sample.provenance}
     return result
