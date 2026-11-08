@@ -74,7 +74,11 @@ def parse_state(raw):
     if type(pitch)not in(int,float)or not math.isfinite(pitch)or not -65<=pitch<=65:raise ValueError('俯仰角度不正确')
     if type(pan)not in(int,float)or not math.isfinite(pan)or not -1<=pan<=1:raise ValueError('相机平移范围不正确')
     if type(pan_x)not in(int,float)or not math.isfinite(pan_x)or not -1<=pan_x<=1:raise ValueError('相机水平平移范围不正确')
-    return {'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan),'pan_x':float(pan_x)}
+    from pose_preview import validate_pose
+    pose=validate_pose(raw.get('pose','default'))
+    state={'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan),'pan_x':float(pan_x)}
+    if pose!='default':state['pose']=pose
+    return state
 
 
 def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=None,library=None,favorites_only=False,tags=(),favorite_snapshot=None,min_level=None,max_level=None):
@@ -90,7 +94,7 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 def parse_startup_state(raw):
     if not isinstance(raw,dict):return parse_state(raw)
-    return parse_state({**raw,'yaw':0,'pitch':0,'pan':0,'pan_x':0,'zoom':1})
+    return parse_state({**raw,'yaw':0,'pitch':0,'pan':0,'pan_x':0,'zoom':1,'pose':'default'})
 
 
 class DemoEngine:
@@ -505,7 +509,10 @@ class DemoEngine:
         studio=options(getattr(self,'studio',None))
         self.renderer.studio_options=studio
         self.renderer.studio_background=BACKGROUNDS[studio['background']][1]
-        key=json.dumps([state['equipment'],state['head_visible'],state['effects_visible']],sort_keys=True)
+        selection=[state['equipment'],state['head_visible'],state['effects_visible']]
+        pose_id=state.get('pose','default')
+        if pose_id!='default':selection.append(pose_id)
+        key=json.dumps(selection,sort_keys=True)
         if key in self.scene_cache:
             scene=self.scene_cache[key];self.scene_cache.move_to_end(key)
         else:
@@ -513,6 +520,9 @@ class DemoEngine:
             scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
                 head=chosen['Head'],head_visible=state['head_visible'])
             scene=self.accessories.resolve(scene,state,info)
+            if pose_id!='default':
+                from pose_preview import apply_pose
+                scene=apply_pose(scene,self.character.outfit,pose_id)
             # Keep the preset framing as a minimum, expanding only for actual
             # referenced geometry such as wings. Dye changes reuse this scene.
             import numpy as np

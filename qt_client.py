@@ -326,7 +326,12 @@ class QtClient(NativeClient):
         self.loading_spinner=LoadingSpinner(36 if(Path(self.game)/'network-source.json').is_file()else 20);loading.addWidget(self.loading_spinner)
         self.loading_label=label('正在加载角色…','Muted');loading.addWidget(self.loading_label)
         policy=self.loading_panel.sizePolicy();policy.setRetainSizeWhenHidden(True);self.loading_panel.setSizePolicy(policy)
-        title.addWidget(self.loading_panel);title.addWidget(label('默认站姿','Badge'));middle.addLayout(title)
+        title.addWidget(self.loading_panel)
+        from pose_preview import POSES
+        self.pose_picker=ComboBox();self.pose_picker.setMinimumWidth(112);self.pose_picker.setToolTip('试用静态姿势；切换后身体、装备和挂点一起更新。重启恢复默认站姿。')
+        for key,name in POSES:self.pose_picker.addItem(name,key)
+        self.pose_picker.activated.connect(lambda index:self.select_pose(self.pose_picker.itemData(index)));self.pose_picker.setEnabled(False)
+        title.addWidget(label('姿势','Muted'));title.addWidget(self.pose_picker);middle.addLayout(title)
         self.viewport=NativeView();self.viewport.controller=self;middle.addWidget(self.viewport,1)
         tools=W.QWidget();self.camera_grid=W.QGridLayout(tools);self.camera_grid.setContentsMargins(12,10,12,8);self.camera_grid.setSpacing(6)
         directions=W.QWidget();camera=horizontal(directions,0,6);self.camera_buttons=[]
@@ -603,6 +608,14 @@ class QtClient(NativeClient):
         text=(record or{}).get('name','未选择角色');self.character_name_label.setText(G.QFontMetrics(self.character_name_label.font()).elidedText(text,C.Qt.ElideRight,self.character_name_label.maximumWidth()))
         self.character_name_label.setToolTip(text);self.character_manager.last_active=self.boot['preset_id'];self.character_manager.update_state()
 
+    def select_pose(self,pose_id):
+        if not self.ready or self.closing:return
+        from pose_preview import validate_pose
+        validate_pose(pose_id)
+        if pose_id=='default':self.state.pop('pose',None)
+        else:self.state['pose']=pose_id
+        self.queue_render()
+
     def toggle_slot_visibility(self,slot):
         if not self.ready or self.job is not None:return
         if slot in self.hidden_equipment:
@@ -630,6 +643,8 @@ class QtClient(NativeClient):
                 result=equipment_rows(slot,str(choice['item_id']),library=self.library);self.items.update({r['item_id']:r for r in result['items']})
             self.outfit_cards[slot].display(choice,self.items.get(choice['item_id'],{}),slot==self.slot_key(),hidden)
         self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values()))+' 件')
+        self.pose_picker.setEnabled(self.ready and not self.closing)
+        self.pose_picker.setCurrentIndex(self.pose_picker.findData(self.state.get('pose','default')))
         self.head_check.blockSignals(True);self.head_check.setChecked(self.state['head_visible']);self.head_check.blockSignals(False)
         self.effects_check.blockSignals(True);self.effects_check.setChecked(self.state['effects_visible']);self.effects_check.blockSignals(False)
         if not self.state['effects_visible']:self.pause_effects()
