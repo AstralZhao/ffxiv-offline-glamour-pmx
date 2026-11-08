@@ -359,7 +359,7 @@ class QtClient(NativeClient):
             card.setContextMenuPolicy(C.Qt.CustomContextMenu)
             card.customContextMenuRequested.connect(lambda point,s=slot:self.outfit_context(s,point))
         cards.addStretch()
-        self.head_check=W.QCheckBox('显示头饰');self.head_check.setChecked(True);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
+        self.head_check=W.QCheckBox('调整头部装备');self.head_check.hide();self.head_check.setEnabled(False);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
         self.effects_check=W.QCheckBox('显示装备特效');self.effects_check.setChecked(True)
         self.effects_check.setToolTip('默认定格显示。可播放装备特效，角色保持静态；尚未支持的特效分支会提示。')
         self.effects_check.toggled.connect(self.effects_toggled);right.addWidget(self.effects_check)
@@ -458,7 +458,7 @@ class QtClient(NativeClient):
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
-                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))
+                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))and self.state.get('visor',False)==self.good.get('visor',False)
                 self.loading_kind='正在调整视角…'if same_outfit else'正在绘制模版…'
             else:
                 operation=arguments[0]if arguments and isinstance(arguments[0],str)else''
@@ -645,7 +645,12 @@ class QtClient(NativeClient):
         self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values()))+' 件')
         self.pose_picker.setEnabled(self.ready and not self.closing)
         self.pose_picker.setCurrentIndex(self.pose_picker.findData(self.state.get('pose','default')))
-        self.head_check.blockSignals(True);self.head_check.setChecked(self.state['head_visible']);self.head_check.blockSignals(False)
+        self.head_check.blockSignals(True);self.head_check.setChecked(self.state.get('visor',False));self.head_check.blockSignals(False)
+        visor=(getattr(self.engine,'last',None)or{}).get('visor',{})
+        supported=bool(visor.get('supported')and visor.get('displayed')and visor.get('item_id')==self.state['equipment']['Head']['item_id'])
+        self.head_check.setVisible(supported)
+        self.head_check.setEnabled(self.ready and not self.closing and supported)
+        self.head_check.setToolTip('切换当前头饰的游戏原生调整状态，不播放过渡动画。'if supported else'当前头部装备不支持调整，或未显示。')
         self.effects_check.blockSignals(True);self.effects_check.setChecked(self.state['effects_visible']);self.effects_check.blockSignals(False)
         if not self.state['effects_visible']:self.pause_effects()
         self.effects_play.setEnabled(self.ready and self.state['effects_visible'])
@@ -1034,7 +1039,11 @@ class QtClient(NativeClient):
         if not rebuild:self.count_note.setText(record['count'])
         self.search.setPlaceholderText('名称、编号、标签 · 多词组合');self.update_outfit()
 
-    def head_toggled(self,checked):self.show_head.set(checked);self.toggle_head()
+    def head_toggled(self,checked):
+        if not self.ready or self.closing or not self.head_check.isEnabled():return
+        if checked:self.state['visor']=True
+        else:self.state.pop('visor',None)
+        self.queue_render()
 
     def effects_toggled(self,checked):
         if not checked:self.pause_effects()

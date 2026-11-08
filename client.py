@@ -34,11 +34,13 @@ def merge_pending_state(result,baseline,current):
     travels with its dyes so a late tint cannot target a different item.
     """
     merged=deepcopy(result)
-    for key in result:
+    for key in set(result)|set(baseline)|set(current):
         if key=='equipment':
             for slot,choice in current[key].items():
                 if choice!=baseline[key][slot]:merged[key][slot]=deepcopy(choice)
-        elif current[key]!=baseline[key]:merged[key]=deepcopy(current[key])
+        elif current.get(key)!=baseline.get(key):
+            if key in current:merged[key]=deepcopy(current[key])
+            else:merged.pop(key,None)
     return merged
 
 

@@ -3,7 +3,7 @@ import struct
 import copy
 from collections import OrderedDict
 
-from static_material_inputs import SHADERS,shader_crc,static_pass
+from static_material_inputs import SHADERS,shader_crc,static_pass,alpha_test_enabled
 from preset_customization import sha
 
 
@@ -129,6 +129,12 @@ class DemoMaterials:
         elif shader in('charactertattoo.shpk','characterocclusion.shpk'):
             role='overlay_tattoo'if shader=='charactertattoo.shpk'else'overlay_occlusion'
             result.update(overlay=role,transparent=True,plan=result['plans'][role])
+        elif shader=='character.shpk'and result['material']['translucent']and item['slot']=='Head'and alpha_test_enabled(package,result['constants']):
+            # Source-clipped solid fur writes core depth; only its remaining
+            # soft fringe uses the existing strict-depth alpha blend pass.
+            plans={role:static_pass(package,result['material']['shader_keys'],source.weights.shape[1],role)
+                for role in('material','gbuffer_color','direct')}
+            result.update(transparent=True,alpha_core=True,plans=plans)
         elif shader=='charactertransparency.shpk'or(result['material']['translucent']and shader not in('hair.shpk','characterstockings.shpk')):
             result.update(transparent=True,forward_transparent=True)
         elif result['material']['translucent']:result['transparent']=True

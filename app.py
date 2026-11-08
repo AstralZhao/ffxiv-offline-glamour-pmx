@@ -67,9 +67,11 @@ def parse_state(raw):
     yaw=raw.get('yaw',0);zoom=raw.get('zoom',1);visible=raw.get('head_visible',True)
     pitch=raw.get('pitch',0);pan=raw.get('pan',0);pan_x=raw.get('pan_x',0)
     effects_visible=raw.get('effects_visible',True)
+    visor=raw.get('visor',False)
     if type(yaw)not in(int,float)or not math.isfinite(yaw)or not -3600<=yaw<=3600:raise ValueError('观察角度不正确')
     if type(zoom)not in(int,float)or not math.isfinite(zoom)or not .25<=zoom<=8:raise ValueError('缩放范围不正确')
     if type(visible)is not bool:raise ValueError('头饰显示状态不正确')
+    if type(visor)is not bool:raise ValueError('头部装备调整状态不正确')
     if type(effects_visible)is not bool:raise ValueError('特效显示状态不正确')
     if type(pitch)not in(int,float)or not math.isfinite(pitch)or not -65<=pitch<=65:raise ValueError('俯仰角度不正确')
     if type(pan)not in(int,float)or not math.isfinite(pan)or not -1<=pan<=1:raise ValueError('相机平移范围不正确')
@@ -78,6 +80,7 @@ def parse_state(raw):
     pose=validate_pose(raw.get('pose','default'))
     state={'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan),'pan_x':float(pan_x)}
     if pose!='default':state['pose']=pose
+    if visor:state['visor']=True
     return state
 
 
@@ -94,7 +97,7 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 def parse_startup_state(raw):
     if not isinstance(raw,dict):return parse_state(raw)
-    return parse_state({**raw,'yaw':0,'pitch':0,'pan':0,'pan_x':0,'zoom':1,'pose':'default'})
+    return parse_state({**raw,'yaw':0,'pitch':0,'pan':0,'pan_x':0,'zoom':1,'pose':'default','head_visible':True})
 
 
 class DemoEngine:
@@ -512,6 +515,7 @@ class DemoEngine:
         selection=[state['equipment'],state['head_visible'],state['effects_visible']]
         pose_id=state.get('pose','default')
         if pose_id!='default':selection.append(pose_id)
+        if state.get('visor',False):selection.append('visor')
         key=json.dumps(selection,sort_keys=True)
         if key in self.scene_cache:
             scene=self.scene_cache[key];self.scene_cache.move_to_end(key)
@@ -523,6 +527,8 @@ class DemoEngine:
             if pose_id!='default':
                 from pose_preview import apply_pose
                 scene=apply_pose(scene,self.character.outfit,pose_id,pose_path=self.character.pose_path)
+            from visor_preview import apply_visor
+            scene=apply_visor(scene,self.character.outfit,info,state.get('visor',False))
             # Keep the preset framing as a minimum, expanding only for actual
             # referenced geometry such as wings. Dye changes reuse this scene.
             import numpy as np
@@ -574,7 +580,8 @@ class DemoEngine:
             'visible_meshes':len(scene.meshes),'renderer':'native-d3d11-3d','scene_cache_entries':len(self.scene_cache),
             'shader_families':sorted({mesh['material']['shader']for mesh in scene.meshes}),
             'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')}|set(scene.effect_notices)),
-            'equipment_effects':scene.effect_summaries,'effect_draws':self.renderer.last_effect_draws,'effect_frame':frame}
+            'equipment_effects':scene.effect_summaries,'effect_draws':self.renderer.last_effect_draws,'effect_frame':frame,
+            'visor':scene.visor}
         with self.lock:self.last=result
         return result
 
@@ -588,6 +595,7 @@ class DemoEngine:
         outfit=self.character.outfit
         worlds=scene.skinning@outfit.bind
         bones={name:worlds[index]for name,index in outfit.names.items()}
+        bones.update(getattr(scene,'visor_bones',{}))
         sources={(mesh['slot'],mesh['equipment_effect_source'].path):mesh['equipment_effect_source']
             for mesh in scene.meshes if mesh.get('equipment_effect_source')is not None}
         if sources and not hasattr(outfit,'effect_bind_points'):
