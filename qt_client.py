@@ -127,7 +127,7 @@ def hairstyle_choices_with_names(choices):
 class OutfitCard(W.QFrame):
     selected=C.Signal(str)
     def __init__(self,slot,controller):
-        super().__init__();self.slot=slot;self.controller=controller;self.setObjectName('OutfitCard');self.setFixedHeight(88)
+        super().__init__();self.slot=slot;self.controller=controller;self.setObjectName('OutfitCard');self.setFixedHeight(104)
         self.setCursor(C.Qt.PointingHandCursor);outer=horizontal(self,8,9)
         self.icon=label();self.icon.setFixedSize(42,42);self.icon.setAlignment(C.Qt.AlignCenter);outer.addWidget(self.icon)
         content=vertical(spacing=2);outer.addLayout(content,1)
@@ -136,7 +136,7 @@ class OutfitCard(W.QFrame):
         self.visibility.setFixedSize(26,24);self.visibility.setIconSize(C.QSize(20,20));self.visibility.setStyleSheet('padding:2px');top.addWidget(self.visibility)
         self.clear=button('×',lambda:self.remove());self.clear.setProperty('clear',True);self.clear.setFixedSize(16,16);top.addWidget(self.clear);content.addLayout(top)
         self.name=label('未装备');self.name.setStyleSheet('font-size:12px;font-weight:500');content.addWidget(self.name)
-        dyes=horizontal(spacing=5);self.dyes=[]
+        dyes=W.QGridLayout();dyes.setContentsMargins(0,0,0,0);dyes.setHorizontalSpacing(5);dyes.setVerticalSpacing(2);dyes.setColumnStretch(0,1);dyes.setColumnStretch(2,1);self.dyes=[];self.dye_names=[]
         for channel in(1,2):
             if channel==2:
                 self.swap_dyes=button('',lambda:self.controller.swap_slot_dyes(self.slot),ghost=True)
@@ -145,12 +145,14 @@ class OutfitCard(W.QFrame):
                 self.swap_dyes.setFixedSize(22,20);self.swap_dyes.setToolTip('交换两个染色区的颜色');self.swap_dyes.setAccessibleName('交换染色区')
                 self.swap_dyes_slot=W.QWidget();self.swap_dyes_slot.setFixedSize(22,20)
                 horizontal(self.swap_dyes_slot,0,0).addWidget(self.swap_dyes)
-                dyes.addWidget(self.swap_dyes_slot);self.swap_dyes.hide()
+                dyes.addWidget(self.swap_dyes_slot,0,1);self.swap_dyes.hide()
             b=button(f'● {channel}区',lambda ch=channel:self.controller.open_dyes(self.slot,ch));b.setProperty('dye',True)
             b.setContextMenuPolicy(C.Qt.CustomContextMenu)
             b.customContextMenuRequested.connect(lambda _position,ch=channel:self.controller.reset_slot_dye(self.slot,ch))
-            b.setMinimumWidth(62);b.setFixedHeight(20);dyes.addWidget(b);self.dyes.append(b)
-        dyes.addStretch();content.addLayout(dyes)
+            b.setMinimumWidth(62);b.setFixedHeight(20);dyes.addWidget(b,0,(channel-1)*2);self.dyes.append(b)
+            name=label('不可染色','Muted');name.setStyleSheet('font-size:10px;color:#95a1b5;');name.setFixedHeight(14)
+            name.setMinimumWidth(0);name.setSizePolicy(W.QSizePolicy.Ignored,W.QSizePolicy.Fixed);dyes.addWidget(name,1,(channel-1)*2);self.dye_names.append(name)
+        content.addLayout(dyes)
         self.icon.setPixmap(slot_icon(slot));self.clear.hide()
         for b in self.dyes:b.setEnabled(False)
     def remove(self):
@@ -185,6 +187,9 @@ class OutfitCard(W.QFrame):
             b.setText(f'{ch}区');b.setIcon(self.controller.color_swatch_icon(color,unavailable=count<ch,metallic=bool(dye and stain and dye.get('metallic',False))));b.setIconSize(C.QSize(16,16))
             b.setStyleSheet('QPushButton:disabled { background:#38252b; color:#e3aaa3; border:1px dashed #a46367; font-weight:600; }'if count<ch else'')
             b.setToolTip(f'第{ch}染色区 · '+(name if count>=ch else'不可染色'))
+            text=name if count>=ch else'不可染色';caption=self.dye_names[ch-1]
+            caption.setText(G.QFontMetrics(caption.font()).elidedText(text,C.Qt.ElideRight,max(40,(self.width()-105)//2)))
+            caption.setToolTip(text);caption.setAccessibleName(f'第{ch}染色区 · '+text)
 
 
 class WardrobeWindow(W.QMainWindow):
