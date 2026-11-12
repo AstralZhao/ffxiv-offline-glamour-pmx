@@ -599,14 +599,15 @@ class DemoEngine:
             raise ValueError('请先成功加载角色预览')
         from pmx_export import export_scene,DEFAULT_SCALE
         options={}if options is None else options
-        if not isinstance(options,dict)or set(options)-{'scale','resolution','textures','overwrite'}:
+        if not isinstance(options,dict)or set(options)-{'scale','resolution','textures','overwrite','rig','ik','expressions','physics'}:
             raise ValueError('PMX 导出选项不正确')
-        for key in('textures','overwrite'):
+        for key in('textures','overwrite','ik','expressions','physics'):
             if key in options and type(options[key])is not bool:raise ValueError('PMX 导出选项不正确')
         destination=Path(destination).absolute()
         if destination.resolve().is_relative_to(self.game):raise ValueError('PMX 不能保存到游戏安装目录')
         arguments={'scale':options.get('scale',DEFAULT_SCALE),'overwrite':options.get('overwrite',False),
-            'check_cancel':self.load_cancel.check}
+            'check_cancel':self.load_cancel.check,'rig':options.get('rig','native'),
+            'ik':options.get('ik',True),'expressions':options.get('expressions',True),'physics':options.get('physics',True)}
         scene=self.last_scene
         if options.get('textures',True):
             from pmx_material import MaterialBaker

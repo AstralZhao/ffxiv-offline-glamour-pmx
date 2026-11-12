@@ -1,7 +1,6 @@
 """PMX 2.0 export of the resolved preview, independent of Qt and D3D.
 
-The displayed pose becomes the PMX rest pose. Native bone names/hierarchy are
-retained; this is an FK rig, not an automatically retargeted MMD motion rig.
+Export either the displayed native rig or an automatically prepared MMD rig.
 """
 from __future__ import annotations
 
@@ -27,6 +26,13 @@ class Bone:
     name: str
     position: np.ndarray
     parent: int
+    english: str = ''
+    tail: int | tuple | None = None
+    movable: bool = True
+    visible: bool = True
+    layer: int = 0
+    append_rotation: tuple | None = None
+    ik: dict | None = None
 
 
 @dataclass
@@ -50,6 +56,11 @@ class Model:
     parts: list[Part]
     scale: float
     warnings: list[str] = field(default_factory=list)
+    morphs: list = field(default_factory=list)
+    rigids: list = field(default_factory=list)
+    joints: list = field(default_factory=list)
+    displays: list = field(default_factory=list)
+    rig: str = 'native'
 
 
 def _finite(value, shape, label):
@@ -60,7 +71,7 @@ def _finite(value, shape, label):
 
 
 class _Skeleton:
-    def __init__(self, scene, outfit, scale):
+    def __init__(self, scene, outfit, scale, reference=None):
         self.scene, self.outfit, self.scale = scene, outfit, scale
         self.names = dict(outfit.names)
         if set(self.names.values()) != set(range(len(self.names))):
@@ -68,6 +79,9 @@ class _Skeleton:
         self.bind = _finite(outfit.bind, (len(self.names), 4, 4), '绑定骨架')
         skinning = _finite(scene.skinning, self.bind.shape, '姿势矩阵')
         self.world = skinning @ self.bind
+        self.reference = reference
+        self.current = [np.eye(4)]
+        self.target = [np.eye(4)]
         self.bones = [Bone('全ての親', np.zeros(3), -1)]
         self.lookup = {}
         self.visiting = set()
@@ -92,8 +106,19 @@ class _Skeleton:
         else:
             parent_index = self.add(scope, parent, names, parents, world)
         index = len(self.bones)
+        current = world[names[name]]
+        target = current
+        if self.reference is not None:
+            if name in self.names:
+                target = self.reference[self.names[name]]
+            else:
+                ancestor = parent_index
+                # Preserve the attachment's local transform, including visors.
+                target = self.target[ancestor] @ np.linalg.solve(self.current[ancestor], current)
+        self.current.append(current)
+        self.target.append(target)
         self.bones.append(Bone((scope+'/' if scope else '')+name,
-                               world[names[name], :3, 3]*AXES*self.scale, parent_index))
+                               target[:3, 3]*AXES*self.scale, parent_index))
         self.lookup[key] = index
         self.visiting.remove(key)
         return index
@@ -205,8 +230,33 @@ def _normals(scene, mesh, vertices, weights, positions, triangles):
     return normals / lengths[:, None] * AXES
 
 
+def _rest_mesh(scene, mesh, vertices, positions, weights, palette, rig):
+    """Undo the actual blended preview transform, then apply the reference rig.
+
+    All source influences participate before reduction to PMX's four weights.
+    Solving against the resolved positions also retains baked shape changes.
+    """
+    old = mesh.get('joint_matrices')
+    if old is None:
+        old = scene.skinning[np.asarray(mesh['palette'])]
+    old = _finite(old, (len(palette), 4, 4), '网格蒙皮矩阵')
+    delta = np.asarray(rig.target)[palette] @ np.linalg.inv(np.asarray(rig.current)[palette])
+    new = delta @ old
+    blends = [np.zeros((len(vertices), 4, 4)) for _ in range(2)]
+    for column in range(weights.shape[1]):
+        active = weights[:, column] > 0
+        indices = vertices['joints'][active, column]
+        for blend, matrices in zip(blends, (old, new)):
+            blend[active] += matrices[indices] * weights[active, column, None, None]
+    source = np.linalg.solve(blends[0], np.column_stack((positions, np.ones(len(positions))))[..., None])
+    result = (blends[1] @ source)[:, :3, 0]
+    if not np.isfinite(result).all():
+        raise ValueError('PMX：无法恢复参考姿势')
+    return result, {**mesh, 'joint_matrices': new}
+
+
 def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_provider=None,
-                check_cancel=lambda: None):
+                check_cancel=lambda: None, rig='native', ik=True, expressions=True, physics=True):
     """Consume final visible indices and posed positions, never change the scene.
 
     material_provider(mesh) returns (Pillow RGBA image, UV array, notices).
@@ -216,12 +266,23 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
         raise ValueError('PMX：缩放比例必须大于 0 且不超过 10000')
     if getattr(scene, 'pending_meshes', ()) or getattr(scene, 'omitted', ()):
         raise ValueError('PMX：当前角色仍有未加载的可见部件')
-    rig = _Skeleton(scene, outfit, scale)
-    model = Model(str(name), rig.bones, [], float(scale), [
+    if rig not in ('native', 'standard') or any(type(v) is not bool for v in (ik, expressions, physics)):
+        raise ValueError('PMX：骨架选项不正确')
+    standard = rig == 'standard'
+    reference = None
+    if standard:
+        from pmx_rig import reference_world
+        reference = reference_world(scene, outfit)
+    skeleton = _Skeleton(scene, outfit, scale, reference)
+    model = Model(str(name), skeleton.bones, [], float(scale), [
         '当前预览姿势作为初始姿势；保留原生骨骼名称，可手动摆姿。',
         '未自动生成 MMD 标准骨骼映射、IK、表情、刚体或物理关节；使用 VMD 前需要适配。',
         '不导出装备粒子特效，MMD 光照与游戏预览存在差异。',
     ])
+    model.rig = rig
+    if standard:
+        model.warnings = ['使用自定义身材的 A 姿势与自动生成的 MMD 骨架；VMD 动作仍需按角色比例调整。',
+                          '不导出装备粒子特效，MMD 光照与游戏预览存在差异。']
     for number, mesh in enumerate(scene.meshes):
         check_cancel()
         indices = np.asarray(mesh['indices'])
@@ -237,8 +298,12 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
         triangles = inverse.reshape(-1, 3)
         vertices = source[used]
         positions = _finite(mesh['posed_positions'], (len(source), 3), '姿势顶点')[used]
-        bones, weights, original, reduced, loss = _weights(vertices, rig.palette(mesh))
-        normals = _normals(scene, mesh, vertices, original, positions, triangles)
+        palette = skeleton.palette(mesh)
+        bones, weights, original, reduced, loss = _weights(vertices, palette)
+        normal_mesh = mesh
+        if standard:
+            positions, normal_mesh = _rest_mesh(scene, mesh, vertices, positions, original, palette, skeleton)
+        normals = _normals(scene, normal_mesh, vertices, original, positions, triangles)
         uv = np.asarray(vertices['uv'], dtype=float)[:, :2]
         texture, notices = None, []
         if material_provider is not None:
@@ -256,6 +321,10 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
         ))
     if not model.parts:
         raise ValueError('PMX：没有可导出的可见三角形')
+    if standard:
+        from pmx_rig import prepare_standard
+        check_cancel()
+        prepare_standard(model, ik=ik, expressions=expressions, physics=physics, check_cancel=check_cancel)
     model.warnings = list(dict.fromkeys(model.warnings))
     return model
 
@@ -275,7 +344,7 @@ def write_pmx(stream, model, texture_paths):
     if max(count, faces, len(model.bones)) >= 2**31:
         raise ValueError('PMX：模型超过索引容量')
     stream.write(struct.pack('<4sf9B', b'PMX ', 2., 8, 0, 0, 4, 4, 4, 4, 4, 4))
-    for value in (model.name, model.name, '\r\n'.join(model.warnings), 'Exported by FFXIV Offline Glamour. Native FK rig; current preview pose is the rest pose.'):
+    for value in (model.name, model.name, '\r\n'.join(model.warnings), 'Exported by FFXIV Offline Glamour. Rig: '+model.rig):
         _string(stream, value)
     stream.write(struct.pack('<i', count))
     dtype = np.dtype([('position', '<f4', 3), ('normal', '<f4', 3), ('uv', '<f4', 2),
@@ -313,25 +382,57 @@ def write_pmx(stream, model, texture_paths):
         children.setdefault(bone.parent, []).append(index)
     for index, bone in enumerate(model.bones):
         _string(stream, bone.name)
-        _string(stream, 'Root' if index == 0 else bone.name)
-        tail = children.get(index, [None])[0]
-        stream.write(struct.pack('<3fiiH', *bone.position, bone.parent, 0, 0x1e | int(tail is not None)))
-        stream.write(struct.pack('<i', tail) if tail is not None else struct.pack('<3f', 0., .1*model.scale, 0.))
-    stream.write(struct.pack('<i', 0))  # Morphs.
-    groups = [('Root', 'Root', True, [0]), ('表情', 'Facial', True, []),
-              ('骨格', 'Native bones', False, list(range(1, len(model.bones))))]
+        _string(stream, bone.english or ('Root' if index == 0 else bone.name))
+        tail = bone.tail if bone.tail is not None else children.get(index, [None])[0]
+        indexed_tail = isinstance(tail, (int, np.integer))
+        flags = 0x12 | (4 if bone.movable else 0) | (8 if bone.visible else 0) | int(indexed_tail)
+        if bone.append_rotation is not None: flags |= 0x100
+        if bone.ik is not None: flags |= 0x20
+        stream.write(struct.pack('<3fiiH', *bone.position, bone.parent, bone.layer, flags))
+        stream.write(struct.pack('<i', tail) if indexed_tail else struct.pack('<3f', *(tail if tail is not None else (0., .1*model.scale, 0.))))
+        if bone.append_rotation is not None:
+            stream.write(struct.pack('<if', *bone.append_rotation))
+        if bone.ik is not None:
+            data = bone.ik
+            stream.write(struct.pack('<iifi', data['target'], data['iterations'], data['angle'], len(data['links'])))
+            for link, limits in data['links']:
+                stream.write(struct.pack('<iB', link, int(limits is not None)))
+                if limits is not None: stream.write(struct.pack('<6f', *limits[0], *limits[1]))
+    stream.write(struct.pack('<i', len(model.morphs)))
+    for morph in model.morphs:
+        _string(stream, morph['name']); _string(stream, morph['english'])
+        stream.write(struct.pack('<BBi', morph['panel'], 1, len(morph['indices'])))  # Vertex morph.
+        data = np.zeros(len(morph['indices']), dtype=[('index', '<i4'), ('delta', '<f4', 3)])
+        data['index'], data['delta'] = morph['indices'], morph['offsets']
+        stream.write(data.tobytes())
+    groups = model.displays or [('Root', 'Root', True, [(0, 0)]), ('表情', 'Facial', True, []),
+              ('骨格', 'Native bones', False, [(0, i) for i in range(1, len(model.bones))])]
     stream.write(struct.pack('<i', len(groups)))
     for japanese, english, special, bones in groups:
         _string(stream, japanese)
         _string(stream, english)
         stream.write(struct.pack('<Bi', int(special), len(bones)))
-        for bone in bones:
-            stream.write(struct.pack('<Bi', 0, bone))
-    stream.write(struct.pack('<ii', 0, 0))  # Rigid bodies, physics joints.
+        for kind, index in bones:
+            stream.write(struct.pack('<Bi', kind, index))
+    stream.write(struct.pack('<i', len(model.rigids)))
+    for body in model.rigids:
+        _string(stream, body['name']); _string(stream, body['name'])
+        stream.write(struct.pack('<iBHB', body['bone'], body['group'], body['mask'], body['shape']))
+        stream.write(struct.pack('<14fB', *body['size'], *body['position'], *body['rotation'],
+                                 body['mass'], body['linear_damping'], body['angular_damping'],
+                                 0., .5, body['mode']))
+    stream.write(struct.pack('<i', len(model.joints)))
+    for joint in model.joints:
+        _string(stream, joint['name']); _string(stream, joint['name'])
+        stream.write(struct.pack('<Bii', 0, joint['a'], joint['b']))
+        for key in ('position', 'rotation', 'linear_min', 'linear_max', 'angular_min', 'angular_max',
+                    'linear_spring', 'angular_spring'):
+            stream.write(struct.pack('<3f', *joint[key]))
 
 
 def export_scene(scene, outfit, destination, *, name=None, scale=DEFAULT_SCALE,
-                 material_provider=None, overwrite=False, check_cancel=lambda: None):
+                 material_provider=None, overwrite=False, check_cancel=lambda: None,
+                 rig='native', ik=True, expressions=True, physics=True):
     """Publish the PMX last, so a failed export never replaces an existing model.
 
     Each export owns a new assets directory; an overwrite cannot damage the
@@ -345,7 +446,8 @@ def export_scene(scene, outfit, destination, *, name=None, scale=DEFAULT_SCALE,
     if destination.exists() and not overwrite:
         raise FileExistsError('PMX 文件已存在：'+str(destination))
     model = build_model(scene, outfit, name=name or destination.stem, scale=scale,
-                        material_provider=material_provider, check_cancel=check_cancel)
+                        material_provider=material_provider, check_cancel=check_cancel,
+                        rig=rig, ik=ik, expressions=expressions, physics=physics)
     check_cancel()
     destination.parent.mkdir(parents=True, exist_ok=True)
     stage = Path(tempfile.mkdtemp(prefix='.pmx-', dir=destination.parent))
@@ -365,7 +467,10 @@ def export_scene(scene, outfit, destination, *, name=None, scale=DEFAULT_SCALE,
                 part.texture.save(stage/relative, format='PNG')
             textures.append(relative)
         report = {'format': 'PMX 2.0', 'model': destination.name, 'scale': model.scale,
-                  'pose': 'current preview as rest pose', 'vertices': sum(len(p.positions) for p in model.parts),
+                  'pose': 'customized A pose' if rig == 'standard' else 'current preview as rest pose',
+                  'rig': model.rig, 'morphs': len(model.morphs), 'rigid_bodies': len(model.rigids),
+                  'physics_joints': len(model.joints), 'ik_bones': sum(b.ik is not None for b in model.bones),
+                  'vertices': sum(len(p.positions) for p in model.parts),
                   'triangles': sum(len(p.triangles) for p in model.parts), 'bones': len(model.bones),
                   'materials': len(model.parts), 'textures': sum(t is not None for t in textures),
                   'warnings': model.warnings, 'parts': [p.source for p in model.parts]}
