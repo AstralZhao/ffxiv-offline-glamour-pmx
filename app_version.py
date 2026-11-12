@@ -26,7 +26,22 @@ def current_version():
     return declared
 
 
+def manual_updates():
+    """A customized portable build must not install the upstream edition."""
+    return json.loads((paths().program/'docs/client-version.json').read_bytes()).get('update_policy')=='manual'
+
+
+def distribution_label():
+    return json.loads((paths().program/'docs/client-version.json').read_bytes()).get('edition_label','')
+
+
+def update_notice():
+    if manual_updates():
+        return 'PMX 便携版采用手动更新，不安装上游普通版。请关闭软件后解压新版 PMX 包，再迁移“用户数据”；使用离线资源包时同时迁移“resources”。'
+    return '开发版请通过 Git 更新源码，不覆盖开发目录。'
+
+
 def can_install():
     # A source checkout is never overwritten by the release updater.
     p=paths()
-    return p.program!=p.root and is_release(p.program)
+    return p.program!=p.root and is_release(p.program)and not manual_updates()

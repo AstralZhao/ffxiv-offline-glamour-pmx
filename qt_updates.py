@@ -6,7 +6,7 @@ enable()
 from PySide6 import QtCore as C,QtWidgets as W
 from qt_theme import label,button,vertical,horizontal,LoadingSpinner
 from app_paths import paths,_atomic_json
-from app_version import current_version,can_install,RELEASES,is_beta
+from app_version import current_version,can_install,RELEASES,is_beta,manual_updates,distribution_label,update_notice
 import updates
 
 
@@ -20,7 +20,8 @@ class UpdateController(C.QObject):
         try:preference=json.loads(self.preference.read_bytes())
         except(OSError,ValueError):preference={}
         if not isinstance(preference,dict):preference={}
-        self.auto=preference.get('startup_check',True)is not False;self.beta=preference.get('channel')=='beta'
+        self.auto=preference.get('startup_check',True)is not False and not manual_updates();self.beta=preference.get('channel')=='beta'
+        if manual_updates():self.status=update_notice();self.beta=False
         self.timer=C.QTimer(self);self.timer.setInterval(80);self.timer.timeout.connect(self.poll)
         session.application.aboutToQuit.connect(self.shutdown)
         if schedule_startup and self.auto and can_install():C.QTimer.singleShot(0,lambda:self.check(True))
@@ -51,12 +52,13 @@ class UpdateController(C.QObject):
 
     def check(self,automatic=False,*,return_to_stable=False):
         if self.future or self.closed:return
+        if manual_updates():self.status=update_notice();self.changed.emit();return
         self.automatic=automatic;self.operation='return_stable'if return_to_stable else'check';self.status='正在检查 Gitee 发行版本…';self.fraction=None
         self.future=self.pool.submit(updates.check,self.version,channel='stable'if return_to_stable else'beta'if self.beta else'stable',return_to_stable=return_to_stable);self.timer.start();self.changed.emit()
 
     def download(self,*,confirmed=False):
         if self.future or self.closed or not self.info:return
-        if not can_install():self.status='开发版请通过 Git 更新源码，不覆盖开发目录。';self.changed.emit();return
+        if not can_install():self.status=update_notice();self.changed.emit();return
         returning=self.info.get('return_to_stable',False)
         if returning and not confirmed:
             answer=W.QMessageBox.question(self.session.window,'返回正式版',self.version+' → '+self.info['latest']+'\n\n安装此正式版并保留用户数据、缓存和资源？',W.QMessageBox.Yes|W.QMessageBox.No,W.QMessageBox.No)
@@ -164,7 +166,11 @@ class UpdatePanel(W.QWidget):
     def __init__(self,controller,parent=None):
         super().__init__(parent);self.controller=controller
         outer=vertical(self,0,16);outer.addWidget(label('软件更新','Section'))
-        outer.addWidget(label('当前版本：'+controller.version+(' · 开发模式' if not can_install() else ''),'Badge'))
+        edition=distribution_label()
+        outer.addWidget(label('当前版本：'+controller.version+(' · '+edition if edition else' · 开发模式'if not can_install()else''),'Badge'))
+        if manual_updates():
+            hint=label(update_notice(),'Muted');hint.setWordWrap(True);outer.addWidget(hint)
+            return
         self.auto=W.QCheckBox('启动时自动检查更新');self.auto.setChecked(controller.auto);self.auto.toggled.connect(controller.set_auto);outer.addWidget(self.auto)
         self.beta=W.QCheckBox('接收测试版更新');self.beta.setChecked(controller.beta);self.beta.toggled.connect(controller.set_beta);outer.addWidget(self.beta)
         self.return_button=button('返回最新正式版',controller.return_stable,ghost=True);self.return_button.setVisible(is_beta(controller.version));outer.addWidget(self.return_button)

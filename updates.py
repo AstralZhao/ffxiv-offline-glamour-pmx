@@ -7,7 +7,7 @@ from pathlib import Path,PurePosixPath
 from contextlib import contextmanager
 import hashlib,json,os,re,shutil,subprocess,urllib.parse,urllib.request,uuid,zipfile
 from app_paths import paths,no_links,_atomic_json
-from app_version import API,RELEASES,version_key,current_version,can_install,is_beta
+from app_version import API,RELEASES,version_key,current_version,can_install,is_beta,update_notice
 
 MANIFEST='update-manifest.json'
 LIMIT=8*1024**2
@@ -207,7 +207,7 @@ def _preparation_workspace(layout):
 
 def prepare(info,*,layout=None,progress=None,cancel=None,local=False,allow_stable_return=False):
     p=layout or paths()
-    if layout is None and not can_install():raise ValueError('开发版直接运行源码，请通过 Git 更新源码；不会覆盖开发目录')
+    if layout is None and not can_install():raise ValueError(update_notice())
     if info.get('status')!='available' or not distribution_name(info.get('asset')):raise ValueError('没有可用的完整软件发行包')
     stable_return=allow_stable_return is True and info.get('return_to_stable')is True and is_beta(info['current'])and not is_beta(info['latest'])
     if info.get('return_to_stable')and not stable_return:raise ValueError('返回正式版需要明确确认')
