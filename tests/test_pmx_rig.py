@@ -8,7 +8,7 @@ import unittest
 
 import numpy as np
 
-from pmx_export import build_model, export_scene
+from pmx_export import Bone, bone_display_connections, build_model, export_scene
 from pmx_rig import FINGERS
 
 
@@ -56,6 +56,47 @@ def humanoid():
 
 
 class RigTests(unittest.TestCase):
+    def test_spine_tails_ignore_breasts_and_equipment_sockets(self):
+        # Deliberately put the distracting branch before the anatomical child,
+        # as in real FFXIV skeleton palettes.
+        rows=[('n_hara',-1,(0,1,0)),('j_kosi',0,(0,1,0)),
+              ('j_asi_a_l',1,(.08,.9,0)),('j_asi_a_r',1,(-.08,.9,0)),
+              ('j_sebo_a',0,(0,1,0)),('j_sebo_b',4,(0,1.12,.01)),
+              ('j_mune_l',5,(.04,1.18,-.05)),('j_sebo_c',5,(0,1.24,.01)),
+              ('j_buki_sebo_l',7,(.08,1.3,.07)),('j_kubi',7,(0,1.35,0)),
+              ('j_kao',9,(0,1.44,-.03)),('j_ago',10,(0,1.43,-.04))]
+        bones=[Bone(name,np.array(pos),parent)for name,parent,pos in rows]
+        tails=bone_display_connections(bones,1)
+        self.assertEqual(tails[5],7)  # Chest to upper chest, not left breast.
+        self.assertEqual(tails[7],9)  # Upper chest to neck, not back socket.
+        self.assertAlmostEqual(tails[1][0],0.)
+        self.assertLess(tails[1][1],0.)
+        self.assertGreater(tails[10][1],0.)
+        for bone,tail in zip(bones,tails):
+            offset=bones[tail].position-bone.position if isinstance(tail,int)else np.asarray(tail)
+            self.assertGreater(np.linalg.norm(offset),1e-6)
+
+    def test_terminal_bones_follow_their_chain_and_controls_keep_their_direction(self):
+        bones=[Bone('全ての親',np.zeros(3),-1),
+               Bone('親指１',np.array((.4,.9,0)),0,english='j_oya_a_l'),
+               Bone('親指２',np.array((.42,.85,-.02)),1,english='j_oya_b_l'),
+               Bone('足首',np.array((.08,.08,.02)),0,english='j_asi_d_l'),
+               Bone('つま先',np.array((.08,.015,-.07)),3,english='j_asi_e_l'),
+               Bone('左足ＩＫ',np.array((.08,.08,.02)),0,tail=(0,0,-.08)),
+               Bone('グルーブ',np.array((0,1,0)),0,tail=7),
+               Bone('腰',np.array((0,1,0)),6,english='n_hara'),
+               Bone('j_f_eye_l',np.array((.025,1.46,-.075)),0),
+               Bone('j_f_eyepuru_l',np.array((.025,1.46,-.075)),8)]
+        tails=bone_display_connections(bones,1)
+        direction=bones[2].position-bones[1].position
+        np.testing.assert_allclose(np.cross(tails[2],direction),0,atol=1e-12)
+        self.assertGreater(np.dot(tails[2],direction),0)
+        self.assertEqual(tails[4],(0.,0.,-.04))
+        self.assertEqual(tails[5],(0,0,-.08))
+        self.assertEqual(tails[6],(0.,.04,0.))
+        self.assertEqual(tails[8],(0.,0.,-.04))
+        self.assertEqual(tails[0],(0.,.08,0.))
+
     def test_rest_conversion_uses_all_eight_source_weights_before_pmx_reduction(self):
         scene,outfit=humanoid();mesh=scene.meshes[0]
         vertices=np.zeros(3,dtype=[('position','f8',3),('normal','f8',3),('uv','f8',4),('joints','i4',8),('weights','f8',8)])

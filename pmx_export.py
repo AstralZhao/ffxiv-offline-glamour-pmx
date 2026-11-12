@@ -335,6 +335,74 @@ def _string(stream, value):
     stream.write(raw)
 
 
+def bone_display_connections(bones, scale):
+    """Choose anatomical bone tails, independent of child insertion order.
+
+    PMX stores joint positions separately from display connections. Blender
+    uses those connections to construct its rest-bone directions, so selecting
+    an arbitrary child (a breast or weapon socket, for example) is incorrect.
+    This changes neither the joints nor the deformation hierarchy.
+    """
+    source = {bone.english or bone.name: i for i, bone in enumerate(bones)}
+    children = {}
+    for i, bone in enumerate(bones): children.setdefault(bone.parent, []).append(i)
+    chains = {'j_sebo_a': 'j_sebo_b', 'j_sebo_b': 'j_sebo_c', 'j_sebo_c': 'j_kubi', 'j_kubi': 'j_kao'}
+    for side in ('l', 'r'):
+        for start, end in (('j_sako','j_ude_a'),('j_ude_a','j_ude_b'),('j_ude_b','j_te'),
+                           ('j_te','j_naka_a'),('j_asi_a','j_asi_b'),('j_asi_b','j_asi_d'),('j_asi_c','j_asi_d'),('j_asi_d','j_asi_e')):
+            chains[start+'_'+side] = end+'_'+side
+        for finger in ('j_oya','j_hito','j_naka','j_kusu','j_ko'):
+            chains[f'{finger}_a_{side}'] = f'{finger}_b_{side}'
+    small = .04*scale
+    epsilon = 1e-6*scale
+    def usable(i, tail):
+        if isinstance(tail, (int, np.integer)):
+            return 0 <= tail < len(bones) and np.linalg.norm(bones[tail].position-bones[i].position) > epsilon
+        return tail is not None and np.asarray(tail).shape == (3,) and np.isfinite(tail).all() and np.linalg.norm(tail) > epsilon
+    def continuation(i):
+        bone = bones[i]
+        if bone.parent >= 0:
+            delta = bone.position-bones[bone.parent].position
+            length = np.linalg.norm(delta)
+            if length > epsilon:
+                return tuple(delta/length * np.clip(length*.6, small*.25, small*1.5))
+        # Coincident facial pivots face forward; hair pivots extend downward.
+        name = (bone.english or bone.name).rsplit('/', 1)[-1]
+        if name.startswith('j_f_'): return (0., 0., -small*.5)
+        if name.startswith(('j_kami_', 'j_ex_h')): return (0., -small, 0.)
+        return (0., small, 0.)
+    result = []
+    for i, bone in enumerate(bones):
+        name = bone.english or bone.name
+        tail = None
+        if bone.name == '全ての親':
+            tail = (0., small*2, 0.)
+        elif bone.name in ('グルーブ', '腰') or name in ('n_root', 'n_hara'):
+            tail = (0., small, 0.)
+        elif name == 'j_kosi' and all(n in source for n in ('j_asi_a_l', 'j_asi_a_r')):
+            # The lower-body control points between both hips, never at one leg.
+            tail = tuple((bones[source['j_asi_a_l']].position+bones[source['j_asi_a_r']].position)/2-bone.position)
+        elif name == 'j_kao':
+            tail = (0., small*3, 0.)
+        elif name in ('j_f_eye_l', 'j_f_eye_r'):
+            tail = (0., 0., -small)
+        elif name in ('j_asi_e_l', 'j_asi_e_r') and bone.parent >= 0:
+            delta = bone.position-bones[bone.parent].position
+            delta = delta.copy(); delta[1] = 0.
+            length = np.linalg.norm(delta)
+            tail = tuple(delta/length*small) if length > epsilon else (0., 0., -small)
+        elif name in chains and chains[name] in source:
+            tail = source[chains[name]]
+        if not usable(i, tail): tail = bone.tail
+        if not usable(i, tail):
+            candidates = [child for child in children.get(i, ()) if usable(i, child)]
+            # A branching bone has no unique direction. Continue its incoming
+            # chain rather than depending on palette/dictionary ordering.
+            tail = candidates[0] if len(candidates) == 1 else continuation(i)
+        result.append(tail)
+    return result
+
+
 def write_pmx(stream, model, texture_paths):
     """Write PMX 2.0, UTF-16LE, four-byte indices and BDEF4 weights."""
     if len(texture_paths) != len(model.parts):
@@ -377,13 +445,11 @@ def write_pmx(stream, model, texture_paths):
         _string(stream, json.dumps(part.source, ensure_ascii=False))
         stream.write(struct.pack('<i', part.triangles.size))
     stream.write(struct.pack('<i', len(model.bones)))
-    children = {}
-    for index, bone in enumerate(model.bones):
-        children.setdefault(bone.parent, []).append(index)
+    tails = bone_display_connections(model.bones, model.scale)
     for index, bone in enumerate(model.bones):
         _string(stream, bone.name)
         _string(stream, bone.english or ('Root' if index == 0 else bone.name))
-        tail = bone.tail if bone.tail is not None else children.get(index, [None])[0]
+        tail = tails[index]
         indexed_tail = isinstance(tail, (int, np.integer))
         flags = 0x12 | (4 if bone.movable else 0) | (8 if bone.visible else 0) | int(indexed_tail)
         if bone.append_rotation is not None: flags |= 0x100
