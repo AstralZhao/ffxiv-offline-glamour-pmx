@@ -10,32 +10,81 @@ from pathlib import Path, PurePosixPath
 import shutil
 import subprocess
 import sys
+import urllib.parse
 import urllib.request
+import uuid
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
 TAG='v0.0.7-beta.3'  # The release matching this repository's facewear UI.
 API='https://gitee.com/api/v5/repos/kilislan-wei/ffxiv_offline_glamour/releases'
+ASSET='幻化柜-v0.0.7-beta.3-20261108-233105.zip'
+# Pin the entire official archive, including Python, Qt and native binaries.
+ARCHIVE_BYTES=49067663
+ARCHIVE_SHA256='ad6942013f7915677776392b3a3dea5615a97838552b566bb51672fdb91fe06c'
+MAX_JSON_BYTES=4*1024**2
+
+
+def _https(url):
+    parsed=urllib.parse.urlsplit(url)
+    if parsed.scheme!='https' or not parsed.hostname or parsed.username or parsed.password:
+        raise ValueError('Runtime downloads and redirects must use HTTPS')
+    return url
+
+
+class _Redirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self,req,fp,code,msg,headers,newurl):
+        _https(newurl)
+        return super().redirect_request(req,fp,code,msg,headers,newurl)
+
+
+def _open(url,timeout=30):
+    request=urllib.request.Request(_https(url),headers={'User-Agent':'HuanHuaGui-DevRuntime/1','Accept-Encoding':'identity'})
+    return urllib.request.build_opener(_Redirect()).open(request,timeout=timeout)
+
+
+def download_archive(archive):
+    """Reuse only a verified cache; a failed retry leaves its previous file intact."""
+    archive=Path(archive)
+    if archive.is_file() and archive.stat().st_size==ARCHIVE_BYTES:
+        with archive.open('rb')as source:
+            if hashlib.file_digest(source,'sha256').hexdigest()==ARCHIVE_SHA256:return
+    print('Downloading the matching official application package…',flush=True)
+    with _open(API+'?per_page=100')as response:
+        _https(response.geturl());raw=response.read(MAX_JSON_BYTES+1)
+    if len(raw)>MAX_JSON_BYTES:raise ValueError('Release metadata exceeds the size limit')
+    releases=json.loads(raw)
+    if not isinstance(releases,list):raise ValueError('Invalid release metadata')
+    release=next((row for row in releases if isinstance(row,dict)and row.get('tag_name')==TAG),None)
+    assets=release.get('assets',[])if release else []
+    asset=next((row for row in assets if isinstance(row,dict)and row.get('name')==ASSET),None)
+    if asset is None:raise ValueError('The pinned runtime release asset is unavailable: '+ASSET)
+    url=asset.get('browser_download_url','')
+    if not isinstance(url,str)or not url.startswith('https://gitee.com/kilislan-wei/ffxiv_offline_glamour/releases/download/'+TAG+'/'):
+        raise ValueError('Unexpected release download location')
+    temporary=archive.with_name(archive.name+'.'+uuid.uuid4().hex+'.download')
+    try:
+        digest=hashlib.sha256();received=0
+        with _open(url,timeout=60)as response,temporary.open('xb')as out:
+            _https(response.geturl());length=response.headers.get('Content-Length')
+            if length is not None and int(length)!=ARCHIVE_BYTES:raise ValueError('Unexpected runtime archive size')
+            while True:
+                block=response.read(65536)
+                if not block:break
+                received+=len(block)
+                if received>ARCHIVE_BYTES:raise ValueError('Runtime download exceeds the pinned size')
+                digest.update(block);out.write(block)
+        if received!=ARCHIVE_BYTES or digest.hexdigest()!=ARCHIVE_SHA256:
+            raise ValueError('Runtime archive checksum differs; no downloaded code was extracted')
+        temporary.replace(archive)
+    finally:temporary.unlink(missing_ok=True)
 
 
 def prepare():
     local=ROOT/'local_runtime';local.mkdir(exist_ok=True)
     archive=local/(TAG+'.zip');runtime=local/'dev'
     if not (runtime/'artifacts/source-runtime.downloaded.json').is_file():
-        if not archive.is_file():
-            print('Downloading the matching official application package…',flush=True)
-            with urllib.request.urlopen(API,timeout=30)as response:releases=json.load(response)
-            release=next(row for row in releases if row['tag_name']==TAG)
-            asset=next(row for row in release['assets']if '/releases/download/'in row['browser_download_url']and row['name'].endswith('.zip'))
-            url=asset['browser_download_url']
-            if not url.startswith('https://gitee.com/kilislan-wei/ffxiv_offline_glamour/releases/download/'+TAG+'/'):
-                raise ValueError('Unexpected release download location')
-            temporary=archive.with_suffix('.download')
-            try:
-                with urllib.request.urlopen(url,timeout=60)as response,temporary.open('wb')as out:
-                    shutil.copyfileobj(response,out)
-                temporary.replace(archive)
-            finally:temporary.unlink(missing_ok=True)
+        download_archive(archive)
         with zipfile.ZipFile(archive)as package:
             modules=[p for p in package.namelist()if p.endswith('/程序/artifacts/source-runtime.json')]
             if len(modules)!=1:raise ValueError('The package has no unambiguous source runtime')

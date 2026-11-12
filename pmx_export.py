@@ -511,17 +511,19 @@ def export_scene(scene, outfit, destination, *, name=None, scale=DEFAULT_SCALE,
         raise ValueError('PMX 输出必须是普通文件')
     if destination.exists() and not overwrite:
         raise FileExistsError('PMX 文件已存在：'+str(destination))
-    model = build_model(scene, outfit, name=name or destination.stem, scale=scale,
-                        material_provider=material_provider, check_cancel=check_cancel,
-                        rig=rig, ik=ik, expressions=expressions, physics=physics)
     check_cancel()
     destination.parent.mkdir(parents=True, exist_ok=True)
+    # Probe output permissions before expensive geometry/material work.
     stage = Path(tempfile.mkdtemp(prefix='.pmx-', dir=destination.parent))
     assets_name = 'pmx_assets_'+uuid.uuid4().hex[:16]
     assets = destination.parent/assets_name
     published = False
     moved_assets = False
     try:
+        model = build_model(scene, outfit, name=name or destination.stem, scale=scale,
+                            material_provider=material_provider, check_cancel=check_cancel,
+                            rig=rig, ik=ik, expressions=expressions, physics=physics)
+        check_cancel()
         folder = stage/assets_name
         folder.mkdir()
         textures = []

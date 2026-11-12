@@ -32,9 +32,9 @@ PMX 普通材质不能完整表达游戏的 PBR、法线贴图、发光、反射
 
 ## 开发运行
 
-这个仓库的根目录实际是完整软件中的 `demo` 应用层，缺少 `tools`、运行表、默认角色及 Python / Qt 环境。开发辅助脚本从本项目 Gitee 发行页下载与当前源码匹配的 `v0.0.7-beta.3` 完整包，校验包内源码清单，解压到 `local_runtime/dev`，再覆盖本分支的应用层源码。下载与开发环境均被 Git 忽略；不修改原始压缩包或其他已安装软件。
+这个仓库的根目录实际是完整软件中的 `demo` 应用层，缺少 `tools`、运行表、默认角色及 Python / Qt 环境。开发辅助脚本从本项目 Gitee 发行页下载与当前源码匹配的 `v0.0.7-beta.3` 完整包，先核对固定的整包长度与 SHA-256，再校验包内源码清单，解压到 `local_runtime/dev`，最后覆盖本分支的应用层源码。损坏的下载缓存会重新获取，下载失败会清理本次临时文件；已校验的缓存可离线复用。下载与开发环境均被 Git 忽略；不修改其他已安装软件。
 
-Windows 安装有 Python 时，双击 `run-pmx-dev.cmd`。首次启动仍需在软件内选择游戏目录或资源来源。也可以运行：
+Windows 开发机安装 Python 3.11 或更高版本后，双击 `run-pmx-dev.cmd`。首次启动仍需在软件内选择游戏目录或资源来源。也可以运行：
 
 ```powershell
 python -X utf8 scripts/run_dev.py --game 'D:/最终幻想XIV'
@@ -51,14 +51,20 @@ python -X utf8 scripts/run_dev.py --prepare-only
 无需游戏或显卡的回归测试（需要 NumPy、Pillow）：
 
 ```powershell
-python -X utf8 -m unittest discover -s tests -v
+python -X utf8 -m unittest discover -s tests -t . -v
 ```
 
-也可使用下载包自带的 Python。可选设置 `PMX_REFERENCE_READER` 为独立 MMD Tools 的 `core/pmx/__init__.py`，增加第三方读取器回读测试。测试不联网下载代码。
+也可在仓库根目录使用下载包自带的 Python。`-t .` 确保内置 Python 的隔离模式也从本仓库导入待测源码：
+
+```powershell
+& './local_runtime/dev/artifacts/runtime/python/python.exe' -X utf8 -m unittest discover -s tests -t . -v
+```
+
+可选设置 `PMX_REFERENCE_READER` 为独立 MMD Tools 的 `core/pmx/__init__.py`，增加第三方读取器回读测试。测试不联网下载代码。
 
 ```powershell
 $env:PMX_REFERENCE_READER='独立读取器的绝对路径'
-python -X utf8 -m unittest discover -s tests -v
+python -X utf8 -m unittest discover -s tests -t . -v
 ```
 
 材质烘焙和界面需在 Windows 上，用完整运行包及匹配的游戏资源验证。仅通过文件格式测试不能证明所有装备、特殊材质或 VMD 动作均兼容。
@@ -73,5 +79,18 @@ python -X utf8 -m unittest discover -s tests -v
 - 从 Qt 界面实际触发导出，期间计时器继续响应，完成后导出按钮恢复可用；新建开发运行环境与启动检查通过。
 - 标准模式的默认敖龙族与换装角色成功导出并在 Blender 5.1 / MMD Tools 中导入：203 / 208 根骨骼、4 个 IK、13 个表情，最多 35 个刚体、26 个物理关节。双腿 IK 移动目标后的误差小于 0.1 毫米；眨眼、口型与双眼控制实际驱动网格，已渲染检查。物理随角色移动连续模拟 60 帧，无非有限数值或发散。
 - 修复骨尾错误连接胸部骨、装备挂点及末端统一朝上的问题后，在 Blender 5.2.4 / MMD Tools 中验证了 16,169 顶点、210 骨骼的实际模型。关节位置、原始网格与权重保持不变，IK、表情及 60 帧物理验证通过；新增脊柱分支与末端方向回归测试。
+- 发行检查新增更新下载超时、取消、损坏压缩包的清理测试，以及运行包校验、损坏缓存重试、下载大小限制、HTTPS 重定向和不可写 PMX 输出目录测试；共 40 项回归测试在系统 Python 3.13 和内置 Python 3.11 中通过。成功准备的更新保留给更新助手，失败尝试不会改动旧安装或其他更新任务。
+- 八个种族、男女共 16 个默认预设完成真实资源加载与标准 PMX 导出，并通过独立 MMD Tools 读取器的数量、索引、IK 及有限数值检查。每种组合选一个部族及默认外观，关闭贴图烘焙；这项检查验证加载和文件生成，不代表所有脸型、复杂装备或实际 MMD 动画效果已验收。
 
 以上使用 MMD Tools 导入验证，没有在 MikuMikuDance 主程序中逐项测试全部装备。部分眼镜玻璃的烘焙结果为全透明，报告会注明，可能需要在目标软件中调整材质。
+
+## 发行准备
+
+当前分支适合作为开发测试版本。正式发行前仍需完成：
+
+1. **独立构建与安装验证**：补齐应用发行脚本，使用运行依赖白名单并重建 `source-runtime.json`、`package-manifest.json`，确认包含四个 PMX 模块。在没有系统 Python、没有开发缓存的 Windows 环境中验证解压启动、首次配置、导出和用户数据保留。当前开发环境的启动检查不能替代发行包验收。
+2. **版本与更新渠道**：明确发布基线及版本号。当前开发运行包固定为 `v0.0.7-beta.3`，更新地址仍指向上游仓库；2026-11-13 检查时上游最新正式标签为 `v0.0.9`。应先整合选定的上游版本，或使用包含本分支功能的发行渠道，再开启自动安装更新。开发目录已禁止自动覆盖，但正式打包后不能依靠这项保护。需实际验证旧版升级和失败回滚。
+3. **MMD 验收**：在 MikuMikuDance 主程序中验证标准 VMD、腿脚 IK、表情叠加、物理及材质排序；增加复杂长裙、配饰、体型极值和不同脸型案例。目前主要验证平台为 Blender / MMD Tools。
+4. **长任务体验**：提供独立的 PMX 导出取消入口、按网格及材质显示的阶段进度，并记住上次输出目录及选项。当前只有忙碌提示，关闭整个客户端才会取消导出。
+
+本轮已修复更新失败遗留临时目录、开发运行包缺少整包校验及损坏缓存恢复、PMX 导出到不可写目录时过晚报错三个问题。尚未生成或发布正式 PMX 安装包。

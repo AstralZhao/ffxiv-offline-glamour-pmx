@@ -4,6 +4,7 @@ Download a complete release, preserve personal data. Validation finishes before 
 shuts down. A separate native helper owns replacement/rollback after exit.
 """
 from pathlib import Path,PurePosixPath
+from contextlib import contextmanager
 import hashlib,json,os,re,shutil,subprocess,urllib.parse,urllib.request,uuid,zipfile
 from app_paths import paths,no_links,_atomic_json
 from app_version import API,RELEASES,version_key,current_version,can_install,is_beta
@@ -188,6 +189,22 @@ def _local_files(p,current):
     return owned
 
 
+@contextmanager
+def _preparation_workspace(layout):
+    """Keep successful update jobs; discard this attempt on failure/cancel."""
+    parent=layout.derived('updates')
+    folder=no_links(parent/uuid.uuid4().hex,layout.root);folder.mkdir(parents=True)
+    try:
+        yield folder
+    except BaseException:
+        try:
+            # Remove only our newly allocated direct child, never a linked or
+            # user-selected directory. Cleanup cannot hide the original error.
+            if no_links(folder,layout.root).resolve().parent==parent.resolve():shutil.rmtree(folder)
+        except(OSError,ValueError):pass
+        raise
+
+
 def prepare(info,*,layout=None,progress=None,cancel=None,local=False,allow_stable_return=False):
     p=layout or paths()
     if layout is None and not can_install():raise ValueError('开发版直接运行源码，请通过 Git 更新源码；不会覆盖开发目录')
@@ -196,7 +213,11 @@ def prepare(info,*,layout=None,progress=None,cancel=None,local=False,allow_stabl
     if info.get('return_to_stable')and not stable_return:raise ValueError('返回正式版需要明确确认')
     if version_key(info['latest'])<=version_key(info['current'])and not stable_return:raise ValueError('不允许降级或重复更新')
     old=_local_files(p,info['current'])
-    folder=no_links(p.derived('updates')/uuid.uuid4().hex,p.root);folder.mkdir(parents=True)
+    with _preparation_workspace(p)as folder:
+        return _prepare_download(info,p,old,folder,progress,cancel,local)
+
+
+def _prepare_download(info,p,old,folder,progress,cancel,local):
     package=folder/'release.zip';received=0;total=info.get('bytes')
     if total is not None and (type(total)is not int or not 0<total<=1024**3):raise ValueError('发行包大小不正确')
     def check_cancel():

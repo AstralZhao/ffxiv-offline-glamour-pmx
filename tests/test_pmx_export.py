@@ -130,6 +130,15 @@ class GeometryTests(unittest.TestCase):
 
 
 class FilesystemTests(unittest.TestCase):
+    def test_unwritable_destination_fails_before_material_baking(self):
+        scene,outfit,_=fixture();bake=mock.Mock()
+        with tempfile.TemporaryDirectory()as directory:
+            with mock.patch('pmx_export.tempfile.mkdtemp',side_effect=PermissionError('read-only')):
+                with self.assertRaises(PermissionError):
+                    export_scene(scene,outfit,Path(directory)/'model.pmx',material_provider=bake)
+            self.assertEqual(list(Path(directory).iterdir()),[])
+        bake.assert_not_called()
+
     def test_publishes_pmx_and_relative_texture_bundle(self):
         scene,outfit,mesh=fixture()
         with tempfile.TemporaryDirectory() as directory:
