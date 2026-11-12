@@ -372,6 +372,9 @@ class QtClient(NativeClient):
         self.effects_play=button('▶ 播放特效',self.toggle_effect_playback,ghost=True);self.effects_play.setCheckable(True)
         self.effects_play.setEnabled(False);self.effects_play.setToolTip('播放 / 暂停装备特效。暂停保留当前帧；重新启动默认暂停。')
         right.addWidget(self.effects_play)
+        self.pmx_export_button=button('导出 PMX 模型',self.export_pmx,ghost=True)
+        self.pmx_export_button.setToolTip('将当前可见角色、装备、骨骼和染色贴图导出为 MMD 模型')
+        self.pmx_export_button.setEnabled(False);right.addWidget(self.pmx_export_button)
         body_layout.addWidget(self.dressing)
         footer=W.QFrame();footer.setObjectName('Footer');f=horizontal(footer,12,8)
         self.status_dot=label('●');self.status_dot.setStyleSheet('color:#89d5c4;font-size:9px');f.addWidget(self.status_dot)
@@ -488,6 +491,14 @@ class QtClient(NativeClient):
         if self.editor:self.editor.spinner.set_running(busy)
         if self.editor:self.editor.spinner.set_progress(fraction)
         self.character_manager.update_state()
+        self.pmx_export_button.setEnabled(self.ready and not busy and not self.closing)
+
+    def export_pmx(self):
+        if not self.ready or self.closing:return
+        if self.job is not None or self.dirty or self.effect_deferred is not None:
+            self.message.set('预览正在更新，请完成后再导出 PMX');return
+        from qt_pmx_export import export_dialog
+        self.show_dialog(export_dialog(self))
 
     def poll_startup(self):
         if self.closing:return self.close()

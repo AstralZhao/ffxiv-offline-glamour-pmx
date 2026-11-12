@@ -121,7 +121,7 @@ class DemoEngine:
         self.transfer_progress=TransferProgress(cancel=self.load_cancel)
         self.pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeGPU',initializer=bind,initargs=(self.transfer_progress,))
         self.lock=threading.RLock();self.status='loading';self.message='正在读取国服资源与外观预设…'
-        self.images=OrderedDict();self.presets={};self.last=None;self.error=None;self.scene_cache=OrderedDict()
+        self.images=OrderedDict();self.presets={};self.last=None;self.last_scene=None;self.error=None;self.scene_cache=OrderedDict()
         self.data=AppPaths(ROOT).user;self.data.mkdir(parents=True,exist_ok=True)
         self.token=secrets.token_urlsafe(24);self.ready=self.pool.submit(self.initialize)
 
@@ -589,8 +589,30 @@ class DemoEngine:
             'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')}|set(scene.effect_notices)),
             'equipment_effects':scene.effect_summaries,'effect_draws':self.renderer.last_effect_draws,'effect_frame':frame,
             'visor':scene.visor}
-        with self.lock:self.last=result
+        with self.lock:self.last=result;self.last_scene=scene
         return result
+
+    @tracked
+    def export_pmx(self,destination,options=None):
+        """Run on the GPU worker and export only the last successful preview."""
+        if self.status!='ready'or self.last_scene is None or self.character is None:
+            raise ValueError('请先成功加载角色预览')
+        from pmx_export import export_scene,DEFAULT_SCALE
+        options={}if options is None else options
+        if not isinstance(options,dict)or set(options)-{'scale','resolution','textures','overwrite'}:
+            raise ValueError('PMX 导出选项不正确')
+        for key in('textures','overwrite'):
+            if key in options and type(options[key])is not bool:raise ValueError('PMX 导出选项不正确')
+        destination=Path(destination).absolute()
+        if destination.resolve().is_relative_to(self.game):raise ValueError('PMX 不能保存到游戏安装目录')
+        arguments={'scale':options.get('scale',DEFAULT_SCALE),'overwrite':options.get('overwrite',False),
+            'check_cancel':self.load_cancel.check}
+        scene=self.last_scene
+        if options.get('textures',True):
+            from pmx_material import MaterialBaker
+            with MaterialBaker(scene,options.get('resolution',1024))as baker:
+                return export_scene(scene,self.character.outfit,destination,material_provider=baker,**arguments)
+        return export_scene(scene,self.character.outfit,destination,**arguments)
 
     def prepare_effects(self,scene,*,enabled=True,frame=30.):
         scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
@@ -890,7 +912,7 @@ class DemoEngine:
         return {'released_resources':max(0,before-len(self.renderer.resources))}
 
     def close_gpu(self):
-        self._network_input_scene=None
+        self._network_input_scene=None;self.last_scene=None
         memory=bool(getattr(getattr(self,'pack',None),'memory_only',False))
         if self.characters:self.characters.close()
         elif self.character:self.character.close()

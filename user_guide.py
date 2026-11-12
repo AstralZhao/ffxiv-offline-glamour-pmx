@@ -1,7 +1,7 @@
 """In-app operating instructions, bundled with the source client."""
 GUIDE_SECTIONS=(('quick-start','快速上手'),('resources','资源与加载'),('characters','角色与外观'),
     ('equipment','挑选与试穿'),('search','搜索与收藏'),('sets','同套装备'),('dyes','染色'),
-    ('camera','视角与特效'),('templates','投影模版'),('storage','数据与更新'))
+    ('camera','视角与特效'),('templates','投影模版'),('pmx-export','导出 MMD 模型'),('storage','数据与更新'))
 
 GUIDE_STYLE='''
 body { color:#dce4ef; font-family:"Microsoft YaHei UI"; font-size:14px; }
@@ -184,7 +184,12 @@ GUIDE='''
 <p>可搜索名称；“全选结果”和“取消勾选”只操作当前搜索结果，其他已勾选项保留。文件保留模版名称、装备与双染色。同名模版也会新增，不覆盖已有记录，不包含角色外观，也不会立即换装。</p>
 <table width="100%" cellpadding="10" cellspacing="0" bgcolor="#233735"><tr><td><b>模版码仅供本软件使用</b><br>不能直接导入游戏投影台，软件中的试穿也不会改变游戏里的装备。</td></tr></table>
 
-<a name="storage"></a><h2>09　数据、更新与问题提示</h2>
+<a name="pmx-export"></a><h2>09　导出 MMD 模型</h2>
+<p>角色成功显示后，点击右侧<b>导出 PMX 模型</b>。选择尺寸倍率、贴图尺寸和保存位置，可导出当前可见的角色、装备、骨骼和染色贴图。预览更新时请稍候。</p>
+<p>默认倍率为 12.5，每个材质默认使用 1024 × 1024 PNG。输出的 <code>.pmx</code> 与同目录的 <code>pmx_assets_…</code> 文件夹需要一起保留；文件夹中的 <code>export.json</code> 记录导出详情。覆盖模型时会保留旧贴图文件夹。</p>
+<p>当前姿势成为模型的初始姿势，骨架保留游戏原生名称。可以手动摆姿；使用 VMD 动作前仍需适配骨骼与初始姿势。不会自动生成 IK、表情或物理，粒子特效不导出，特殊材质和光照可能与游戏预览不同。</p>
+
+<a name="storage"></a><h2>10　数据、更新与问题提示</h2>
 <h3>备份与迁移</h3>
 <p>更换电脑或移动软件时，建议复制整个软件文件夹，尤其保留<b>用户数据</b>文件夹，其中保存角色预设、设置、投影模版、收藏和标签。</p>
 <p>如果使用导入的资源包，也请保留 <b>resources</b> 文件夹。角色导入后的编辑只修改软件中的副本，不会覆盖原始 DAT 文件。</p>

@@ -142,7 +142,8 @@ class DemoOutfit(DemoMaterials,PresetOutfit):
         # results; only the newly attached bones need reconstruction.
         skinning[:len(self.bind)]=self.base.skinning
         skinning.setflags(write=False)
-        value={'names':lookup,'parents':parents,'skinning':skinning,
+        bind.setflags(write=False)
+        value={'names':lookup,'parents':parents,'skinning':skinning,'bind':bind,
             'source':path,'source_sha256':sha(self.pack.read(path)),'added_bones':len(bind)-len(self.bind)}
         if not np.isfinite(value['skinning']).all():raise ValueError('装备骨架产生非有限变换')
         self.attachments[key]=value
