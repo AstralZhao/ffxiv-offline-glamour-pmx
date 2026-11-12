@@ -16,8 +16,12 @@ from effect_simple_state import advance
 class SimpleHistory:
     def __init__(self,effect):
         self.effect=effect;self.committed={};self.prepared=None
+        from effect_emitter_history import EmitterHistory
+        self.emitters=EmitterHistory()
+        from effect_particle_motion import MotionHistory
+        self.motion=MotionHistory()
 
-    def begin(self):self.prepared={}
+    def begin(self):self.prepared={};self.emitters.begin();self.motion.begin()
 
     def sample(self,identity,particle,age,matrix_at):
         if self.prepared is None:raise ValueError('Simple state requires a prepared frame')
@@ -26,7 +30,7 @@ class SimpleHistory:
         previous=self.committed.get(key);bound=source['bind_parent']
         def update(packet,delta,when):
             return advance(packet,source['damping'],float(delta),source['life'],source['repeat'],
-                bound=bound,matrix=None if bound else matrix_at(when))
+                bound=bound,matrix=None if bound else matrix_at(when),atlas=source['atlas_limit'])
         if previous is None or age<previous['age']:
             # Original document prewarm3bb894..3bb8c1 truncates its requested
             # warmup and calls +60 with1 per iteration. Direct +60 -> +e8
@@ -61,5 +65,7 @@ class SimpleHistory:
 
     def commit(self):
         if self.prepared is not None:self.committed=self.prepared;self.prepared=None
+        self.emitters.commit()
+        self.motion.commit()
 
-    def discard(self):self.prepared=None
+    def discard(self):self.prepared=None;self.emitters.discard();self.motion.discard()

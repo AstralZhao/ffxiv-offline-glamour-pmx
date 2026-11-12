@@ -28,7 +28,7 @@ def standing_world(scene,outfit,pose_id,pose_path):
         reference=bundle_arrays(assembly,path,'bind_geometry_bundle')
         posed=bundle_arrays(base.pose,Path(pose_path),'customized_stance_geometry_bundle')
         profile=json.loads((Path(__file__).resolve().parents[1]/'docs/cn-native-standing-poses.json').read_bytes())
-        if profile['region']!='CN'or profile['client_version']!=pack.source_version():raise ValueError('站姿资料版本不匹配')
+        if profile['region']!='CN':raise ValueError('站姿资料版本不匹配')
         if sha(pack.read(profile['plt_path']))!=profile['plt_sha256']:raise ValueError('站姿动作资源路由已改变')
         cache={'owner':base,'reference':reference,'posed':posed,'profile':profile,'samples':OrderedDict()}
         outfit.native_standing_cache=cache

@@ -97,7 +97,7 @@ def _finger_tip(model, first, second, name):
 
 def _standard_bones(model, lookup, with_ik):
     for bone in model.bones[1:]:
-        bone.english, bone.visible, bone.movable = bone.name, False, False
+        bone.english, bone.visible, bone.movable = bone.name, bone.name.startswith('weapon_'), False
     for source, japanese in CORE.items():
         model.bones[lookup[source]].name = japanese
         model.bones[lookup[source]].visible = True

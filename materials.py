@@ -129,9 +129,9 @@ class DemoMaterials:
         elif shader in('charactertattoo.shpk','characterocclusion.shpk'):
             role='overlay_tattoo'if shader=='charactertattoo.shpk'else'overlay_occlusion'
             result.update(overlay=role,transparent=True,plan=result['plans'][role])
-        elif shader=='character.shpk'and result['material']['translucent']and item['slot']=='Head'and alpha_test_enabled(package,result['constants']):
-            # Source-clipped solid fur writes core depth; only its remaining
-            # soft fringe uses the existing strict-depth alpha blend pass.
+        elif shader=='character.shpk'and result['material']['translucent']and alpha_test_enabled(package,result['constants']):
+            # Authored alpha clipping also applies to clothing and ribbons.
+            # Their solid surfaces need depth before blending soft edges.
             plans={role:static_pass(package,result['material']['shader_keys'],source.weights.shape[1],role)
                 for role in('material','gbuffer_color','direct')}
             result.update(transparent=True,alpha_core=True,plans=plans)

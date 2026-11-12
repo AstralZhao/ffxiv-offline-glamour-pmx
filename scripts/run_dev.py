@@ -16,12 +16,12 @@ import uuid
 import zipfile
 
 ROOT=Path(__file__).resolve().parents[1]
-TAG='v0.0.7-beta.3'  # The release matching this repository's facewear UI.
+TAG='v0.0.9'  # Application sources in this branch are migrated from this release.
 API='https://gitee.com/api/v5/repos/kilislan-wei/ffxiv_offline_glamour/releases'
-ASSET='幻化柜-v0.0.7-beta.3-20261108-233105.zip'
+ASSET='幻化柜-v0.0.9-20261112-233631.zip'
 # Pin the entire official archive, including Python, Qt and native binaries.
-ARCHIVE_BYTES=49067663
-ARCHIVE_SHA256='ad6942013f7915677776392b3a3dea5615a97838552b566bb51672fdb91fe06c'
+ARCHIVE_BYTES=49437152
+ARCHIVE_SHA256='80f32aef0d0b3f81c8292473c24c5c39d6bdc03b28b60ae6d4f229daeec16637'
 MAX_JSON_BYTES=4*1024**2
 
 
@@ -82,7 +82,8 @@ def download_archive(archive):
 
 def prepare():
     local=ROOT/'local_runtime';local.mkdir(exist_ok=True)
-    archive=local/(TAG+'.zip');runtime=local/'dev'
+    # A new baseline must never reuse older tools, tables or Python binaries.
+    archive=local/(TAG+'.zip');runtime=local/('dev-'+TAG)
     if not (runtime/'artifacts/source-runtime.downloaded.json').is_file():
         download_archive(archive)
         with zipfile.ZipFile(archive)as package:
@@ -110,6 +111,8 @@ def prepare():
         # This directory is an editable source runtime, not an installed
         # release. Preserve its original manifest as download provenance.
         (runtime/'artifacts/source-runtime.json').rename(runtime/'artifacts/source-runtime.downloaded.json')
+    if json.loads((runtime/'docs/client-version.json').read_bytes()).get('version')!=TAG:
+        raise ValueError('The development runtime does not match the pinned release: '+str(runtime))
     for source in ROOT.iterdir():
         if source.is_file()and source.suffix in('.py','.css','.js','.html'):
             shutil.copy2(source,runtime/'demo'/source.name)

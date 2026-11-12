@@ -10,7 +10,7 @@ import math
 
 import numpy as np
 
-POSES=(('default','默认站姿'),*((f'pose_{i}',f'站姿 {i}')for i in range(1,7)))
+POSES=(('default','默认站姿'),*((f'pose_{i}',f'站姿 {i}')for i in range(1,7)),('weapon_1','拔出武器 1'),('weapon_2','拔出武器 2'))
 
 
 def validate_pose(value):
@@ -25,7 +25,7 @@ class PoseSample:
     provenance:dict
 
 
-def sample_pose(pose_id,time_seconds=0.,*,scene=None,outfit=None,pose_path=None):
+def sample_pose(pose_id,time_seconds=0.,*,scene=None,outfit=None,pose_path=None,weapons=None):
     validate_pose(pose_id)
     if type(time_seconds)not in(int,float)or not math.isfinite(time_seconds)or time_seconds<0:
         raise ValueError('姿势采样时间不正确')
@@ -33,13 +33,17 @@ def sample_pose(pose_id,time_seconds=0.,*,scene=None,outfit=None,pose_path=None)
     if time_seconds!=0:raise NotImplementedError('当前站姿仅支持原始循环起点，尚未接入动画播放')
     if pose_id=='default':return PoseSample(None,0.,{'provider':'original-default'})
     if scene is None or outfit is None or pose_path is None:raise ValueError('原生站姿需要角色和原始动作资源')
-    from native_standing_pose import standing_world
-    world,source=standing_world(scene,outfit,pose_id,pose_path)
+    if pose_id.startswith('weapon_'):
+        from weapon_stance import standing_world
+        world,source=standing_world(scene,outfit,pose_id,pose_path,weapons)
+    else:
+        from native_standing_pose import standing_world
+        world,source=standing_world(scene,outfit,pose_id,pose_path)
     return PoseSample(world,0.,source)
 
 
-def apply_pose(scene,outfit,pose_id,*,time_seconds=0.,pose_path=None):
-    sample=sample_pose(pose_id,time_seconds,scene=scene,outfit=outfit,pose_path=pose_path)
+def apply_pose(scene,outfit,pose_id,*,time_seconds=0.,pose_path=None,weapons=None):
+    sample=sample_pose(pose_id,time_seconds,scene=scene,outfit=outfit,pose_path=pose_path,weapons=weapons)
     if sample.world is None:return scene
     names=[None]*len(outfit.names)
     for name,index in outfit.names.items():names[index]=name

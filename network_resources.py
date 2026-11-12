@@ -151,7 +151,7 @@ def prepare(host,root,*,callback=None,cancel=None,cache_policy='disk'):
             p.parent.mkdir(parents=True,exist_ok=True)
             if not p.exists():p.touch()
             if p.stat().st_size!=0:raise ValueError('网络资源缓存占位文件异常')
-    if (folder/'game/ffxivgame.ver').read_text(encoding='utf8').strip()!=profile['client_version']:raise ValueError('网络资源的客户端版本文件不匹配')
+    if (folder/'game/ffxivgame.ver').read_text(encoding='utf8').strip()!=data['client_version']:raise ValueError('网络资源版本文件与自身清单不一致')
     _cancel(cancel);_atomic(safe_path(folder,'resource-pack.json'),raw)
     marker={'version':1,'host':host,'manifest_sha256':digest,'etags':etags,'metadata_stamps':stamps}
     _atomic(safe_path(folder,MARKER),json.dumps(marker,sort_keys=True).encode())
@@ -189,6 +189,8 @@ class NetworkSource:
             elif _stamp(p)!=self.info['metadata_stamps'].get(name):
                 if p.stat().st_size!=record['bytes']or _sha(p.read_bytes())!=record['sha256']:raise ValueError('网络基础缓存已变化，请在设置中重新连接资源网址')
                 self.info['metadata_stamps'][name]=_stamp(p);refreshed=True
+        if (self.root/'game/ffxivgame.ver').read_text(encoding='utf8').strip()!=data['client_version']:
+            raise ValueError('网络资源版本文件与自身清单不一致')
         if refreshed:_atomic(marker,json.dumps(self.info,sort_keys=True).encode())
 
     def source_stamp(self,path):

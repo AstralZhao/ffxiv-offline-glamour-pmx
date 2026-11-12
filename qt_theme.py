@@ -35,8 +35,8 @@ QPushButton[clear="true"] { padding:0; border:0; background:transparent; color:#
 QPushButton[clear="true"]:hover { color:#f0b7aa; background:#3a2c32; }
 QFrame#OutfitCard { background:#202733; border:1px solid #303a49; border-radius:8px; }
 QFrame#OutfitCard[selected="true"] { border-color:#79b9af; background:#24383d; }
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit { background:#121821; border:1px solid #323d4d; border-radius:7px; padding:8px 10px; selection-background-color:#386c65; }
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus { border-color:#89d5c4; }
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit { background:#121821; border:1px solid #323d4d; border-radius:7px; padding:8px 10px; selection-background-color:#386c65; }
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color:#89d5c4; }
 QTextBrowser { background:#191e27; color:#edf1f7; border:1px solid #323d4d; border-radius:8px; padding:8px; selection-background-color:#386c65; selection-color:#ffffff; }
 QComboBox::drop-down { border:0; width:25px; }
 QComboBox QAbstractItemView { background:#202733; border:1px solid #3a485b; selection-background-color:#345751; outline:0; padding:5px; }
@@ -341,6 +341,8 @@ def slot_icon(slot):
     elif slot=='Ears':p.drawLine(20,9,20,15);p.drawEllipse(C.QRectF(12,15,16,18));p.drawEllipse(C.QRectF(18,7,4,4))
     elif slot=='Neck':p.drawArc(C.QRectF(9,5,22,24),180*16,180*16);polygon([(16,28),(20,34),(24,28),(20,25)])
     elif slot=='Wrists':p.drawEllipse(C.QRectF(8,11,24,14));p.drawArc(C.QRectF(8,17,24,14),180*16,180*16);p.drawLine(8,18,8,24);p.drawLine(32,18,32,24)
+    elif slot=='MainHand':polygon([(28,6),(32,10),(16,26),(12,22)]);p.drawLine(8,20,20,32);p.drawLine(13,27,7,33)
+    elif slot=='OffHand':polygon([(8,10),(20,6),(32,10),(30,26),(20,34),(10,26)]);p.drawLine(20,8,20,30)
     else:p.drawEllipse(C.QRectF(10,15,20,19));polygon([(15,13),(20,7),(25,13),(20,18)])
     p.end();return image
 

@@ -1,5 +1,5 @@
 """Portable game-directory or imported-resource settings; sources stay read-only."""
-import hashlib,json,os,uuid
+import json,os,uuid
 from pathlib import Path
 
 from app_paths import paths,program_root
@@ -29,8 +29,8 @@ def validate_game(value,root=ROOT,*,verify_executable=True):
             if root.is_relative_to(path):raise ValueError('软件不能放在资源目录内')
             raise ValueError('仅内存模式已移除，请重新配置网络资源。')
     version=(path/'game/ffxivgame.ver').read_text(encoding='utf8').strip()
-    if version!=profile['client_version']:
-        raise ValueError(f"当前游戏版本 {version} 与软件支持的国服版本 {profile['client_version']} 不一致，请使用对应版本的软件包")
+    if not version or len(version)>128 or '\0'in version:
+        raise ValueError('游戏版本文件为空或损坏，请等待游戏更新完成后重试')
     if root.is_relative_to(path):raise ValueError('请将试衣软件放在游戏安装目录之外，避免写入游戏文件夹')
     if (path/'network-source.json').is_file():
         from network_resources import validate_cached
@@ -38,12 +38,9 @@ def validate_game(value,root=ROOT,*,verify_executable=True):
     elif (path/'resource-pack.json').is_file():
         from resource_pack import validate_directory
         validate_directory(path,profile)
-    if verify_executable:
-        digest=hashlib.file_digest if hasattr(hashlib,'file_digest')else None
-        with(path/'game/ffxiv_dx11.exe').open('rb')as source:
-            if digest:actual=digest(source,'sha256').hexdigest()
-            else:actual=hashlib.sha256(source.read()).hexdigest()
-        if actual!=profile['executable_sha256']:raise ValueError('当前客户端文件与此软件包支持的国服版本不一致，请检查游戏版本或使用匹配的软件包')
+    # verify_executable remains an API-compatible argument. The executable is
+    # not loaded by the renderer; a new whole-file hash is not incompatibility.
+    # Imported/network sources retain their own manifest integrity checks.
     return path
 
 

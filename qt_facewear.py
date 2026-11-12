@@ -51,9 +51,12 @@ def catalogue_rows(request):
 
 
 def add_template_facewear(dialog,record):
-    for identifier in record.get('state',{}).get('facewear',[0,0]):
-        if not identifier:continue
-        item=catalogue()[2].get(identifier)
-        if item is None:continue
-        card=W.QFrame();card.setObjectName('OutfitCard');row=horizontal(card,8,10);icon=label();icon.setFixedSize(36,36);row.addWidget(icon)
-        dialog.detail_icons.append((icon,item['icon_id']));text=label('面饰 · '+item['name']);text.setWordWrap(True);row.addWidget(text,1);dialog.gear_layout.addWidget(card)
+    data,_,variants=catalogue();chosen=record.get('state',{}).get('facewear',[0,0])
+    for slot in sorted({style['slot']for style in data['styles']}):
+        identifier=chosen[slot];item=variants.get(identifier)
+        card=W.QFrame();card.setObjectName('OutfitCard');card.setProperty('facewearSlot',slot)
+        card.setMinimumHeight(58);card.setSizePolicy(W.QSizePolicy.Expanding,W.QSizePolicy.Fixed)
+        row=horizontal(card,8,10);icon=label();icon.setFixedSize(36,36);row.addWidget(icon)
+        if item:dialog.detail_icons.append((icon,item['icon_id']))
+        name=item['name']if item else(f'面饰 #{identifier}'if identifier else'未设置')
+        text=label('面饰 · '+name);text.setWordWrap(True);row.addWidget(text,1);dialog.gear_layout.addWidget(card)

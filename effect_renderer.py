@@ -24,8 +24,15 @@ SHAPE_PATH='shader/sm5/shpk/apricot_shape.shpk'
 SHAPE_SHA='8840be69ec20f030f1b7be71098d1dd3b346dcec0318498da330cc3a685549b1'
 MODEL_PATH='shader/sm5/shpk/apricot_model.shpk'
 MODEL_SHA='b1d91a2da0006aafa97a596966bbf15bf271f6840b800141574b3a6e8a14f10f'
+LIGHT_MODEL_PATH='shader/sm5/shpk/apricot_lightmodel.shpk'
+LIGHT_MODEL_SHA='88195c3859a92ab97f121300092054aaabc25d5e1646f580401f325b255273e5'
 POWDER_PATH='shader/sm5/shpk/apricot_powder.shpk'
 POWDER_SHA='7716804edfa5dcff15aad2675991f76c7d33f4b3a3f9e277676e85ea27bd1fed'
+DUMMY_PACKAGES={
+    'model':('shader/sm5/shpk/apricot_model_dummy.shpk','4c5ff0086c41c8100c29652e1a9e3dbd6bddd41b0f26b41e5a8e5c7be238b951'),
+    'shape':('shader/sm5/shpk/apricot_shape_dummy.shpk','f2a1644c50955d2d59f2fbbebd15a5a4243f3a5f9e28e1643755404bde587e07'),
+    'powder':('shader/sm5/shpk/apricot_powder_dummy.shpk','e0968bf45f6ee3f6e70b03858a311cfa478feb6ba99a189db58eae83d68e2f92')}
+DUMMY_RELEASE_PIXEL_SHA='893602638de80a10f9f579e3e1efce20f7ecbccc12f1da1fbda4d5c5f387b8a9'
 VERTEX=np.dtype([('position','<f4',4),('color','<i4',4),('uv','<i4',4),('uv2','<i4',4),('extra','<f4',4)])
 MODEL_VERTEX=np.dtype([('position','<f4',4),('normal','<f4',3),('tangent','<f4',3),('color','<f4',4),('uv','<f4',4),('uv2','<f4',4)])
 POWDER_VERTEX=np.dtype([('position','<f4',3),('angles','<f4',3),('center','<f4',3),('uv','<f4',2),('color','<i4',4)])
@@ -42,13 +49,30 @@ def quantize_vertex(value,*,color=False):
     return ((np.trunc(packed).astype('<i8')+32768)%65536-32768).astype('<i4')
 
 
-def shape_extra(power,flags):
-    # CN3e8390 stores the low byte of trunc(float32(power)*255).
-    # The matched native draw verifies R8G8B8A8_UNORM interpretation.
-    scaled=np.float32(power)*np.float32(255)
-    if not np.isfinite(scaled)or abs(scaled)>2**31-1:raise ValueError('Apricot distortion byte outside native integer range')
-    packed=int(np.trunc(scaled))&255
-    return np.array((packed/255,*flags[:3]),dtype='<f4')
+def shape_extra(power,flags,palette=None,*,enabled=None):
+    # Current CN3e8170/3e81e0: DPow byte0, POff byte1, TD-on byte2.
+    # UV selection switches belong to the shader key, not vertex bytes.
+    def byte(value):
+        scaled=np.float32(value)*np.float32(255)
+        if not np.isfinite(scaled)or abs(scaled)>2**31-1:raise ValueError('Apricot material byte outside native integer range')
+        return (int(np.trunc(scaled))&255)/255
+    return np.array((byte(power),0 if palette is None else byte(palette),
+        bool(any(flags)if enabled is None else enabled),0),dtype='<f4')
+
+
+def shape_material_extra(sample):
+    textures=sample['textures'];distortion=textures.get('TD',{});palette=textures.get('TP')
+    return shape_extra(distortion.get('power',0),distortion.get('distort_uv',()),
+        None if palette is None else palette['power'],enabled='TD'in textures)
+
+
+def model_viewport_position(position,vp):
+    # Original 37bd90 then 3804ea..380526, retaining scalar f32 sums.
+    p=np.asarray(position,dtype='<f4');m=np.asarray(vp,dtype='<f4')
+    clip=((p[0]*m[:,0]+p[1]*m[:,1])+p[2]*m[:,2])+m[:,3]
+    if not np.isfinite(clip).all()or clip[3]==0:raise UnsupportedEffect('模型屏幕坐标原点退化')
+    return np.array((np.float32(clip[0]/clip[3])*np.float32(.5)+np.float32(.5),
+        np.float32(clip[1]/clip[3])*np.float32(-.5)+np.float32(.5),clip[2],clip[3]),dtype='<f4')
 
 
 def shape_uv_coordinates(value,matrix):
@@ -86,7 +110,7 @@ def packed_shapes(samples):
         value=vertices[ends[i]:ends[i+1]].copy()
         value['position'][:,3]=sample['depth_offset']
         distortion=sample['textures'].get('TD',{})
-        value['extra']=shape_extra(distortion.get('power',0),distortion.get('distort_uv',[False]*4))
+        value['extra']=shape_material_extra(sample)
         result.append(value)
     return result
 
@@ -103,13 +127,13 @@ def shader_settings(sample):
     for i,mode in enumerate(sample.get('uv_compute',())):
         if mode:settings[f'UvCompute{i}_Table']='UvCompute_ByPixelPosition'
     for channel,data in sample['textures'].items():
-        name='TextureDistortion'if channel=='TD'else'TextureColor'+channel[-1]
+        name={'TD':'TextureDistortion','TN':'TextureNormal','TP':'TexturePalette'}.get(channel,'TextureColor'+channel[-1])
         settings[name+'_Table']=name+'_Enable'
-        settings[name+'_UvNo_Table']=name+'_Uv_'+str(data['uv'])
+        if channel!='TP':settings[name+'_UvNo_Table']=name+'_Uv_'+str(data['uv'])
         if channel=='TD':
             for i,enabled in enumerate(data['distort_uv']):
                 if enabled:settings[f'TextureDistortion_UvSet{i}_Table']='TextureDistortion_UvSet_Enable'
-        else:
+        elif channel.startswith('TC'):
             if data.get('screen_copy'):settings[name+'_Decode_Table']=name+'_Decode_On'
             if data['color_to_alpha']:settings[name+'_ColorToAlpha_Table']=name+'_ColorToAlpha_On'
             if channel!='TC1':
@@ -137,6 +161,28 @@ def instance_extra_parameters(sample):
     blend=-1 if mode in(1,9)else 1 if mode in(2,3,4,10,11,12)else 0
     return struct.pack('<8f',int(sample.get('fresnel_type',0)==1),color,alpha,
         bool(sample.get('apply_tone_map',False)),blend,0,0,0)
+
+
+def model_fresnel_direction(angles,matrix=None):
+    # CN3ef19e..3ef54b uses its own FrRt axis construction. Type2 keeps
+    # that direction in world space; type3 transforms it by the particle's
+    # final matrix, then normalizes. Neither is a camera-position Fresnel.
+    # Keep float32 scalar operations through the direction and normalization.
+    import math
+    f=np.float32;x,y,z=np.asarray(angles,dtype='<f4')
+    sx,cx,sy,cy,sz,cz=(f(fun(float(a)))for a,fun in
+        ((x,math.sin),(x,math.cos),(y,math.sin),(y,math.cos),(z,math.sin),(z,math.cos)))
+    # Type2 starts on -Y; type3 starts on -Z before its owning matrix.
+    # These source axes are intentionally different in the native branches.
+    if matrix is None:a=f(-sx*sy);b=f(-cx);c=f(-sx*cy)
+    else:a=f(-cx*sy);b=sx;c=f(-cx*cy)
+    direction=np.array((f(f(a*cz)-f(b*sz)),f(f(a*sz)+f(b*cz)),c),dtype='<f4')
+    if matrix is not None:
+        basis=np.asarray(matrix,dtype='<f4')[:3,:3]
+        direction=f(f(direction[0]*basis[:,0]+direction[1]*basis[:,1])+direction[2]*basis[:,2])
+    square=f(f(direction[0]*direction[0]+direction[2]*direction[2])+direction[1]*direction[1])
+    if not np.isfinite(square)or square<=0:raise UnsupportedEffect('模型菲涅尔方向退化')
+    return f(direction*f(f(1)/f(np.sqrt(square))))
 
 
 def tree_basis(matrix,camera):
@@ -323,14 +369,16 @@ class EffectRenderer:
                 'g_PS_DocumentParameters','g_ToneMapParameter','g_PS_DofCocParam',
                 'g_PS_ModelSpecificParameters','g_VS_PerInstanceParameters'}
         fresnel=sample.get('fresnel_type',0)
-        if fresnel not in(0,1):raise NotImplementedError('Unresolved model Fresnel axis')
+        if fresnel not in(0,1,2,3):raise NotImplementedError('Unresolved model Fresnel axis')
         key=(id(sample),id(plan),width,height)
         cached=self.parameter_cache.get(key)if self.reuse_parameters else None
         if cached is not None and cached[0]is sample:
             static=cached[1];self.parameter_cache.move_to_end(key)
         else:
             static={}
-            if 'g_PS_Parameters'in required:static['g_PS_Parameters']=struct.pack('<4f',sample['textures'].get('TD',{}).get('power',0),0,0,0)
+            if 'g_PS_Parameters'in required:static['g_PS_Parameters']=struct.pack('<4f',
+                sample['textures'].get('TD',{}).get('power',0),sample['textures'].get('TP',{}).get('power',0),
+                0,sample['textures'].get('TN',{}).get('power',0))
             if 'g_PS_UvTransform'in required:
                 uv=np.tile(np.array(((1,0,0,0),(0,1,0,0)),dtype='<f4'),(4,1))
                 for i,value in enumerate(sample['uv_matrices']):uv[i*2:i*2+2]=value
@@ -349,8 +397,18 @@ class EffectRenderer:
         result={**camera_constants,**static}
         if 'g_PS_ModelSpecificParameters'in required:
             specific=np.zeros((6,4),dtype='<f4');specific[1,:3]=camera_world[:3,3];specific[1,3]=sample.get('fresnel_power',1)
+            specific[0,:3]=camera_world[:3,3];specific[0,3]=1
+            # CN3eec40 marks screen-UV instances; 3804bc..380603 uploads
+            # their model origin transformed to viewport coordinates.
+            if any(sample.get('uv_compute',())):
+                vp=np.frombuffer(camera_constants['g_VS_ViewProjectionMatrix'],dtype='<f4').reshape(4,4).T
+                specific[4,:3]=matrix[:3,3];specific[4,3]=1
+                specific[5]=model_viewport_position(matrix[:3,3],vp)
+            if fresnel in(2,3):
+                specific[1,:3]=model_fresnel_direction(sample['fresnel_angles'],matrix if fresnel==3 else None)
             specific[2]=sample.get('fresnel_begin',np.ones(4))if fresnel else 1
             specific[3]=sample.get('fresnel_end',np.ones(4))if fresnel else 1
+            if sample.get('shader_family')=='lightmodel':specific[1:4]=1
             result['g_PS_ModelSpecificParameters']=specific.tobytes()
         if 'g_VS_PerInstanceParameters'in required:
             result['g_VS_PerInstanceParameters']=np.r_[matrix.T.flatten(),[sample['depth_offset'],0,0,0],sample['color']].astype('<f4').tobytes()
@@ -404,14 +462,18 @@ class EffectRenderer:
 
     def _plan(self,sample):
         kind=sample['kind']if sample['kind']in('model','powder')else'shape';settings=shader_settings(sample)
-        key=(kind,tuple(sorted(settings.items())))
+        family=sample.get('shader_family',kind)
+        if family not in('model','lightmodel','powder','shape')or(family=='lightmodel'and kind!='model'):
+            raise ValueError('Unknown Apricot geometry/shader family')
+        key=(family,tuple(sorted(settings.items())))
         if key in self.plans:return self.plans[key]
-        if kind not in self.packages:
-            path,expected={'model':(MODEL_PATH,MODEL_SHA),'powder':(POWDER_PATH,POWDER_SHA),'shape':(SHAPE_PATH,SHAPE_SHA)}[kind]
+        if family not in self.packages:
+            path,expected={'model':(MODEL_PATH,MODEL_SHA),'lightmodel':(LIGHT_MODEL_PATH,LIGHT_MODEL_SHA),
+                'powder':(POWDER_PATH,POWDER_SHA),'shape':(SHAPE_PATH,SHAPE_SHA)}[family]
             raw=self.pack.read(path)
             if hashlib.sha256(raw).hexdigest()!=expected:raise ValueError('CN Apricot shader package changed')
-            self.packages[kind]=inspect_shpk(raw,True)[1]['_package']
-        package=self.packages[kind];overrides={shader_crc(k):shader_crc(v)for k,v in settings.items()}
+            self.packages[family]=inspect_shpk(raw,True)[1]['_package']
+        package=self.packages[family];overrides={shader_crc(k):shader_crc(v)for k,v in settings.items()}
         groups=[];seen=set()
         for group in('system','scene','material'):
             values=[]
@@ -422,7 +484,9 @@ class EffectRenderer:
             groups.append(selector(values))
         if seen!=set(overrides):raise ValueError('Original Apricot scene keys are missing')
         route=selector(groups+[selector(package['subview_defaults'])])
-        if route not in package['selectors']:raise UnsupportedEffect('原始特效着色组合尚未接入')
+        if route not in package['selectors']:
+            result=self.native_discard_plan(family,route)
+            self.plans[key]=result;return result
         node_id=package['selectors'][route];node=package['nodes'][node_id]
         if len(node['passes'])!=1:raise NotImplementedError('Multi-pass Apricot route')
         pass_id,vi,pi,hs,ds,gs=node['passes'][0]
@@ -446,6 +510,27 @@ class EffectRenderer:
         code=program['bytecode'];result['layout']=self.renderer.create(11,[P,U,P,c.c_size_t],elements,len(specs),code,len(code))
         if result['vertex'][1]['resources']or result['pixel'][1]['output_slots']!=[0,1]:raise ValueError('Unknown original Apricot resource/output contract')
         self.plans[key]=result;return result
+
+    def native_discard_plan(self,family,source_selector):
+        # CN387739 ->3878ed selects its own dummy package after a primary
+        # miss. 387976 sets OutputType_Release. The source-selected original
+        # PS unconditionally discards; omitting the draw is pixel-equivalent.
+        # Never choose a nearest material key or fabricate a shader here.
+        family='model'if family=='lightmodel'else family
+        path,expected=DUMMY_PACKAGES[family];key=('native-dummy-release',family)
+        if key not in self.packages:
+            raw=self.pack.read(path)
+            if hashlib.sha256(raw).hexdigest()!=expected:raise UnsupportedEffect('原始备用特效程序来源已变化')
+            p=inspect_shpk(raw,True)[1]['_package'];output=shader_crc('OutputType_Table');release=shader_crc('OutputType_Release')
+            groups=[selector([release if int(k['id'],16)==output else int(k['default'],16)
+                for k in p['keys'][g]])for g in('system','scene','material')]
+            route=selector(groups+[selector(p['subview_defaults'])]);node=p['nodes'][p['selectors'][route]]
+            if len(node['passes'])!=1:raise UnsupportedEffect('原始备用特效通道布局已变化')
+            pixel=p['stages']['pixel'][node['passes'][0][2]]['bytecode']
+            if hashlib.sha256(pixel).hexdigest()!=DUMMY_RELEASE_PIXEL_SHA:
+                raise UnsupportedEffect('原始备用特效像素丢弃规则已变化')
+            self.packages[key]={'native_discard':True,'fallback_path':path,'fallback_selector':route}
+        return {**self.packages[key],'selector':source_selector}
 
     def sampler(self,sample):
         key=(sample['filter'],sample['address'])
@@ -570,7 +655,9 @@ class EffectRenderer:
         shape_world=batched_shape_world(ordered,camera_world,facing)if self.batch_world_shapes else {}
         for sample in ordered:
             resolved=shape_world.get(id(sample))
-            plan=self.plan(sample);matrix=resolved[0]if resolved is not None else world_matrix(sample,view,camera_world,billboard_basis=facing.get(id(sample)));positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
+            plan=self.plan(sample)
+            if plan.get('native_discard'):continue
+            matrix=resolved[0]if resolved is not None else world_matrix(sample,view,camera_world,billboard_basis=facing.get(id(sample)));positions=sample['positions'];is_model=sample['kind']=='model';is_powder=sample['kind']=='powder'
             distortion=sample['textures'].get('TD',{});power=distortion.get('power',0)
             cacheable=self.reuse_geometry
             view_dependent=geometry_uses_view(sample)
@@ -610,7 +697,7 @@ class EffectRenderer:
                         vertices[name]=quantize_vertex(value,color=name=='color')
                     if is_model:
                         vertices['normal']=sample['normals'];vertices['tangent']=sample['tangents']
-                    elif not is_powder:vertices['extra']=shape_extra(power,distortion.get('distort_uv',[False]*4))
+                    elif not is_powder:vertices['extra']=shape_material_extra(sample)
                 if cacheable and vertices.nbytes<=8*1024*1024:
                     vertices.flags.writeable=False
                     if key in self.geometry_cache:self.geometry_bytes-=self.geometry_cache.pop(key)[1].nbytes
@@ -627,8 +714,10 @@ class EffectRenderer:
                     constant_bindings.append((setter,entry['slot'],payload))
             sources={'g_ToneMapSampler':neutral,'g_DofLutSampler':neutral,'g_SamplerDepth':depth};samplers={}
             for channel,data in sample['textures'].items():
-                name='g_SamplerDistortion'if channel=='TD'else'g_SamplerColor'+channel[-1]
-                sources[name]=screen_copy if data.get('screen_copy')else r.source_texture(scene.pack,data['path']);samplers[name]=self.sampler(data)
+                name={'TD':'g_SamplerDistortion','TN':'g_SamplerNormal','TP':'g_SamplerPalette'}.get(channel,'g_SamplerColor'+channel[-1])
+                sources[name]=(screen_copy if data.get('screen_copy')else P()if data['path']is None else
+                    r.source_texture(scene.pack,data['path']))
+                samplers[name]=self.sampler(data)
             neutral_sampler=r.sampler('g_SamplerGBuffer',{})
             resource_bindings=[];sampler_bindings=[]
             for entry in plan['pixel'][1]['resources']:

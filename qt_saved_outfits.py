@@ -23,7 +23,7 @@ class SavedOutfitsDialog(W.QDialog):
         self.total=label('','Badge');heading.addWidget(self.total)
         self.batch_export_button=button('批量导出',self.export_batch);heading.addWidget(self.batch_export_button)
         self.batch_import_button=button('批量导入',self.import_batch);heading.addWidget(self.batch_import_button);outer.addLayout(heading)
-        outer.addWidget(label('应用装备、染色和面部配饰，保留当前角色与观察视角。','Muted'))
+        outer.addWidget(label('应用防具、饰品、武器、染色和面饰，保留当前角色与观察视角。','Muted'))
         tools=horizontal();self.search=W.QLineEdit();self.search.setPlaceholderText('搜索模版名称、装备名称或编号');self.search.setClearButtonEnabled(True)
         tools.addWidget(self.search,1);self.sort=ComboBox();self.sort.addItem('最近保存','recent');self.sort.addItem('最早保存','oldest');self.sort.addItem('名称排序','name');tools.addWidget(self.sort)
         tools.addWidget(button('刷新',self.reload,ghost=True));self.import_code_button=button('导入模版码',self.import_code);tools.addWidget(self.import_code_button);outer.addLayout(tools)
@@ -45,6 +45,7 @@ class SavedOutfitsDialog(W.QDialog):
         actions=horizontal();self.rename_button=button('重命名',self.rename);self.delete_button=button('删除',self.delete,ghost=True)
         actions.addWidget(self.rename_button);actions.addWidget(self.delete_button);actions.addStretch();self.export_code_button=button('生成导出码',self.export_code);actions.addWidget(self.export_code_button);detail.addLayout(actions)
         self.apply_button=button('应用到当前角色',self.apply,primary=True);detail.addWidget(self.apply_button)
+        self.share_image_button=button('生成分享图',self.share_image);detail.addWidget(self.share_image_button)
         splitter.addWidget(self.detail_panel);splitter.setSizes([440,440]);splitter.setChildrenCollapsible(False)
         bottom=horizontal();self.count_note=label('','Muted');bottom.addWidget(self.count_note,1);bottom.addWidget(button('关闭',self.reject,ghost=True));outer.addLayout(bottom)
         self.search_timer=C.QTimer(self);self.search_timer.setSingleShot(True);self.search_timer.setInterval(160);self.search_timer.timeout.connect(self.filter)
@@ -65,6 +66,9 @@ class SavedOutfitsDialog(W.QDialog):
         from facewear import catalogue
         facewear=catalogue()[2]
         for r in self.records:self.search_text[r['id']]+=' '+normalized(' '.join(facewear.get(i,{}).get('name','')for i in r['state'].get('facewear',[0,0])))
+        from qt_weapons import metadata as weapon_metadata
+        for r in self.records:
+            self.search_text[r['id']]+=' '+normalized(' '.join(str(c['item_id'])+' '+weapon_metadata(c['item_id'])['name']for c in r['state'].get('weapons',{}).values()if c.get('item_id')))
         self.total.setText(f'{len(self.records):,} 套');self.batch_export_button.setEnabled(bool(self.records));self.filter(reset=False)
 
     def filter(self,*,reset=True):
@@ -90,6 +94,7 @@ class SavedOutfitsDialog(W.QDialog):
             self.list_icons.append((image,identifier));row.addWidget(image)
             text=vertical(spacing=5);name=label(record['name']);name.setToolTip(record['name']);name.setStyleSheet('font-weight:600;');text.addWidget(name)
             faces=sum(bool(i)for i in record['state'].get('facewear',[0,0]))
+            nonempty+=list(c for c in record['state'].get('weapons',{}).values()if c.get('item_id'))
             text.addWidget(label(f"{record.get('time','')} · {len(nonempty)} 件装备"+(f' · {faces} 件面饰'if faces else''),'Muted'));row.addLayout(text,1)
             self.list.setItemWidget(item,widget)
         self.list.blockSignals(False)
@@ -107,7 +112,7 @@ class SavedOutfitsDialog(W.QDialog):
         while self.gear_layout.count():
             child=self.gear_layout.takeAt(0)
             if child.widget():child.widget().deleteLater()
-        for control in(self.rename_button,self.delete_button,self.apply_button,self.export_code_button):control.setEnabled(record is not None)
+        for control in(self.rename_button,self.delete_button,self.apply_button,self.export_code_button,self.share_image_button):control.setEnabled(record is not None)
         self.notice.clear()
         if record is None:
             self.title.setText('选择一套模版');self.info.setText('在左侧查看保存的模版。');return
@@ -128,6 +133,15 @@ class SavedOutfitsDialog(W.QDialog):
             row.addLayout(text,1);self.gear_layout.addWidget(card)
         from qt_facewear import add_template_facewear
         add_template_facewear(self,record)
+        for slot,choice in record['state'].get('weapons',{}).items():
+            identifier=choice.get('item_id')
+            if not identifier:continue
+            from qt_weapons import metadata
+            item=metadata(identifier);card=W.QFrame();card.setObjectName('OutfitCard');row=horizontal(card,8,10);icon=label();icon.setFixedSize(36,36);row.addWidget(icon);self.detail_icons.append((icon,item['icon_id']))
+            text=vertical(spacing=3);name=label(('主武器'if slot=='MainHand'else'副武器')+' · '+item['name']);name.setWordWrap(True);text.addWidget(name)
+            dyes=[f'{i}区：'+self.c.dye_by_id.get(choice[k],{}).get('name',str(choice[k]))for i,k in enumerate(('first','second'),1)if choice.get(k)]
+            if dyes:text.addWidget(label(' · '.join(dyes),'Muted'))
+            row.addLayout(text,1);self.gear_layout.addWidget(card)
         self.gear_layout.addStretch();self.refresh_icons()
 
     def refresh_icons(self,changed=None):
@@ -163,6 +177,18 @@ class SavedOutfitsDialog(W.QDialog):
         try:code=self.c.engine.export_template_code(record['id'])
         except Exception as error:self.notice.setText(str(error));return
         return self.open_code_dialog(TemplateExportDialog(self,record['name'],code))
+
+    def share_image(self):
+        record=self.selected_record()
+        if record is None:return
+        if self.c.job is not None or self.c.dirty or self.c.effect_deferred is not None:
+            self.notice.setText('请等待当前角色预览完成，再生成分享图。');return
+        if self.c.good.get('preview_mode','character')!='character':
+            self.notice.setText('请先切回角色预览，设置好站姿和视角，再生成分享图。');return
+        from qt_template_share import TemplateShareDialog
+        try:dialog=TemplateShareDialog(self,record)
+        except Exception as error:self.notice.setText('分享图未生成：'+str(error));return
+        self.c.show_dialog(dialog);C.QTimer.singleShot(0,dialog.generate);return dialog
 
     def import_code(self):return self.open_code_dialog(TemplateImportDialog(self))
 
@@ -203,7 +229,7 @@ class TemplateImportDialog(W.QDialog):
         super().__init__(browser);self.browser=browser;self.setWindowTitle('导入模版码');self.resize(570,430);self.record=None
         outer=vertical(self,22,14);outer.addWidget(label('导入模版码','Title'))
         hint=label('粘贴完整导出码，校验后新增一份模版。','Muted');hint.setWordWrap(True);outer.addWidget(hint)
-        self.code=W.QPlainTextEdit();self.code.setPlaceholderText('HGG1.… / HGG2.…');outer.addWidget(self.code,1)
+        self.code=W.QPlainTextEdit();self.code.setPlaceholderText('HGG1.… / HGG2.… / HGG3.…');outer.addWidget(self.code,1)
         self.name=W.QLineEdit();self.name.setMaxLength(32);self.name.setPlaceholderText('模版名称');outer.addWidget(self.name)
         self.info=label('','Muted');self.info.setWordWrap(True);outer.addWidget(self.info)
         self.error=label('','Warning');self.error.setWordWrap(True);outer.addWidget(self.error)
@@ -220,6 +246,7 @@ class TemplateImportDialog(W.QDialog):
         except Exception as error:self.error.setText(str(error));return
         self.name.setText(self.record['name']);count=sum(c['item_id']is not None for c in self.record['state']['equipment'].values())
         faces=sum(bool(i)for i in self.record['state'].get('facewear',[0,0]))
+        count+=sum(bool(c.get('item_id'))for c in self.record['state'].get('weapons',{}).values())
         self.info.setText(f'{count} 件装备 · {faces} 件面饰 · 含两个染色区 · 新增后可在列表中选择应用到当前角色。');self.add_button.setEnabled(True)
 
     def add(self):
@@ -243,6 +270,7 @@ class TemplateBatchDialog(W.QDialog):
         self.list.setVerticalScrollMode(W.QAbstractItemView.ScrollPerPixel);outer.addWidget(self.list,1)
         for i,record in enumerate(records):
             count=sum(bool(c.get('item_id'))for c in record['state']['equipment'].values())
+            count+=sum(bool(c.get('item_id'))for c in record['state'].get('weapons',{}).values())
             faces=sum(bool(v)for v in record['state'].get('facewear',[0,0]))
             item=W.QListWidgetItem(record['name']+f'  ·  {count} 件装备'+(f' · {faces} 件面饰'if faces else''));item.setToolTip(record['name']);item.setData(C.Qt.UserRole,i)
             item.setFlags(C.Qt.ItemIsEnabled|C.Qt.ItemIsUserCheckable);item.setCheckState(C.Qt.Checked);item.setSizeHint(C.QSize(100,36));self.list.addItem(item)

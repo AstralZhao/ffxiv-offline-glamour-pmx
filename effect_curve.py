@@ -1,8 +1,15 @@
 """Reviewed CN scalar/RGB AVFX curve math, independent of display frame rate."""
 import bisect
 import math
+from dataclasses import dataclass
 
 import numpy as np
+
+
+@dataclass(frozen=True)
+class ClockTimes:
+    wrapped:float
+    unwrapped:float
 
 
 def tangent_byte(value):
@@ -46,12 +53,19 @@ def scalar_value(keys,time,pre=0,post=0):
     """
     f=np.float32;time=f(time)
     if not np.isfinite(time):raise ValueError('Non-finite scalar curve time')
+    # CN3974dc..397502 stores the source signed16 time in only 14 bits.
+    # Preserve source order, including native boundary priority for a packed
+    # first key later than its last key. Do not sort or clamp authored keys.
+    if any(not 0<=k[0]<=0x3fff for k in keys):
+        if any(not -32768<=k[0]<=32767 for k in keys):raise ValueError('Scalar source time outside signed16 range')
+        keys=tuple((k[0]&0x3fff,*k[1:])for k in keys)
     if len(keys)==1:return f(keys[0][4])
     start,end=keys[0][0],keys[-1][0];offset=None;before=False
     if time<start or time>end:
         before=time<start;mode=pre if before else post
         if mode in(0,-1):return f(keys[0 if before else -1][4])
         if mode not in(1,2):raise ValueError('Unreviewed scalar curve boundary mode')
+        if end<=start:raise ValueError('Repeated scalar packed interval is not increasing')
         span=f(end-start);distance=f(f(start)-time)if before else f(time-f(end))
         # CN397d90/397f50 first truncate the float distance to int32,
         # then divide by the integer period and add1. Exact negative
@@ -63,6 +77,8 @@ def scalar_value(keys,time,pre=0,post=0):
             delta=f(f(keys[-1][4])-f(keys[0][4]));offset=f(delta*f(turns))
     # CN397770 searches strictly BEFORE ceilf(time). At an exact key,
     # evaluate the arriving segment, including its step/float32 endpoint.
+    if any(a[0]>=b[0]for a,b in zip(keys,keys[1:])):
+        raise ValueError('Scalar packed interior interval is not increasing')
     index=max(0,bisect.bisect_left([k[0]for k in keys],math.ceil(float(time)))-1)
     if index>=len(keys)-1:raise ValueError('Scalar time lookup outside reviewed key interval')
     result=scalar_segment(keys,index,time)

@@ -65,7 +65,7 @@ def _birth(array,selected,matrix,bound):
     array['velocity'][selected]=velocity;array['age'][selected]=0;array['state'][selected]=1
 
 
-def advance(packets,damping,delta,life,repeat,*,matrix=None,bound=True):
+def advance(packets,damping,delta,life,repeat,*,matrix=None,bound=True,atlas=None):
     """3fa3a0 + ordinary 3fcd70 birth, supplied finite delta and matrix.
 
     Every age update occurs before state dispatch. A waiting birth does not
@@ -80,6 +80,11 @@ def advance(packets,damping,delta,life,repeat,*,matrix=None,bound=True):
     if type(life)is not int or not 0<=life<=32767 or type(repeat)is not bool or type(bound)is not bool:
         raise ValueError('Invalid Simple lifetime/repeat/birth state')
     parent=None if bound else _matrix(matrix)
+    if atlas is not None:
+        if type(atlas)is not tuple or len(atlas)!=4 or any(type(v)is not int for v in atlas):raise ValueError('Invalid finite Simple atlas')
+        u,v,interval,loops=atlas
+        if not 1<=u<=127 or not 1<=v<=127 or not 0<=loops<=127 or not 1<=interval<=127:
+            raise ValueError('Simple atlas outside signed source range')
     left=min(f(delta),f(10));steps=0
     while left>0:
         # These masks are snapshots BEFORE any birth/death in this substep.
@@ -92,19 +97,27 @@ def advance(packets,damping,delta,life,repeat,*,matrix=None,bound=True):
         waiting=(state==0)&(array['age']>=array['delay'].astype('<f4'))
         if repeat:_birth(array,ended,parent,bound)
         else:array['state'][ended]=2
+        if atlas is not None:
+            # CN3fa69f..3fa77a: only the particles that entered this step
+            # alive run the finite atlas branch. Lifetime rebirth happens
+            # first; a waiting birth skips the branch until its next step.
+            cells=np.trunc(array['age']/f(interval)).astype('<i8')&65535
+            over=live&(cells+(array['atlas']&32767)>=u*v*loops)if loops else np.zeros(len(array),dtype=bool)
+            if repeat:_birth(array,over,parent,bound)
+            else:array['state'][over]=2
         _birth(array,waiting,parent,bound)
         left=f(left+f(-.1));steps+=1
         if steps>128:raise ValueError('Simple source step budget exceeded')
     return array.tobytes()
 
 
-def replay(packets,damping,life,repeat,updates):
+def replay(packets,damping,life,repeat,updates,*,atlas=None):
     """Apply explicit successful/copy events; never infer missing events."""
     _particles(packets);result=packets
     if len(updates)>100000:raise ValueError('Explicit Simple history exceeds bound')
     for event in updates:
         if not isinstance(event,Update)or type(event.advance)is not bool:raise ValueError('Invalid Simple update event')
-        if event.advance:result=advance(result,damping,event.delta,life,repeat,matrix=event.matrix,bound=event.bound)
+        if event.advance:result=advance(result,damping,event.delta,life,repeat,matrix=event.matrix,bound=event.bound,atlas=atlas)
         # The preservation-copy branch does not age, move or birth particles.
     return result
 

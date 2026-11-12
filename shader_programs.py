@@ -15,9 +15,11 @@ from material_shader_probe import disassemble
 LEGACY_VERTEX='50bea09655aca55b4a93f1e03bdc02c0104a385ac5e52e974a2238906470604b'
 LEGACY_GEAR_PRODUCERS={
     False:frozenset(('636362c38b6e3c0099fe4deb30ace08f457c887e34f47664dbe60ec2d7c50eab',
-        'b1324bec89813b11e0b58d139a7b29e38480e9306ed2fc6a08bf62f42b0d8b3d')),
+        'b1324bec89813b11e0b58d139a7b29e38480e9306ed2fc6a08bf62f42b0d8b3d',
+        '0a8ad43cb04a41cce522326d755134d5f994acf04b046f468ae37f6c69fcb7a6')),
     True:frozenset(('622d561d9303dc71a532a35eb2cb2a4b68b09eccd4cd81d88ec33715e62e556b',
-        '8221d73f229205cd829d4cb984a77d2a2cf0dbe75282af5a960c2e8dbc4d2988'))}
+        '8221d73f229205cd829d4cb984a77d2a2cf0dbe75282af5a960c2e8dbc4d2988',
+        '28e610e5d2662ede23c6d38eac095e56c51a19d413cb01a598b4e9b2eedbcc11'))}
 
 
 def equipment_pass(package,material_keys,influences=4,role='material',*,alpha_clip=False):

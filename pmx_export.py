@@ -127,6 +127,22 @@ class _Skeleton:
         palette = np.asarray(mesh['palette'])
         if palette.ndim != 1 or palette.dtype.kind not in 'iu' or np.any(palette < 0):
             raise ValueError('PMX：网格骨骼调色板无效')
+        if mesh.get('weapon_attachment_bone'):
+            # v0.0.9 weapons have their own zero-based palettes. Export their
+            # resolved shape as a rigid prop; never interpret these as body IDs.
+            anchor = mesh['weapon_attachment_bone']
+            if anchor not in self.names:
+                raise ValueError('PMX：武器挂点不存在：'+anchor)
+            scope = f'weapon_{mesh["slot"]}_{mesh["item_id"]}_{mesh.get("weapon_part", 0)}'
+            key = (scope, anchor)
+            if key not in self.lookup:
+                parent = self.lookup['', anchor]
+                index = len(self.bones)
+                self.current.append(self.current[parent])
+                self.target.append(self.target[parent])
+                self.bones.append(Bone(scope, self.bones[parent].position.copy(), parent))
+                self.lookup[key] = index
+            return np.full(len(palette), self.lookup[key], dtype=np.int32)
         names, parents, world, scope = self.names, self.outfit.parents, self.world, ''
         if np.any(palette >= len(self.names)):
             item = mesh.get('attachment_item')
@@ -255,6 +271,38 @@ def _rest_mesh(scene, mesh, vertices, positions, weights, palette, rig):
     return result, {**mesh, 'joint_matrices': new}
 
 
+def export_source(scene, rig='native'):
+    """Resolve v0.0.9's GPU-only animation without mutating the live preview."""
+    base = getattr(scene, 'emote_base_scene', None)
+    if base is None:
+        return scene
+    import copy
+    if rig == 'standard':
+        # Animated facial expressions must not become the neutral morph basis.
+        result = copy.copy(base)
+        result._pmx_reset_animation = True
+        return result
+    result = copy.copy(scene)
+    result.meshes = []
+    for mesh in scene.meshes:
+        vertices = mesh['vertices']
+        joints = mesh.get('joint_matrices')
+        if joints is None:
+            joints = scene.skinning[np.asarray(mesh['palette'])]
+        joints = _finite(joints, (len(mesh['palette']), 4, 4), '动画蒙皮矩阵')
+        _, _, weights, _, _ = _weights(vertices, np.arange(len(joints)))
+        points = np.column_stack((vertices['position'], np.ones(len(vertices))))
+        positions = np.zeros((len(vertices), 3))
+        for column in range(weights.shape[1]):
+            active = weights[:, column] > 0
+            positions[active] += (np.einsum('nij,nj->ni', joints[vertices['joints'][active, column]],
+                                           points[active])[:, :3] * weights[active, column, None])
+        result.meshes.append({**mesh, 'posed_positions': positions})
+    # A prepared snapshot is idempotent when passed through the public API.
+    result.emote_base_scene = None
+    return result
+
+
 def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_provider=None,
                 check_cancel=lambda: None, rig='native', ik=True, expressions=True, physics=True):
     """Consume final visible indices and posed positions, never change the scene.
@@ -269,6 +317,8 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
     if rig not in ('native', 'standard') or any(type(v) is not bool for v in (ik, expressions, physics)):
         raise ValueError('PMX：骨架选项不正确')
     standard = rig == 'standard'
+    animated = getattr(scene, 'emote_base_scene', None) is not None or getattr(scene, '_pmx_reset_animation', False)
+    scene = export_source(scene, rig)
     reference = None
     if standard:
         from pmx_rig import reference_world
@@ -283,6 +333,10 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
     if standard:
         model.warnings = ['使用自定义身材的 A 姿势与自动生成的 MMD 骨架；VMD 动作仍需按角色比例调整。',
                           '不导出装备粒子特效，MMD 光照与游戏预览存在差异。']
+    if animated and standard:
+        model.warnings.append('标准模式使用动作播放前的角色与面部参考姿势；不把游戏动作或表情烘焙为初始姿势。')
+    if any(mesh.get('weapon_attachment_bone') for mesh in scene.meshes):
+        model.warnings.append('武器按当前形态固定在独立控制骨上并跟随角色挂点；不导出武器内部活动骨骼或粒子特效。')
     for number, mesh in enumerate(scene.meshes):
         check_cancel()
         indices = np.asarray(mesh['indices'])

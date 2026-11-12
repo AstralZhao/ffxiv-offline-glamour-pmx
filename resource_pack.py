@@ -5,7 +5,7 @@ from pathlib import Path,PurePosixPath
 FORMAT='ff14-wardrobe-resources-v1'
 CATEGORIES=('00','04','05','06','08','0a')
 MANIFEST='resource-pack.json'
-ARCHIVE=re.compile(r'game/sqpack/ffxiv/((?:00|04|05|06|08|0a)[0-9a-f]{4})\.win32\.(index2|dat[0-7])\Z')
+ARCHIVE=re.compile(r'game/sqpack/ffxiv/((?:00|01|04|05|06|07|08|0a)[0-9a-f]{4})\.win32\.(index2|dat[0-7])\Z')
 CHUNK=4*1024**2
 MAX_TOTAL=100*1024**3
 
@@ -48,20 +48,28 @@ def manifest_data(raw,profile):
         raise ValueError('不是受支持的幻化柜国服资源包')
     if data.get('format')=='ff14-wardrobe-resources-v2'and data.get('selection',{}).get('race_gender_clan_filters')is not False:
         raise ValueError('精简包缺少全部种族保留声明')
-    if data.get('client_version')!=profile['client_version']:raise ValueError('资源包的国服版本与当前软件不匹配')
-    if data.get('categories')!=list(CATEGORIES):raise ValueError('资源包缺少必需的资源分类')
+    version=data.get('client_version')
+    if not isinstance(version,str)or not version.strip()or len(version)>128 or '\0'in version:
+        raise ValueError('资源包的游戏版本记录不正确')
+    categories=data.get('categories')
+    optional=('01','07')if data.get('format')=='ff14-wardrobe-resources-v2'else()
+    if (not isinstance(categories,list)or any(type(value)is not str for value in categories)or categories[:len(CATEGORIES)]!=list(CATEGORIES)
+        or categories[len(CATEGORIES):]!=sorted(set(categories[len(CATEGORIES):]))
+        or any(value not in optional for value in categories[len(CATEGORIES):])):
+        raise ValueError('资源包缺少必需的资源分类或包含不支持的附加分类')
     files=data.get('files')
     if not isinstance(files,dict)or not 8<=len(files)<=256:raise ValueError('资源包文件清单不正确')
     total=0
     for name,record in files.items():
         if not isinstance(name,str)or not allowed(name):raise ValueError('资源包包含不允许的文件路径')
+        if ARCHIVE.fullmatch(name)and name.split('/')[-1][:2]not in categories:raise ValueError('资源包包含未声明的资源分类')
         if not isinstance(record,dict)or type(record.get('bytes'))is not int or not 0<record['bytes']<=32*1024**3:raise ValueError('资源文件大小不正确')
         if not isinstance(record.get('sha256'),str)or not re.fullmatch('[0-9a-f]{64}',record['sha256']):raise ValueError('资源文件校验值不正确')
         total+=record['bytes']
     if total>MAX_TOTAL:raise ValueError('资源包超过支持的体积上限')
     exe=files.get('game/ffxiv_dx11.exe',{})
-    if exe.get('sha256')!=profile['executable_sha256']or'game/ffxivgame.ver'not in files:raise ValueError('资源包客户端来源不匹配')
-    for category in CATEGORIES:
+    if not exe or'game/ffxivgame.ver'not in files:raise ValueError('资源包缺少客户端来源记录')
+    for category in categories:
         indexes=[name for name in files if ARCHIVE.fullmatch(name)and name.split('/')[-1].startswith(category)and name.endswith('.index2')]
         if not indexes:raise ValueError('资源包缺少资源索引：'+category)
         for name in indexes:
@@ -84,6 +92,8 @@ def validate_directory(path,profile,*,full=False,callback=None,cancel=None):
         if file.stat().st_size!=record['bytes']:raise ValueError('资源包文件大小已改变：'+name)
         if full and fingerprint(file,cancel=cancel)!=record['sha256']:raise ValueError('资源包文件校验失败：'+name)
         done+=record['bytes'];progress(callback,'检查资源',done,total)
+    if (path/'game/ffxivgame.ver').read_text(encoding='utf8').strip()!=data['client_version']:
+        raise ValueError('资源包版本文件与自身清单不一致')
     return path
 
 
@@ -98,7 +108,7 @@ def export_resource_pack(game,output,*,root=None,callback=None,cancel=None,compa
         return export_compact(game,output,root,callback=callback,cancel=cancel)
     files=[game/'game/ffxivgame.ver',game/'game/ffxiv_dx11.exe']
     for path in sorted((game/'game/sqpack/ffxiv').iterdir()):
-        if path.is_file()and allowed(path.relative_to(game).as_posix()):files.append(path)
+        if path.is_file()and path.name[:2]in CATEGORIES and allowed(path.relative_to(game).as_posix()):files.append(path)
     if any(not p.resolve(strict=True).is_relative_to(game)or p.is_symlink()for p in files):raise ValueError('源文件不能链接到游戏目录外')
     stats={p:(p.stat().st_size,p.stat().st_mtime_ns)for p in files};total=sum(v[0]for v in stats.values())
     if shutil.disk_usage(output.parent).free<total+64*1024**2:raise ValueError('导出位置可用空间不足')
@@ -158,6 +168,7 @@ def import_resource_pack(archive_path,root,*,callback=None,cancel=None):
                         outgoing.write(chunk);h.update(chunk);done+=len(chunk);progress(callback,'导入资源',done,total)
                 if size!=record['bytes']or h.hexdigest()!=record['sha256']:raise ValueError('资源文件校验失败：'+name)
             (staging/MANIFEST).write_bytes(raw)
+            validate_directory(staging,profile,cancel=cancel)
             publish(staging,destination,cancel=cancel)
             return destination
     finally:

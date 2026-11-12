@@ -80,10 +80,29 @@ def parse_state(raw):
     pose=validate_pose(raw.get('pose','default'))
     from facewear import selection as facewear_selection
     facewear=facewear_selection(raw.get('facewear'))
+    from weapons import selection as weapon_selection,WEAPON_SLOTS
+    weapons=weapon_selection(raw.get('weapons'));view=raw.get('preview_mode','character');focus=raw.get('weapon_focus','MainHand')
+    if view not in('character','weapon')or focus not in WEAPON_SLOTS:raise ValueError('武器预览模式不正确')
+    secondary=raw.get('weapon_secondary_visible',True)
+    if type(secondary)is not bool:raise ValueError('武器关联部件显示参数不正确')
+    weapon_drawn=raw.get('weapon_drawn',False)
+    if type(weapon_drawn)is not bool:raise ValueError('武器拔出参数不正确')
     state={'equipment':result,'head_visible':visible,'effects_visible':effects_visible,'yaw':float(yaw),'zoom':float(zoom),'pitch':float(pitch),'pan':float(pan),'pan_x':float(pan_x)}
     if pose!='default':state['pose']=pose
     if visor:state['visor']=True
     if any(facewear):state['facewear']=facewear
+    if weapons:state['weapons']=weapons
+    if view!='character':state['preview_mode']=view
+    if focus!='MainHand':state['weapon_focus']=focus
+    if not secondary:state['weapon_secondary_visible']=False
+    if weapon_drawn:state['weapon_drawn']=True
+    from emote_preview import selection as emote_selection
+    emote=emote_selection(raw.get('emote'))
+    if emote is not None and view=='character':state['emote']=emote
+    expression=raw.get('expression')
+    if expression is not None:
+        if type(expression)is not int or not 0<expression<65536:raise ValueError('面部表情编号不正确')
+        if view=='character':state['expression']=expression
     return state
 
 
@@ -100,7 +119,7 @@ def equipment_rows(slot,query='',offset=0,limit=60,*,grouped=False,model_set=Non
 
 def parse_startup_state(raw):
     if not isinstance(raw,dict):return parse_state(raw)
-    return parse_state({**raw,'yaw':0,'pitch':0,'pan':0,'pan_x':0,'zoom':1,'pose':'default','head_visible':True})
+    return parse_state({**raw,'yaw':0,'pitch':0,'pan':0,'pan_x':0,'zoom':1,'pose':'default','emote':None,'expression':None,'head_visible':True,'preview_mode':'character','weapon_focus':'MainHand','weapon_drawn':False})
 
 
 class DemoEngine:
@@ -180,7 +199,7 @@ class DemoEngine:
                     self.context_functions={};self.geometry_buffers=OrderedDict();self.geometry_pointers=set();self.geometry_bytes=0
                     self.geometry_identities=OrderedDict();self.reuse_geometry_identity=True
                     self.frame_constant_buffers=None;self.frame_constant_pointers=set()
-                    self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True;self.pending_effect_draw=None
+                    self.native_surface=None;self.material_glow=None;self.material_glow_enabled=True;self.pending_effect_draw=None;self.edge_antialias=None;self.multisample_scene=None;self.studio_points=None
                     super().__init__(*args,**kwargs)
                     from character_layer import CharacterLayer
                     self.character_layer=CharacterLayer(self);self.capture_character_layer=False
@@ -200,38 +219,82 @@ class DemoEngine:
                             draw_layer2=self.pending_effect_draw,
                             base_token=(id(self.character_layer),self.character_layer.captures)
                                 if self.reuse_character_layer and self.character_layer.key is not None else None)
+                    if getattr(self,'studio_options',{}).get('antialiasing','off')=='smaa':
+                        if self.edge_antialias is None:
+                            from edge_antialias import EdgeAntialias
+                            self.edge_antialias=EdgeAntialias(self)
+                        output=self.edge_antialias.apply(output)
+                    elif self.edge_antialias is not None:
+                        self.edge_antialias.close();self.edge_antialias=None
+                    output_size=(self.width,self.height)
+                    if getattr(self,'studio_options',{}).get('antialiasing')=='ssaa':
+                        from supersampling import SupersamplingResolve
+                        if getattr(self,'supersampling_resolve',None)is None:self.supersampling_resolve=SupersamplingResolve(self)
+                        output_size=self.preview_size
+                        output=self.supersampling_resolve.apply(output,output_size)
+                    elif getattr(self,'supersampling_resolve',None)is not None:
+                        self.supersampling_resolve.close();self.supersampling_resolve=None
                     if self.native_surface:
                         self.native_surface.present(output)
                         return None,None
-                    original=self.color
-                    try:self.color=output;return super().finish_scene_frame()
-                    finally:self.color=original
+                    original=self.color;original_size=(self.width,self.height)
+                    try:
+                        self.color=output;self.width,self.height=output_size
+                        return super().finish_scene_frame()
+                    finally:self.color=original;self.width,self.height=original_size
 
                 def resize_native(self,width,height):
-                    from d3d11_debug import P
+                    from d3d11_debug import P,TextureDesc
+                    import ctypes as c
                     if not self.native_surface:return
-                    width=max(64,int(width));height=max(64,int(height));scale=min(1.,2048/max(width,height))
-                    width=max(64,round(width*scale));height=max(64,round(height*scale))
-                    if(width,height)==(self.width,self.height):return
+                    width=max(64,int(width));height=max(64,int(height))
+                    display_size=(width,height)
+                    scale=2 if getattr(self,'studio_options',{}).get('antialiasing')=='ssaa'else 1
+                    width*=scale;height*=scale
+                    if max(width,height)>16384:raise ValueError('预览尺寸超过D3D11支持的16384像素上限')
+                    if(width,height)==(self.width,self.height):
+                        self.native_surface.resize(*display_size);self.preview_size=display_size
+                        return
                     self.character_layer.invalidate()
                     self.context(110,[])
+                    allocated=[]
+                    try:
+                        for format_,bind,view_method in ((10,40,9),(40,64,10)):
+                            texture=self.create(5,[P,P],c.byref(TextureDesc(width,height,1,1,format_,1,0,0,bind,0,0)),None)
+                            allocated.append(texture)
+                            allocated.append(self.create(view_method,[P,P],texture,None))
+                    except Exception:
+                        for pointer in allocated[::-1]:self.resources.remove(pointer);self.probe.release(pointer)
+                        raise
                     # Drop the SRV first so the previous FP16 target can die.
                     self.native_surface.release(self.native_surface.source_srv)
                     self.native_surface.source_srv=None;self.native_surface.source=None
+                    try:self.native_surface.resize(*display_size)
+                    except Exception:
+                        for pointer in allocated[::-1]:self.resources.remove(pointer);self.probe.release(pointer)
+                        raise
                     old=[self.color,self.rtv,self.depth,self.dsv]+[p for target in self.gbuffers for p in target]
                     for pointer in old:self.resources.remove(pointer);self.probe.release(pointer)
                     self.gbuffers=[];self.width=width;self.height=height
-                    self.color=self.texture(10,40);self.rtv=self.create(9,[P,P],self.color,None)
-                    self.depth=self.texture(40,64);self.dsv=self.create(10,[P,P],self.depth,None)
-                    self.native_surface.resize(width,height)
+                    self.color,self.rtv,self.depth,self.dsv=allocated
+                    self.preview_size=display_size
 
                 def close(self):
+                    if self.studio_points:self.studio_points.close();self.studio_points=None
+                    if self.multisample_scene:self.multisample_scene.close();self.multisample_scene=None
+                    if getattr(self,'supersampling_resolve',None)is not None:self.supersampling_resolve.close()
                     if self.native_surface:self.native_surface.close()
+                    if self.edge_antialias:self.edge_antialias.close()
                     if self.material_glow:self.material_glow.close()
                     if hasattr(self,'character_layer'):self.character_layer.close()
                     return super().close()
 
                 def draw_scene(self,scene,yaw):
+                    if self.studio_points and not any(row[0]for row in getattr(self,'studio_options',{}).get('lights',())):
+                        self.studio_points.close();self.studio_points=None
+                    if getattr(self,'studio_options',{}).get('antialiasing')!='msaa4'and self.multisample_scene:
+                        self.multisample_scene.close();self.multisample_scene=None
+                    self.animation_geometry=bool(getattr(scene,'emote',None)or getattr(scene,'expression',None))
                     self.frame_joints={};self.frame_constant_buffers={};self.frame_constant_pointers=set()
                     try:
                         camera,view=self.camera_inputs(scene,yaw)
@@ -249,6 +312,21 @@ class DemoEngine:
                         self.capture_character_layer=False
                         self.pending_effect_draw=None
                         self.frame_joints={};self.frame_constant_buffers=None;self.frame_constant_pointers=set()
+                        self.animation_geometry=False
+
+                def draw_multisample_materials(self,scene,meshes,shared,view):
+                    if getattr(self,'studio_options',{}).get('antialiasing')!='msaa4':return False
+                    if self.multisample_scene is None:
+                        from multisample_scene import MultisampleScene
+                        self.multisample_scene=MultisampleScene(self)
+                    self.multisample_scene.draw(scene,meshes,shared,view);return True
+
+                def draw_studio_points(self,camera,view,*,multisample=None):
+                    if not any(row[0]for row in getattr(self,'studio_options',{}).get('lights',())):return
+                    if self.studio_points is None:
+                        from studio_point_lights import StudioPointLights
+                        self.studio_points=StudioPointLights(self)
+                    self.studio_points.draw(camera,view,multisample=multisample)
 
                 def character_layer_key(self,camera,view):
                     return (camera.tobytes(),view.tobytes(),self.width,self.height,self.clear_depth,
@@ -303,6 +381,9 @@ class DemoEngine:
                     while immutable and isinstance(owner,np.ndarray):
                         immutable=not owner.flags.writeable;owner=owner.base
                     immutable=immutable and isinstance(owner,bytes)
+                    # Per-frame transparent triangle sorting changes index
+                    # order during animation; never retain those time samples.
+                    if bind==2 and not immutable and getattr(self,'animation_geometry',False):return super().buffer(array,bind)
                     identity=(bind,id(array));known=self.geometry_identities.get(identity)if immutable and self.reuse_geometry_identity else None
                     if known is not None and known[0]()is array and known[1]in self.geometry_buffers:
                         if hasattr(self,'memory_residency'):self.memory_residency.geometry(known[1])
@@ -344,6 +425,8 @@ class DemoEngine:
                     ry=np.array(((c,0,s),(0,1,0),(-s,0,c)));rx=np.array(((1,0,0),(0,cp,-sp),(0,sp,cp)))
                     view=np.eye(4);view[:3,:3]=rx@ry;view[:3,3]=-view[:3,:3]@focus+(0,0,-3)
                     view[0,3]+=(high[1]-low[1])*self.pan_x;view[1,3]-=(high[1]-low[1])*self.pan
+                    self.light_camera_position=tuple(float(n)for n in(-view[:3,:3].T@view[:3,3]))
+                    self.light_camera_rotation=tuple(tuple(float(n)for n in row)for row in view[:3,:3])
                     radius=max((high[1]-low[1])/2,np.max(high-low)/2*self.height/self.width)*1.12/self.zoom
                     projection=np.eye(4);projection[0,0]=self.height/self.width/radius;projection[1,1]=1/radius
                     projection[2,2]=1/(10-.01);projection[2,3]=10/(10-.01)
@@ -351,6 +434,7 @@ class DemoEngine:
 
                 def draw_scene_extras(self,scene,camera,view):
                     self.pending_effect_draw=None
+                    if not self.last_pass_counts.get('character_layer_reused')and getattr(self,'studio_options',{}).get('antialiasing')!='msaa4':self.draw_studio_points(camera,view)
                     if self.capture_character_layer:
                         self.character_layer.capture(scene,self.character_layer_key(camera,view))
                     self.post_camera=(camera,view)
@@ -493,12 +577,13 @@ class DemoEngine:
     def load_preset_path(self,key,path):
         if key not in self.presets:raise ValueError('预设不存在')
         started=time.perf_counter();entry,cache=self.characters.acquire(path);candidate=entry['character']
-        previous=self.character;old_accessories=getattr(self,'accessories',None);old_scenes=self.scene_cache
+        previous=self.character;old_accessories=getattr(self,'accessories',None);old_scenes=self.scene_cache;old_emotes=getattr(self,'emotes',None)
         self.character=candidate;self.accessories=entry['accessories'];self.scene_cache=entry['scenes']
         retained=self.last['state']if self.last else self.initial_state
         try:result=self.render(retained)
         except Exception:
-            self.character=previous;self.accessories=old_accessories;self.scene_cache=old_scenes;self.characters.trim(previous);raise
+            self.character=previous;self.accessories=old_accessories;self.scene_cache=old_scenes;self.emotes=old_emotes;self.characters.trim(previous);raise
+        if getattr(self,'emotes',None)is not None and self.emotes.character is not candidate:self.emotes=None
         self.active_preset=key
         self.rendered_parameters=dict(candidate.base.pose['preset']['parameters']);self.appearance_is_preview=False
         self.characters.trim(candidate)
@@ -515,27 +600,48 @@ class DemoEngine:
         studio=options(getattr(self,'studio',None))
         self.renderer.studio_options=studio
         self.renderer.studio_background=BACKGROUNDS[studio['background']][1]
+        if self.renderer.native_surface:
+            self.renderer.resize_native(self.renderer.native_surface.width,self.renderer.native_surface.height)
         selection=[state['equipment'],state['head_visible'],state['effects_visible']]
-        pose_id=state.get('pose','default')
+        weapon_view=state.get('preview_mode','character')=='weapon'
+        pose_id='default'if state.get('emote')else state.get('pose','default')
+        weapon_drawn=state.get('weapon_drawn',False)if weapon_view else pose_id.startswith('weapon_')
+        if state.get('emote')and not weapon_view:
+            player=self.emote_player();player.configure_weapons(state.get('weapons'))
+            if player.requires_weapon(state['emote']['id']):
+                if not player.weapon_motion:raise NotImplementedError('此动作需要武器，请先在主武器栏试穿对应职业的武器。')
+                weapon_drawn=True
+        if weapon_view:
+            pose_id='weapon_1'if weapon_drawn and state.get('weapons',{}).get('MainHand',{}).get('item_id')else'default'
         if pose_id!='default':selection.append(pose_id)
         if state.get('visor',False):selection.append('visor')
         if state.get('facewear'):selection.append(['facewear',state['facewear']])
+        if state.get('weapons')or state.get('preview_mode'):selection.append(['weapons',state.get('weapons'),state.get('preview_mode','character'),state.get('weapon_focus','MainHand'),state.get('weapon_secondary_visible',True),weapon_drawn])
         key=json.dumps(selection,sort_keys=True)
         if key in self.scene_cache:
             scene=self.scene_cache[key];self.scene_cache.move_to_end(key)
         else:
             chosen={s:CHOICES[s](**state['equipment'][s])for s in CHOICES}
-            scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
-                head=chosen['Head'],head_visible=state['head_visible'])
+            if state.get('weapons'):
+                from weapons import Weapons
+                if not hasattr(self.character,'weapons'):self.character.weapons=Weapons(self.character)
+                scene,info=self.character.weapons.resolve_character(chosen,state)
+            else:
+                scene,info=self.character.resolve(chosen['Gloves'],feet=chosen['Feet'],body=chosen['Body'],legs=chosen['Legs'],
+                    head=chosen['Head'],head_visible=state['head_visible'])
             scene=self.accessories.resolve(scene,state,info)
             from facewear import Facewear
             if not hasattr(self.character,'facewear'):self.character.facewear=Facewear(self.character)
             scene=self.character.facewear.resolve(scene,state.get('facewear'))
             if pose_id!='default':
                 from pose_preview import apply_pose
-                scene=apply_pose(scene,self.character.outfit,pose_id,pose_path=self.character.pose_path)
+                scene=apply_pose(scene,self.character.outfit,pose_id,pose_path=self.character.pose_path,weapons=state.get('weapons'))
             from visor_preview import apply_visor
             scene=apply_visor(scene,self.character.outfit,info,state.get('visor',False))
+            if state.get('weapons')or state.get('preview_mode'):
+                from weapons import Weapons
+                if not hasattr(self.character,'weapons'):self.character.weapons=Weapons(self.character)
+                scene=self.character.weapons.resolve(scene,state.get('weapons'),view=state.get('preview_mode','character'),focus=state.get('weapon_focus','MainHand'),secondary=state.get('weapon_secondary_visible',True),drawn=weapon_drawn)
             # Keep the preset framing as a minimum, expanding only for actual
             # referenced geometry such as wings. Dye changes reuse this scene.
             import numpy as np
@@ -555,6 +661,10 @@ class DemoEngine:
             scene.meshes=[{**mesh,'vertices':freeze(mesh['vertices']),
                 'indices':freeze(np.ascontiguousarray(mesh['indices'],dtype='<u4'))}for mesh in scene.meshes]
             while len(self.scene_cache)>6:self.scene_cache.popitem(last=False)
+        if state.get('emote')or state.get('expression'):
+            _,changed=self.emote_player().apply(scene,state.get('emote'),state.get('expression'))
+            scene=self.emotes.current[1]
+            if changed:self.renderer.character_layer.invalidate()
         if scene.pending_meshes or scene.omitted:raise NotImplementedError('当前装备含尚未接入的可见部件')
         residency=getattr(self.renderer,'memory_residency',None)
         transition=residency.begin(scene)if residency else False
@@ -586,10 +696,15 @@ class DemoEngine:
         result={'image':url,'state':state,'seconds':round(time.perf_counter()-started,3),
             'visible_meshes':len(scene.meshes),'renderer':'native-d3d11-3d','scene_cache_entries':len(self.scene_cache),
             'shader_families':sorted({mesh['material']['shader']for mesh in scene.meshes}),
-            'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')}|set(scene.effect_notices)),
+            'notices':sorted({mesh['preview_notice']for mesh in scene.meshes if mesh.get('preview_notice')}|set(scene.effect_notices)|set(getattr(scene,'weapon_notices',()))),
             'equipment_effects':scene.effect_summaries,'effect_draws':self.renderer.last_effect_draws,'effect_frame':frame,
-            'visor':scene.visor}
-        with self.lock:self.last=result;self.last_scene=scene
+            'visor':scene.visor,'weapons':getattr(scene,'weapon_models',[]),'weapon_effect_instances':len(getattr(scene,'weapon_effect_inputs',())),
+            'emote':getattr(scene,'emote',None),'expression':getattr(scene,'expression',None)}
+        # EmotePreview reuses its scene object on later frames. Retain the last
+        # successfully presented frame even if a later render fails.
+        from copy import copy
+        with self.lock:self.last=result;self.last_scene=copy(scene)
+        if not(state.get('emote')or state.get('expression'))and getattr(self,'emotes',None)is not None:self.emotes.current=None
         return result
 
     @tracked
@@ -597,23 +712,32 @@ class DemoEngine:
         """Run on the GPU worker and export only the last successful preview."""
         if self.status!='ready'or self.last_scene is None or self.character is None:
             raise ValueError('请先成功加载角色预览')
-        from pmx_export import export_scene,DEFAULT_SCALE
+        from pmx_export import export_scene,export_source,DEFAULT_SCALE
         options={}if options is None else options
         if not isinstance(options,dict)or set(options)-{'scale','resolution','textures','overwrite','rig','ik','expressions','physics'}:
             raise ValueError('PMX 导出选项不正确')
         for key in('textures','overwrite','ik','expressions','physics'):
             if key in options and type(options[key])is not bool:raise ValueError('PMX 导出选项不正确')
+        if options.get('rig')=='standard'and getattr(self,'last',{}).get('state',{}).get('preview_mode')=='weapon':
+            raise ValueError('单独预览武器时请使用原生骨架，或切回角色预览导出标准 MMD 骨架')
         destination=Path(destination).absolute()
         if destination.resolve().is_relative_to(self.game):raise ValueError('PMX 不能保存到游戏安装目录')
         arguments={'scale':options.get('scale',DEFAULT_SCALE),'overwrite':options.get('overwrite',False),
             'check_cancel':self.load_cancel.check,'rig':options.get('rig','native'),
             'ik':options.get('ik',True),'expressions':options.get('expressions',True),'physics':options.get('physics',True)}
-        scene=self.last_scene
+        scene=export_source(self.last_scene,arguments['rig'])
         if options.get('textures',True):
             from pmx_material import MaterialBaker
             with MaterialBaker(scene,options.get('resolution',1024))as baker:
                 return export_scene(scene,self.character.outfit,destination,material_provider=baker,**arguments)
         return export_scene(scene,self.character.outfit,destination,**arguments)
+
+    def emote_player(self):
+        from emote_preview import EmotePreview
+        if getattr(self,'emotes',None)is None or self.emotes.character is not self.character:self.emotes=EmotePreview(self.character)
+        return self.emotes
+
+    def emote_catalog(self):return self.emote_player().rows
 
     def prepare_effects(self,scene,*,enabled=True,frame=30.):
         scene.effect_samples=[];scene.effect_summaries=[];scene.effect_notices=[]
@@ -634,7 +758,9 @@ class DemoEngine:
         for (slot,path),effect in sources.items():
             if not hasattr(scene,'simple_histories'):scene.simple_histories={}
             history=scene.simple_histories.setdefault((slot,path),SimpleHistory(effect));history.begin()
-            samples,pending=prepare(effect,bones,frame,bind_points=outfit.effect_bind_points,simple_history=history.sample)
+            samples,pending=prepare(effect,bones,frame,bind_points=outfit.effect_bind_points,simple_history=history.sample,
+                                    emitter_history=history.emitters)
+            source_discarded=0
             if samples:
                 from effect_renderer import EffectRenderer
                 if not hasattr(self.renderer,'effect_renderer'):self.renderer.effect_renderer=EffectRenderer(self.renderer,scene.pack)
@@ -642,14 +768,17 @@ class DemoEngine:
                 for sample in samples:
                     try:
                         self.renderer._effect_scope=self.renderer.effect_renderer
-                        self.renderer.effect_renderer.plan(sample)
+                        plan=self.renderer.effect_renderer.plan(sample)
                     except UnsupportedEffect as error:pending.append(str(error))
-                    else:accepted.append(sample)
+                    else:
+                        if plan.get('native_discard'):source_discarded+=1
+                        else:accepted.append(sample)
                     finally:self.renderer._effect_scope=None
                 samples=accepted;pending=tuple(sorted(set(pending)))
             scene.effect_samples.extend({**s,'effect_path':path,'effect_instance':(slot,path)}for s in samples)
             scene.effect_summaries.append({**effect.summary(),'slot':slot,'preview_frame':frame,
-                  'sampled_particles':len(samples),'pending':list(pending),'preview_policy':'sampled-normal-scheduler-stable-probability-source-packed-UV-random',
+                  'sampled_particles':len(samples),'source_shader_discarded_particles':source_discarded,
+                  'pending':list(pending),'preview_policy':'sampled-normal-scheduler-stable-probability-source-packed-UV-random',
                 'particles_rendered':bool(samples),'effect_complete':False})
             if outfit.effect_bind_points.sha256:
                 scene.effect_summaries[-1]['attachment_source']={'path':outfit.effect_bind_points.path,'sha256':outfit.effect_bind_points.sha256}
@@ -657,6 +786,50 @@ class DemoEngine:
             elif samples:
                 scene.effect_notices.append('装备特效：'+('部分粒子尚未接入。'if pending else'尚未完成完整特效还原。'))
             else:scene.effect_notices.append('装备主体已显示，附加粒子特效尚未绘制。')
+        inputs=getattr(scene,'weapon_effect_inputs',())
+        if inputs:
+            try:
+                from weapon_effects import WeaponEffects
+                weapons=self.character.weapons
+                if not hasattr(weapons,'effect_provider'):weapons.effect_provider=WeaponEffects(scene.pack)
+                provider=weapons.effect_provider
+            except(UnsupportedEffect,ValueError,FileNotFoundError)as error:
+                scene.effect_notices.append('武器特效暂未显示：'+str(error))
+            else:
+                for context in inputs:
+                    key=('weapon',context.slot,context.part,context.path)
+                    effect=None;policy={};samples=();pending=();source_discarded=0
+                    try:
+                        effect=provider.source(context)
+                        if not hasattr(scene,'simple_histories'):scene.simple_histories={}
+                        history=scene.simple_histories.setdefault(key,SimpleHistory(effect));history.begin()
+                        samples,pending,policy=provider.sample(context,effect,frame,history.sample)
+                        if samples:
+                            from effect_renderer import EffectRenderer
+                            if not hasattr(self.renderer,'effect_renderer'):self.renderer.effect_renderer=EffectRenderer(self.renderer,scene.pack)
+                            accepted=[];pending=list(pending)
+                            for sample in samples:
+                                try:
+                                    self.renderer._effect_scope=self.renderer.effect_renderer
+                                    plan=self.renderer.effect_renderer.plan(sample)
+                                except UnsupportedEffect as error:pending.append(str(error))
+                                else:
+                                    if plan.get('native_discard'):source_discarded+=1
+                                    else:accepted.append(sample)
+                                finally:self.renderer._effect_scope=None
+                            samples=accepted
+                    except(UnsupportedEffect,ValueError,FileNotFoundError)as error:
+                        samples=();pending=(str(error),)
+                    pending=tuple(sorted(set(pending)))
+                    scene.effect_samples.extend({**s,'effect_path':context.path,'effect_instance':key}for s in samples)
+                    scene.effect_summaries.append({**(effect.summary()if effect else{'path':context.path}),
+                        'slot':context.slot,'part':context.part,'owner':'weapon','preview_frame':frame,
+                        'sampled_particles':len(samples),'source_shader_discarded_particles':source_discarded,
+                        'pending':list(pending),'particles_rendered':bool(samples),
+                        'effect_complete':False,'preview_policy':'source-weapon-cold-state-v1','state_policy':policy,
+                        'attachment_source':{'kind':'MDL.ElementId','model_set':context.model_set,'body':context.body,
+                                             'skeleton':context.skeleton_path}})
+                    if pending:scene.effect_notices.append('武器特效初步预览：部分粒子或时间线规则尚未接入。')
         scene.effect_frame=frame
 
     def import_dat(self,raw,name):
@@ -819,6 +992,8 @@ class DemoEngine:
         current['equipment']=parse_state(record['state'])['equipment']
         current.pop('facewear',None)
         if record['state'].get('facewear'):current['facewear']=record['state']['facewear']
+        current.pop('weapons',None)
+        if record['state'].get('weapons'):current['weapons']=record['state']['weapons']
         # Legacy preset_id/camera fields remain readable but have no effect
         # when a saved outfit is applied to the currently previewed character.
         return self.render(current)
@@ -838,7 +1013,7 @@ class DemoEngine:
     def export_template_code(self,identifier):
         from template_code import encode
         record=self.saved_record(identifier)
-        return encode(record['name'],parse_state(record['state'])['equipment'],facewear=record['state'].get('facewear'))
+        return encode(record['name'],parse_state(record['state'])['equipment'],facewear=record['state'].get('facewear'),weapons=record['state'].get('weapons'))
 
     def inspect_template_code(self,code):
         from template_code import decode
@@ -850,6 +1025,8 @@ class DemoEngine:
             for record in records:
                 from facewear import selection as facewear_selection
                 facewear_selection(record['state'].get('facewear'))
+                from weapons import validate_rows
+                validate_rows(conn,record['state'].get('weapons'),stains)
                 for slot,choice in record['state']['equipment'].items():
                     identifier=choice['item_id']
                     if identifier is None:continue
@@ -905,6 +1082,7 @@ class DemoEngine:
             owner.active_scene=previous;raise
         finally:owner.strict=strict
         scene=owner.active_scene;release_inactive_cpu(self,scene,force=True)
+        if getattr(self,'emotes',None)is not None:self.emotes.trim(self.last['state'].get('emote',{}).get('id'))
         for key,entry in list(self.characters.entries.items()):
             if entry['character']is not self.character:
                 self.characters.entries.pop(key);entry['character'].close()
@@ -914,6 +1092,7 @@ class DemoEngine:
 
     def close_gpu(self):
         self._network_input_scene=None;self.last_scene=None
+        self.emotes=None
         memory=bool(getattr(getattr(self,'pack',None),'memory_only',False))
         if self.characters:self.characters.close()
         elif self.character:self.character.close()

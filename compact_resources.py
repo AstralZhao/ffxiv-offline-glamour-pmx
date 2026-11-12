@@ -1,7 +1,7 @@
 """Conservative hash-index selection and lossless SqPack block relocation.
 
-All human/unknown chara entries are retained. Only positively classified
-weapon/monster models/materials and their exclusive textures are excluded.
+All human, weapon and unknown chara entries are retained. Only positively
+classified monster models/materials and their exclusive textures are excluded.
 UI selection preserves all base/HQ/high-resolution icon IDs, across races.
 """
 from collections import Counter,defaultdict,deque
@@ -131,7 +131,7 @@ def select_resources(indexes,*,callback=None,cancel=None):
             if chara.alias_counts[value]==1 and names and all(NONHUMAN.match(name)for name in names):
                 matched=[NONHUMAN.match(name)for name in names]
                 roots=[nonhuman_root(m)for m in matched]
-                if any(chara.lookup(root+'/model/'+stem+'.mdl')==value for root,stem in roots):
+                if all(match[1].startswith('m')for match in matched)and any(chara.lookup(root+'/model/'+stem+'.mdl')==value for root,stem in roots):
                     chara.selected.discard(value);models_removed+=1
                     for name in names:nonhuman_names[game_crc(name.lstrip('/').encode())].add(name.lstrip('/'))
                     for root,_ in roots:effect_folders[game_crc((root+'/vfx/eff').encode())]=root+'/vfx/eff'
@@ -153,7 +153,7 @@ def select_resources(indexes,*,callback=None,cancel=None):
             except (ValueError,struct.error,IndexError,UnicodeError):
                 opaque_kept+=1;dependencies.update(references(raw));continue
             material_count+=1;textures=material['textures']
-            excluded=chara.alias_counts[value]==1 and any(p.startswith(('chara/weapon/','chara/monster/'))for p in textures)and material_proof(value,textures)
+            excluded=chara.alias_counts[value]==1 and any(p.startswith('chara/monster/')for p in textures)and not any(p.startswith('chara/weapon/')for p in textures)and material_proof(value,textures)
             if excluded:
                 chara.selected.discard(value);materials_removed+=1;proofs+=1;removed_textures.update(textures)
             else:
@@ -162,16 +162,18 @@ def select_resources(indexes,*,callback=None,cancel=None):
     # kept conservatively; all human textures/unknown formats stay intact.
     texture_removed=0
     for path in removed_textures-kept_textures:
-        if not path.startswith(('chara/weapon/','chara/monster/')):continue
+        if not path.startswith('chara/monster/'):continue
         category=path.split('/')[0]
         if category!='chara':continue
         value=chara.lookup(path)
         if value is not None and chara.alias_counts[value]==1 and chara.headers[value][1]==4:chara.selected.discard(value);texture_removed+=1
     for category in('common','shader','exd'):indexes[category].selected=set(indexes[category].values)
     ui=indexes['ui'];icon_count=0
+    from emote_resources import collect as collect_emotes,references as emote_references
+    emotes=collect_emotes(chara.pack,callback=callback,cancel=cancel)if hasattr(chara,'pack')else {'paths':set(),'icons':set(),'summary':{}}
     # All player-race creation rows plus every supported equipment icon. No
     # gender/tribe/race menu is filtered to current renderer support.
-    icon_ids=wardrobe_icons(chara.pack)if hasattr(chara,'pack')else range(1,1000001)
+    icon_ids=sorted(set(wardrobe_icons(chara.pack))|emotes['icons'])if hasattr(chara,'pack')else range(1,1000001)
     for ordinal,identifier in enumerate(icon_ids,1):
         if ordinal%100==0:check_cancel(cancel);progress(callback,'收集全部种族与装备图标',ordinal,len(icon_ids))
         folder=identifier//1000*1000
@@ -187,31 +189,53 @@ def select_resources(indexes,*,callback=None,cancel=None):
     for number in range(10000):
         path=f'vfx/equipment/eff/ve{number:04}.avfx';value=vfx.lookup(path)
         if value is not None:vfx.selected.add(value);dependencies.add(path)
-    pending=deque(sorted(dependencies));seen=set();restored=0
+    # Original weapon shared branch uses 100..255, independent of armor ve.
+    for number in range(100,256):
+        path=f'vfx/weapon/eff/vw{number:04}.avfx';value=vfx.lookup(path)
+        if value is not None:vfx.selected.add(value);dependencies.add(path)
+    dependencies.update(emotes['paths'])
+    pending=deque((path,path in emotes['paths'])for path in sorted(dependencies));seen=set();restored=0
     while pending:
-        check_cancel(cancel);path=pending.popleft()
-        if path in seen:continue
-        seen.add(path);category=path.split('/')[0]
+        check_cancel(cancel);path,is_emote=pending.popleft()
+        if (path,is_emote)in seen:continue
+        seen.add((path,is_emote));category=path.split('/')[0]
         if category not in indexes:
             if '/'not in path:placeholders.add(path);continue
-            raise ValueError('Source dependency needs an unreviewed category: '+path)
+            if not is_emote or category not in('sound','bgcommon'):
+                raise ValueError('Source dependency needs an unreviewed category: '+path)
+            # Optional categories are opened only for actually existing emote
+            # dependencies. Never include a whole sound library or game maps.
+            try:chara.pack.locate(path)
+            except FileNotFoundError:source_missing.add(path);continue
+            indexes[category]=SourceIndex(chara.pack,category,cancel=cancel)
         index=indexes[category];value=index.lookup(path)
         if value is None:source_missing.add(path);continue
         if value not in index.selected:index.selected.add(value);restored+=1
-        if index.headers[value][1]==2:
+        kind=index.headers[value][1]
+        if kind==2 or(is_emote and kind==3):
             raw=index.read(value)
-            for child in sorted(references(raw)-seen):pending.append(child)
+            children=emote_references(raw)if is_emote else references(raw)
+            for child in sorted(children):pending.append((child,is_emote))
+            if is_emote and kind==3 and '/model/'in path:
+                # A referenced prop may have been positively classified as a
+                # monster. Restore its actual material variants and textures.
+                base=path.rsplit('/model/',1)[0]
+                for name in index.model_materials(value):
+                    for folder in('material',*(f'material/v{i:04}'for i in range(256))):
+                        child=base+'/'+folder+'/'+name.lstrip('/')
+                        if index.lookup(child)is not None:pending.append((child,True))
     for path in kept_textures:
         if '/'not in path:continue
         if not path or path.split('/')[0]not in indexes:raise ValueError('Unknown surviving material texture path: '+path)
         index=indexes[path.split('/')[0]];value=index.lookup(path)
         if value is not None and value not in index.selected:raise ValueError('Surviving material dependency was removed: '+path)
     return {'selection_version':1,'race_scope':'all-human-identities-and-unknown-chara-structures-preserved',
-        'race_gender_clan_filters':False,'geometry_or_texture_quality_reduced':False,'materials_scanned':material_count,
+        'race_gender_clan_filters':False,'geometry_or_texture_quality_reduced':False,'weapon_resources_retained':True,'materials_scanned':material_count,
         'weapon_monster_models_excluded':models_removed,'weapon_monster_materials_excluded':materials_removed,'material_exclusion_index_proofs':proofs,
         'weapon_monster_owned_effects_excluded':effects_removed,
         'exclusive_textures_excluded_before_closure':texture_removed,'opaque_metadata_retained':opaque_kept,'unclassified_models_retained':unknown_models,
-        'icon_candidates_found':icon_count,'dependency_paths_checked':len(seen),'dependencies_restored':restored,
+        'icon_candidates_found':icon_count,'dependency_paths_checked':len({path for path,_ in seen}),'dependencies_restored':restored,
+        'emotes':emotes['summary'],
         'already_missing_source_path_count':len(source_missing),
         'already_missing_source_paths_sha256':hashlib.sha256(json.dumps(sorted(source_missing)).encode()).hexdigest(),
         'already_missing_source_paths':sorted(source_missing)[:128],'original_nonpath_texture_placeholders':sorted(placeholders),
@@ -224,7 +248,7 @@ def wardrobe_icons(pack):
     from pathlib import Path
     root=Path(__file__).resolve().parents[1]
     mapping=json.loads((__import__('app_paths').program_root(root)/'artifacts/cn-data/schema-mapping.json').read_bytes());data=VerifiedData(pack,mapping)
-    slots=dict(data.rows('EquipSlotCategory'));supported={'Head','Body','Gloves','Legs','Feet','Ears','Neck','Wrists','FingerL','FingerR'}
+    slots=dict(data.rows('EquipSlotCategory'));supported={'Head','Body','Gloves','Legs','Feet','Ears','Neck','Wrists','FingerL','FingerR','MainHand','OffHand'}
     icons=set()
     item_rows=dict(data.rows('Item'))
     for row in item_rows.values():
@@ -325,7 +349,9 @@ def export_compact(game,output,root,*,callback=None,cancel=None):
                     p=Path(path)
                     if(p.stat().st_size,p.stat().st_mtime_ns)!=expected:raise ValueError('Source archives changed during compact export')
             summary['selected_span_bytes']=copied
-            data={'format':'ff14-wardrobe-resources-v2','scope':'wardrobe-selected-all-races','region':'CN','categories':list(CATEGORIES),
+            optional={'sound':'07','bgcommon':'01'}
+            categories=list(CATEGORIES)+sorted(optional[key]for key in indexes if key in optional)
+            data={'format':'ff14-wardrobe-resources-v2','scope':'wardrobe-selected-all-races','region':'CN','categories':categories,
                 'client_version':(game/'game/ffxivgame.ver').read_text().strip(),'files':records,'selection':summary}
             from resource_pack import manifest_data
             manifest_data(json.dumps(data),json.loads((Path(root)/'docs/cn-customization-profile.json').read_bytes()))

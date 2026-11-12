@@ -5,7 +5,8 @@ import struct
 import json
 from pathlib import Path
 from functools import lru_cache
-from source_executable import source_executable,executable_sha256
+from source_executable import executable_sha256
+from renderer_reference import renderer_reference
 
 import numpy as np
 
@@ -26,7 +27,7 @@ def character_vfx_scale(game_root,race):
     from cn_offscreen_lighting import rva_bytes
     profile=json.loads((Path(__file__).resolve().parents[1]/'docs/cn-equipment-effect-rules.json').read_text(encoding='utf8'))
     from ff14_readonly import SqPack
-    pack=SqPack(Path(game_root));exe=source_executable(pack)
+    pack=SqPack(Path(game_root));exe=renderer_reference()
     if executable_sha256(exe)!=profile['executable_sha256']:raise ValueError('Unreviewed CN VFX scale source')
     for name in('character_scale','character_scale_callback','separate_scale','combined_scale'):
         entry=profile['native_ranges'][name]

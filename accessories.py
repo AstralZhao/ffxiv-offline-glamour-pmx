@@ -98,14 +98,9 @@ class Accessories:
         if not selected:return scene
         flags=info.get('effective_eqp')or self.core.eqp.resolve({s:0 for s in('Head','Body','Gloves','Legs','Feet')})
         flags=int(flags['flags'],16)
-        show={'Ears':bool(flags&(1<<49)),'Neck':bool(flags&(1<<11)and flags&(1<<45)),
+        from preset_head import earrings_visible
+        show={'Ears':earrings_visible(flags,self.core.race),'Neck':bool(flags&(1<<11)and flags&(1<<45)),
             'Wrists':bool(flags&(1<<12)and flags&(1<<28)),'FingerL':bool(flags&(1<<29)),'FingerR':bool(flags&(1<<30))}
-        if self.core.race in(1701,1801):
-            from preset_head import viera_earrings_visible
-            show['Ears']=viera_earrings_visible(flags)
-        if self.core.race in(1501,1601):
-            from preset_head import hrothgar_earrings_visible
-            show['Ears']=hrothgar_earrings_visible(flags)
         result=copy.copy(scene);result.meshes=list(scene.meshes)
         for slot,c in selected.items():
             # Hidden accessories retain valid choices/dyes, but their model,

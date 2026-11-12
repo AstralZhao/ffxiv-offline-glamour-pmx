@@ -64,11 +64,20 @@ def addition_value(node,time,packed):
 def values(node,time,packed):
     if len(packed)!=5:raise ValueError('UV random state needs five signed bytes')
     d=nested(node);result=[]
-    for i,(name,default)in enumerate((('Scl',1),('Scr',0))):
+    for i,(name,default)in enumerate((('Scl',scale_default(d.get('Scl'))),('Scr',0))):
         child=d.get(name);at=0 if constant_random_axes(child)else time
         result.append(axis_values(child,at,default,packed[i*2:i*2+2]).copy())
     angle=np.float32(curve(d.get('Rot'),time))+addition(d.get('RotR'),time,packed[4])
     return result[0],result[1],float(angle)
+
+
+@lru_cache(maxsize=4096)
+def scale_default(node):
+    # An authored UV scale vector evaluates each unassigned scalar with
+    # default ZERO (3a55f0 ->397740), even though an inactive UV slot starts
+    # as identity. Keep the wholly absent/unassigned vector policy separate.
+    data=nested(node)
+    return 0 if any(curve_source(data.get(axis))[1]for axis in 'XY')else 1
 
 
 @lru_cache(maxsize=1024)

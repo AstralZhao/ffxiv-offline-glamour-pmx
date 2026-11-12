@@ -65,6 +65,35 @@ def random_direction(random):
     return values
 
 
+def injection_direction(kind,random,*,radial=(0.,0.),normal=None):
+    # CN3e5f6c: fixed axes consume NO random words. Type1 is computed
+    # before position sampling; type5 reads the model prepass normal.
+    if kind==0:return random_direction(random)
+    if kind in(2,3,4):return np.eye(3,dtype='<f4')[kind-2]
+    if kind==1:
+        # CN405a30 consumes two words and samples uniformly in cosine
+        # between the authored radial angles. The caller invokes this BEFORE
+        # position sampling, matching3e5c98, not in the later direction switch.
+        f=np.float32;first=f(random.word()&65535)
+        lower=f(math.cos(float(f(radial[0]))));upper=f(math.cos(float(f(radial[1]))))
+        y=f(lower-f(f(lower-upper)*f(first/f(65535))))
+        if not -1<=y<=1:raise ValueError('Simple radial cosine outside finite domain')
+        radius=f(math.sin(float(f(math.acos(float(y))))))
+        phase=f(f(f(random.word()&65535)*f(2*math.pi))/f(65535))
+        value=np.array((f(f(math.sin(float(phase)))*radius),y,
+                        f(f(math.cos(float(phase)))*radius)),dtype='<f4')
+        return value
+    elif kind==5:value=np.zeros(3,dtype='<f4')if normal is None else np.asarray(normal,dtype='<f4').copy()
+    else:raise UnsupportedEffect('Simple 注入方向类型 '+str(kind))
+    return normalize_injection_direction(value)
+
+
+def normalize_injection_direction(value):
+    f=np.float32;square=f(f(f(value[1]*value[1])+f(value[0]*value[0]))+f(value[2]*value[2]))
+    if square>f(1e-5):value=value*f(f(1)/f(np.sqrt(square)))
+    return value
+
+
 def packed_motion(direction,speed):
     # 3e6745..3e686b: multiply BEFORE packing; save measured float32
     # magnitude, not the authored speed. Negative speed reverses the bytes.
@@ -157,11 +186,14 @@ def initial(effect,node):
     real=lambda key,default=0.:number(d,key,default,real=True)
     count=integer('CCnt');life=integer('CrIL');interval=integer('CrI');group=integer('CrIC')
     if not 1<=count<=512 or not 0<life<=4096 or interval<=0 or group<=0:raise UnsupportedEffect('Simple 数量、寿命或发射间隔')
-    if integer('CrIR')or integer('CrLR')or integer('VBMN',-1)!=-1 or integer('SIDT')!=0 or integer('SBDT')!=0:
+    if integer('CrLR')or integer('VBMN',-1)!=-1 or integer('SBDT')!=0:
         raise UnsupportedEffect('Simple 随机寿命、绑定模型或方向类型')
+    if integer('SIDT')not in range(6):raise UnsupportedEffect('Simple 注入方向类型 '+str(integer('SIDT')))
+    spread=integer('CrIR')
+    if not 0<=spread<=127 or interval>127:raise UnsupportedEffect('Simple 有符号发射间隔范围')
     if integer('SIPT')not in(0,1)or integer('BlkN')!=1:raise UnsupportedEffect('Simple 注入或分块类型')
-    if real('FltR')!=1 or real('FltS')<0:raise UnsupportedEffect('Simple 速度追随曲线')
-    if integer('UvLC'):raise UnsupportedEffect('Simple 有限图集循环')
+    # VBMN=-1 above selects the original no-follow branch in BOTH update
+    # and draw. FltR/FltS are inactive there, irrespective of their values.
     frames=d.get('Frms');colors=d.get('Cols')
     if frames is None or len(frames.data)!=8 or colors is None or len(colors.data)!=16:raise ValueError('Invalid Simple color frame source')
     keys=np.array(struct.unpack('<4h',frames.data),dtype=float)
@@ -173,31 +205,42 @@ def initial(effect,node):
     start=np.array((real('SBX'),real('SBY')));end=np.array((real('SEX'),real('SEY')))
     cells=(integer('UvCU'),integer('UvCV'));uv_interval=integer('UvIv')
     if any(not 1<=v<=127 for v in cells)or uv_interval<0:raise UnsupportedEffect('Simple 图集尺寸或间隔')
+    loops=integer('UvLC')
+    if not 0<=loops<=127 or loops and not 1<=uv_interval<=127:raise UnsupportedEffect('Simple 有限图集参数')
     positions=np.zeros((count,3),dtype=np.float32);velocity=positions.copy();angles=positions.copy();spin=positions.copy()
     scales=np.ones((count,2));atlas=np.zeros(count,dtype=int);reverse=np.zeros(count,dtype=bool);random=SourceRandom(effect.sha256.encode()+node.data)
     state=np.zeros(count,dtype=PARTICLE);model=integer('SIPT')==1
     if model:positions[:]=model_positions(emission_points(effect,integer('IJMN',-1))[0],area,count,random,state=state)
+    direction_type=integer('SIDT');model_normals=emission_points(effect,integer('IJMN',-1))[1]if model and direction_type==5 else None
+    if model_normals is not None:state['velocity']=model_normals[np.arange(count)%len(model_normals)]
     for i in range(count):
+        radial=injection_direction(1,random,radial=(real('IRD0'),real('IRD1')))if direction_type==1 else None
         if not model:
-            length,packed=position_state([random.between(-a,a)for a in area])
+            position=[np.float32(random.between(0,a)*radial[j])for j,a in enumerate(area)]if radial is not None else[random.between(-a,a)for a in area]
+            length,packed=position_state(position)
             state['length'][i]=length;state['packed_position'][i]=packed
             positions[i]=(packed.astype('<f4')/np.float32(32000))*length
-        direction=random_direction(random)
+        direction=normalize_injection_direction(radial)if radial is not None else injection_direction(direction_type,random,
+            normal=None if model_normals is None else model_normals[i%len(model_normals)])
         parameters=random_parameters(d,random,cells[0]*cells[1])
         speed,packed=packed_motion(direction,parameters['speed'])
         velocity[i]=(packed.astype('<f4')/np.float32(100))*speed
         angles[i]=parameters['angles'];spin[i]=parameters['spin']
         scales[i]=parameters['scales'];atlas[i]=parameters['atlas']
+        # CN3e68ea..3e6975: inclusive random delay follows spin and
+        # precedes reverse-UV. It changes birth time, never playback speed.
+        delay=(i//group)*interval+(random.integer(spread+1)if spread else 0)
         reverse[i]=bool(random.integer(2))if integer('bRUV')else False
         state['speed'][i]=speed;state['packed_velocity'][i]=packed
         state['angles'][i]=parameters['angles'];state['spin'][i]=parameters['spin']
         state['scales'][i]=np.rint(parameters['scales']*np.float32(50)).astype('i1')
         state['atlas'][i]=int(atlas[i])|(int(reverse[i])<<15)
-        state['delay'][i]=((int(i//group)*interval+32768)%65536)-32768
+        state['delay'][i]=((int(delay)+32768)%65536)-32768
     result={'positions':positions,'velocity':velocity,'angles':angles,'spin':spin,'scales':scales,'atlas':atlas,
-        'delay':np.floor(np.arange(count)/group)*interval,'life':life,'repeat':bool(integer('bCrN')),
+        'delay':state['delay'].astype(float),'life':life,'repeat':bool(integer('bCrN')),
         'damping':damping,'gravity':gravity,'curve':curve,'start':start,'end':end,'frames':keys,'colors':rgba,
         'cells':cells,'uv_interval':uv_interval,'reverse':reverse,'pivot':np.array((real('PvtX'),real('PvtY'))),
+        'atlas_limit':(*cells,uv_interval,loops)if loops else None,
         'inherit_scale':bool(integer('bSnP')),'bind_parent':bool(integer('bBnP')),'initial_state':state.tobytes(),
         'random_state':tuple(random.state)}
     for value in result.values():
@@ -208,6 +251,7 @@ def initial(effect,node):
 def geometry(effect,node,time,*,updates=None):
     source=initial(effect,node)
     if updates is None:
+        if source['atlas_limit']is not None:raise UnsupportedEffect('Simple 有限图集需要明确更新历史')
         # Legacy default stays explicit until the caller supplies its actual
         # update/retention history. Never label this branch as native replay.
         age=time-source['delay'];live=age>=0
@@ -229,7 +273,7 @@ def geometry(effect,node,time,*,updates=None):
             if not isinstance(updates,(tuple,list)):raise ValueError('Simple history requires an explicit ordered sequence')
             if any(not isinstance(event,StateUpdate)or event.bound!=source['bind_parent']for event in updates):
                 raise ValueError('Simple history binding differs from the original source')
-            packets=replay_state(source['initial_state'],source['damping'],source['life'],source['repeat'],updates)
+            packets=replay_state(source['initial_state'],source['damping'],source['life'],source['repeat'],updates,atlas=source['atlas_limit'])
         state=np.frombuffer(packets,dtype=PARTICLE);live=state['state']==1
         age=state['age'][live].copy();centers=state['position'][live].copy();count=len(age)
     gravity=.5*age[:,None]**2*source['gravity']if updates is None else((age*age)[:,None]*source['gravity'].astype('<f4'))*np.float32(.5)

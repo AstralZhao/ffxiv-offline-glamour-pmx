@@ -12,7 +12,8 @@ from pathlib import Path
 import numpy as np
 
 from cn_offscreen_lighting import rva_bytes
-from source_executable import source_executable,executable_sha256
+from source_executable import executable_sha256
+from renderer_reference import renderer_reference
 
 PROFILE=Path(__file__).resolve().parents[1]/'docs/cn-legacy-light-direction.json'
 
@@ -20,8 +21,8 @@ PROFILE=Path(__file__).resolve().parents[1]/'docs/cn-legacy-light-direction.json
 def source_direction(pack):
     profile=json.loads(PROFILE.read_bytes())
     version=pack.source_version()
-    exe=source_executable(pack)
-    if version!=profile['client_version']or executable_sha256(exe)!=profile['executable_sha256']:
+    exe=renderer_reference()
+    if executable_sha256(exe)!=profile['executable_sha256']:
         raise ValueError('Legacy light direction requires CN source review')
     for window in profile['windows']:
         raw=rva_bytes(exe,int(window['rva'],16),window['bytes'])

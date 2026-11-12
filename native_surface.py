@@ -69,7 +69,11 @@ class NativeSurface:
         if(width,height)==(self.width,self.height):return
         self.renderer.context(110,[])
         self.release(self.rtv);self.rtv=None;self.renderer.probe.release(self.back);self.back=None
-        check(self.renderer.probe.method(self.chain,13,c.c_long,U,U,U,U,U)(self.chain,2,width,height,87,0),'Resize native swap chain')
+        try:
+            check(self.renderer.probe.method(self.chain,13,c.c_long,U,U,U,U,U)(self.chain,2,width,height,87,0),'Resize native swap chain')
+        except Exception:
+            self.acquire_backbuffer(self.width,self.height)
+            raise
         self.acquire_backbuffer(width,height)
         self.needs_present=True
 

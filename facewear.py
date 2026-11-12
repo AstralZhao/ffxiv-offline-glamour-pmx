@@ -37,6 +37,9 @@ def selection(value=None):
 def template_state(state):
     result={'equipment':state['equipment']}
     if any(state.get('facewear',[0,0])):result['facewear']=selection(state['facewear'])
+    if state.get('weapons'):
+        from weapons import selection as weapon_selection
+        result['weapons']=weapon_selection(state['weapons'])
     return result
 
 
@@ -46,9 +49,10 @@ def native_missing_bone(pack):
     Only the witnessed facewear case uses the first fallback. Other renderer
     families retain their strict skeleton/EST validation.
     """
-    from source_executable import source_executable,executable_sha256
+    from source_executable import executable_sha256
+    from renderer_reference import renderer_reference
     from cn_offscreen_lighting import rva_bytes
-    exe=source_executable(pack)
+    exe=renderer_reference()
     if executable_sha256(exe)!='958b78e278ad896493c484eb313ff605ab41edefef74f92b0ee078e69b281bf9':
         raise ValueError('面饰骨骼绑定代码版本尚未核实')
     code=rva_bytes(exe,0x267ee2,0x267f1a-0x267ee2)
@@ -66,11 +70,19 @@ class Facewear:
     def verify(self):
         if self.verified:return
         expected=catalogue()[0]
-        if self.pack.source_version()!=expected['client_version']:raise ValueError('面饰目录与当前资源版本不一致')
         for name,header in expected['headers'].items():
-            if Sheet(self.pack,name).header.sha256!=header['sha256']:raise ValueError('面饰表结构与当前国服目录不一致')
+            actual=Sheet(self.pack,name).header.report()
+            if any(actual[key]!=header[key]for key in('version','variant','fixed_size','column_hash','columns')):
+                raise ValueError('面饰表结构与当前国服目录不一致')
         from build_facewear_catalogue import build
-        if build(self.pack)!=expected:raise ValueError('面饰元数据与当前游戏文件不一致')
+        actual={row['id']:row for row in build(self.pack)['styles']}
+        for style in expected['styles']:
+            current=actual.get(style['id'])
+            if current is None or any(current[key]!=style[key]for key in('name','slot','order','icon_id')):
+                raise ValueError('面饰元数据与当前游戏文件不一致')
+            variants={row['id']:row for row in current['variants']}
+            if any(variants.get(row['id'])!=row for row in style['variants']):
+                raise ValueError('面饰元数据与当前游戏文件不一致')
         self.verified=True
 
     def prepare(self,identifier):

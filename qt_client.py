@@ -24,7 +24,8 @@ from app_paths import paths,migrate,no_links
 from qt_theme import STYLE,ACCENT,MUTED,UNDYED_SWATCH_COLOR,label,button,vertical,horizontal,polish,EquipmentDelegate,IconEquipmentDelegate,equipment_hover_html,ComboBox,SearchComboBox,PresetComboBox,HairstyleComboBox,DraggableColorButton,slot_icon,swatch_icon,visibility_icon,dye_swap_icon,AppearanceSlider,LoadingSpinner
 
 ARMOR=['Head','Body','Gloves','Legs','Feet','Facewear'];ACCESSORIES=['Ears','Neck','Wrists','FingerR','FingerL']
-UI_SLOTS={**SLOTS,'Facewear':'面饰'}
+WEAPONS=['MainHand','OffHand'];BROWSE_GROUPS=(('防具',ARMOR),('饰品',ACCESSORIES),('武器',WEAPONS))
+UI_SLOTS={**SLOTS,'Facewear':'面饰','MainHand':'主武器','OffHand':'副武器'}
 
 
 class Value:
@@ -132,7 +133,7 @@ class OutfitCard(W.QFrame):
         self.setCursor(C.Qt.PointingHandCursor);outer=horizontal(self,8,9)
         self.icon=label();self.icon.setFixedSize(42,42);self.icon.setAlignment(C.Qt.AlignCenter);outer.addWidget(self.icon)
         content=vertical(spacing=2);outer.addLayout(content,1)
-        top=horizontal();self.part=label(SLOTS[slot],'Muted');self.part.setStyleSheet('font-size:10px');top.addWidget(self.part);top.addStretch()
+        top=horizontal();self.part=label(UI_SLOTS[slot],'Muted');self.part.setStyleSheet('font-size:10px');top.addWidget(self.part);top.addStretch()
         self.visibility=button('',lambda:self.controller.toggle_slot_visibility(self.slot),ghost=True)
         self.visibility.setFixedSize(26,24);self.visibility.setIconSize(C.QSize(20,20));self.visibility.setStyleSheet('padding:2px');top.addWidget(self.visibility)
         self.clear=button('×',lambda:self.remove());self.clear.setProperty('clear',True);self.clear.setFixedSize(16,16);top.addWidget(self.clear);content.addLayout(top)
@@ -157,6 +158,7 @@ class OutfitCard(W.QFrame):
         self.icon.setPixmap(slot_icon(slot));self.clear.hide()
         for b in self.dyes:b.setEnabled(False)
     def remove(self):
+        if self.slot in WEAPONS:self.controller.choose_weapon(None,self.slot);return
         self.controller.hidden_equipment.pop(self.slot,None)
         self.controller.state['equipment'][self.slot]={'item_id':None,'first':0,'second':0}
         self.controller.update_outfit();self.controller.queue_render()
@@ -170,7 +172,7 @@ class OutfitCard(W.QFrame):
         self.visibility.setVisible(bool(choice['item_id']));self.visibility.setIcon(visibility_icon(hidden))
         self.visibility.setAccessibleName('显示装备'if hidden else'隐藏装备')
         self.visibility.setToolTip('恢复这件装备及其染色'if hidden else'暂时取消试穿，保留装备与染色以便恢复')
-        self.part.setText(SLOTS[self.slot]+(' · 已隐藏'if hidden else''))
+        self.part.setText(UI_SLOTS[self.slot]+(' · 已隐藏'if hidden else''))
         self.setProperty('selected',selected);polish(self)
         text=item.get('name','未装备');tooltip=text+'\n标签：'+(' / '.join(item.get('tags',[]))or'暂无标签')if item else text
         tooltip=equipment_hover_html(self.controller.icon(item.get('icon_id')),tooltip)if item else tooltip
@@ -230,6 +232,7 @@ class QtClient(NativeClient):
         self.catalog_serial=0;self.catalog_job=None;self.catalog_queued=None;self.catalog_timer=None;self.catalog_loading=False
         self.catalog_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeSearch')
         self.state=parse_state({});self.good=deepcopy(self.state);self.items={};self.icons=OrderedDict();self.hidden_equipment={};self.hidden_facewear={}
+        self.weapon_items={};self.hidden_weapons={};self.mode_cameras={}
         self.rows=[];self.folder=None;self.outer=None;self.offset=0;self.more=False
         self.page_index=0;self.page_count=1;self.catalog_total=0
         self.editor=None;self.editor_record=None;self.draft=None;self.drag=None;self.search_timer=None;self.group=ARMOR
@@ -239,6 +242,8 @@ class QtClient(NativeClient):
         self.dye_by_id={};self.raw_status='';self.dialogs=[];self.build_ui()
         self.message.callback=self.display_status;self.display_status(self.message.get())
         self.engine=None;self.icon_pool=ThreadPoolExecutor(max_workers=1,thread_name_prefix='WardrobeIcons',initializer=bind,initargs=(self.icon_progress,));self.pending_icons={};self.icon_timer=None;self.swatch_layers=None;self.swatch_failed=False;self.swatch_icons=OrderedDict()
+        from qt_emotes import EmotePlayback
+        self.emote_playback=EmotePlayback(self)
         self.library=None
         from equipment_library import EquipmentLibrary
         self.library_future=self.icon_pool.submit(EquipmentLibrary,self.session_path.parent/'equipment-library.sqlite',ROOT/'artifacts/cn-data/catalog.sqlite',game=game)
@@ -274,9 +279,13 @@ class QtClient(NativeClient):
         body=W.QWidget();body_layout=horizontal(body,18,16);outer.addWidget(body,1)
         self.browser=W.QFrame();self.browser.setObjectName('Panel');self.browser.setFixedWidth(340);left=vertical(self.browser,16,12)
         groups=horizontal(spacing=6);groups.addWidget(label('挑选装备','Title'));groups.addStretch();self.browse_groups=[]
-        for text,parts in(('防具',ARMOR),('饰品',ACCESSORIES)):
-            b=button(text,lambda p=parts:self.switch_group(p));b.setFixedWidth(60);b.setCheckable(True);b.setChecked(parts==ARMOR);groups.addWidget(b);self.browse_groups.append(b)
+        for text,parts in BROWSE_GROUPS:
+            b=button(text,lambda p=parts:self.switch_group(p));b.setFixedWidth(47);b.setStyleSheet('padding:7px 3px');b.setCheckable(True);b.setChecked(parts==ARMOR);groups.addWidget(b);self.browse_groups.append(b)
         left.addLayout(groups);self.part_bar=horizontal(spacing=5);self.slot_buttons={};left.addLayout(self.part_bar);self.rebuild_part_tabs()
+        from qt_weapons import categories
+        self.weapon_category=ComboBox();self.weapon_category.addItem('全部武器类型',0)
+        for identifier,name in categories():self.weapon_category.addItem(name,identifier)
+        self.weapon_category.activated.connect(lambda _:self.load_catalog());self.weapon_category.hide();left.addWidget(self.weapon_category)
         self.search=W.QLineEdit();self.search.setClearButtonEnabled(True);self.search.setPlaceholderText('名称、编号、标签 · 支持多词组合')
         self.search.setToolTip('空格分隔多个条件（同时满足）。#标签、标签:礼服 只搜索标签。')
         self.search.textChanged.connect(self.search_changed);left.addWidget(self.search)
@@ -322,35 +331,50 @@ class QtClient(NativeClient):
         left.addLayout(catalog_status);body_layout.addWidget(self.browser)
         self.icon_mode=False;self.set_catalog_view(True,persist=False)
         scene=W.QFrame();scene.setObjectName('Panel');middle=vertical(scene,1,0)
-        title=horizontal(margin=16);title.addWidget(label('试衣预览','Section'));title.addStretch()
+        title=horizontal(margin=12,spacing=6)
+        self.preview_picker=ComboBox();self.preview_picker.addItem('角色试穿','character');self.preview_picker.addItem('武器预览','weapon');self.preview_picker.setFixedWidth(108)
+        self.preview_picker.activated.connect(lambda i:self.set_preview_mode(self.preview_picker.itemData(i)));title.addWidget(self.preview_picker)
         self.loading_panel=W.QWidget();loading=horizontal(self.loading_panel,0,6)
         self.loading_spinner=LoadingSpinner(36 if(Path(self.game)/'network-source.json').is_file()else 20);loading.addWidget(self.loading_spinner)
-        self.loading_label=label('正在加载角色…','Muted');loading.addWidget(self.loading_label)
+        self.loading_label=label('正在加载角色…','Muted');self.loading_label.setMinimumWidth(0);self.loading_label.setSizePolicy(W.QSizePolicy.Ignored,W.QSizePolicy.Preferred);loading.addWidget(self.loading_label,1)
         policy=self.loading_panel.sizePolicy();policy.setRetainSizeWhenHidden(True);self.loading_panel.setSizePolicy(policy)
-        title.addWidget(self.loading_panel)
+        title.addWidget(self.loading_panel,1)
         from pose_preview import POSES
         self.pose_picker=ComboBox();self.pose_picker.setMinimumWidth(112);self.pose_picker.setToolTip('使用当前种族的游戏原始站姿，定格在循环起点。重启恢复默认站姿。')
         for key,name in POSES:self.pose_picker.addItem(name,key)
         self.pose_picker.activated.connect(lambda index:self.select_pose(self.pose_picker.itemData(index)));self.pose_picker.setEnabled(False)
-        title.addWidget(label('姿势','Muted'));title.addWidget(self.pose_picker);middle.addLayout(title)
+        title.addWidget(self.pose_picker)
+        self.emote_button=button('情感动作',lambda:self.emote_playback.open());self.emote_button.setMaximumWidth(156)
+        self.emote_button.setToolTip('搜索游戏情感动作，播放、暂停或定格到任意时刻。')
+        title.addWidget(self.emote_button)
+        self.weapon_state_picker=ComboBox();self.weapon_state_picker.setMinimumWidth(112)
+        self.weapon_state_picker.addItem('收起武器',False);self.weapon_state_picker.addItem('拔出武器',True)
+        self.weapon_state_picker.setToolTip('切换武器自身的收起或拔出状态，不播放切换过程。')
+        self.weapon_state_picker.activated.connect(lambda index:self.select_weapon_state(self.weapon_state_picker.itemData(index)))
+        self.weapon_state_picker.hide();title.addWidget(self.weapon_state_picker);middle.addLayout(title)
         self.viewport=NativeView();self.viewport.controller=self;middle.addWidget(self.viewport,1)
-        tools=W.QWidget();self.camera_grid=W.QGridLayout(tools);self.camera_grid.setContentsMargins(12,10,12,8);self.camera_grid.setSpacing(6)
+        tools=W.QWidget();self.camera_grid=W.QGridLayout(tools);self.camera_grid.setContentsMargins(10,6,10,4);self.camera_grid.setSpacing(5)
         directions=W.QWidget();camera=horizontal(directions,0,6);self.camera_buttons=[]
-        for text,yaw in(('正面',0),('侧面',90),('背面',180)):
-            b=button(text,lambda y=yaw:self.camera_yaw(y));b.setCheckable(True);camera.addWidget(b);self.camera_buttons.append((yaw,b))
+        for text,yaw in(('正面',0),('侧面',-90),('背面',180)):
+            b=button(text,lambda y=yaw:self.camera_yaw(y));b.setCheckable(True)
+            if text=='侧面':b.setToolTip('从角色自身左侧观察')
+            camera.addWidget(b);self.camera_buttons.append((yaw,b))
+        self.rotate_45_button=button('旋转 45°',lambda:self.camera_yaw((self.state['yaw']+45)%360))
+        self.rotate_45_button.setToolTip('在当前视角基础上水平旋转45°，保留俯仰、平移和缩放。');camera.addWidget(self.rotate_45_button)
         self.zoom_group=W.QWidget();zoom=horizontal(self.zoom_group,0,4);zoom.addWidget(button('−',lambda:self.zoom(-.15),ghost=True))
         self.zoom_label=label('100%','Muted');self.zoom_label.setFixedWidth(42);self.zoom_label.setAlignment(C.Qt.AlignCenter);zoom.addWidget(self.zoom_label)
         zoom.addWidget(button('+',lambda:self.zoom(.15),ghost=True))
         self.camera_grid.addWidget(directions,0,0,C.Qt.AlignLeft);self.camera_grid.addWidget(self.zoom_group,0,1)
         self.camera_grid.addWidget(button('还原',self.reset_camera,ghost=True),0,2);self.camera_grid.setColumnStretch(0,1);middle.addWidget(tools)
-        hint=label('拖动旋转 · 右键平移 · 滚轮缩放','Muted');hint.setAlignment(C.Qt.AlignCenter);hint.setStyleSheet('font-size:10px;padding:0 0 12px 0');middle.addWidget(hint)
+        for control in tools.findChildren(W.QPushButton):control.setStyleSheet('padding:5px 7px');control.setMinimumWidth(0)
+        hint=label('拖动旋转 · 右键平移 · 滚轮缩放','Muted');hint.setAlignment(C.Qt.AlignCenter);hint.setStyleSheet('font-size:10px;padding:0 0 6px 0');middle.addWidget(hint)
         body_layout.addWidget(scene,1)
         self.dressing=W.QFrame();self.dressing.setObjectName('Panel');self.dressing.setFixedWidth(290);right=vertical(self.dressing,14,8)
         title=horizontal();title.addWidget(label('当前模版','Title'));title.addStretch();self.worn_count=label('0 件','Badge');title.addWidget(self.worn_count)
         title.addWidget(button('清空',self.clear_outfit,ghost=True));right.addLayout(title)
         self.appearance_label=label('软件预设库','Muted');self.appearance_label.setWordWrap(True);right.addWidget(self.appearance_label)
         tabs=horizontal(spacing=6);self.outfit_tabs=[]
-        for text,parts in(('防具',ARMOR),('饰品',ACCESSORIES)):
+        for text,parts in BROWSE_GROUPS:
             b=button(text,lambda p=parts:self.switch_group(p));b.setCheckable(True);b.setChecked(parts==ARMOR);tabs.addWidget(b);self.outfit_tabs.append(b)
         right.addLayout(tabs);self.outfit_cards={}
         card_scroll=W.QScrollArea();card_scroll.setWidgetResizable(True);card_scroll.setHorizontalScrollBarPolicy(C.Qt.ScrollBarAlwaysOff)
@@ -359,12 +383,16 @@ class QtClient(NativeClient):
             card=OutfitCard(slot,self);card.selected.connect(self.select_slot);cards.addWidget(card);self.outfit_cards[slot]=card;card.setVisible(slot in ARMOR)
             card.setContextMenuPolicy(C.Qt.CustomContextMenu)
             card.customContextMenuRequested.connect(lambda point,s=slot:self.outfit_context(s,point))
+        self.weapon_cards={}
+        for slot in WEAPONS:
+            card=OutfitCard(slot,self);card.selected.connect(self.select_slot);cards.addWidget(card);card.hide();self.weapon_cards[slot]=card
         from qt_facewear import FacewearCard
         from facewear import catalogue as facewear_catalogue
         self.facewear_cards={}
         for slot in sorted({row['slot']for row in facewear_catalogue()[0]['styles']}):
             card=FacewearCard(self,slot);cards.addWidget(card);self.facewear_cards[slot]=card
         cards.addStretch()
+        self.weapon_parts_check=W.QCheckBox('显示武器关联部件');self.weapon_parts_check.setChecked(True);self.weapon_parts_check.toggled.connect(self.weapon_parts_toggled);self.weapon_parts_check.hide();right.addWidget(self.weapon_parts_check)
         self.head_check=W.QCheckBox('调整头部装备');self.head_check.hide();self.head_check.setEnabled(False);self.head_check.toggled.connect(self.head_toggled);right.addWidget(self.head_check)
         self.effects_check=W.QCheckBox('显示装备特效');self.effects_check.setChecked(True)
         self.effects_check.setToolTip('默认定格显示。可播放装备特效，角色保持静态；尚未支持的特效分支会提示。')
@@ -392,9 +420,6 @@ class QtClient(NativeClient):
         if compact==getattr(self,'compact',None):return
         self.compact=compact;self.browser.setFixedWidth(300 if compact else 340);self.dressing.setFixedWidth(264 if compact else 290)
         self.tagline.setVisible(not compact);self.character_name_label.setMaximumWidth(135 if compact else 210)
-        self.camera_grid.removeWidget(self.zoom_group)
-        if compact:self.camera_grid.addWidget(self.zoom_group,1,0,1,3,C.Qt.AlignCenter)
-        else:self.camera_grid.addWidget(self.zoom_group,0,1)
 
     def display_status(self,text):
         self.raw_status=text;error=any(word in text for word in('未完成','未能','无法加载','未能保存'))
@@ -409,9 +434,14 @@ class QtClient(NativeClient):
     def apply_studio(self,value):
         from studio_lighting import options
         self.studio=options(value)
+        if getattr(self,'studio_apply_scheduled',False):return
+        self.flush_studio()
+
+    def flush_studio(self):
+        self.studio_apply_scheduled=False
         if self.closing:return
         if not self.ready or self.job is not None or self.effect_future is not None:
-            self.root.after(80,lambda:self.apply_studio(self.studio));return
+            self.studio_apply_scheduled=True;self.root.after(50,self.flush_studio);return
         selected=dict(self.studio);state=deepcopy(self.state)
         def draw():
             previous=self.engine.studio
@@ -461,13 +491,16 @@ class QtClient(NativeClient):
         if fn==self.engine.run and arguments and arguments[0]=='outfit':
             original_callback=callback
             def callback(result):
-                self.hidden_equipment.clear();self.hidden_facewear.clear();original_callback(result)
+                self.hidden_equipment.clear();self.hidden_facewear.clear();self.hidden_weapons.clear();original_callback(result)
+                from qt_weapons import dye_settings as weapon_dyes
+                self.weapon_saved_dyes={s:{k:result['state'].get('weapons',{}).get(s,{}).get(k,0)for k in('first','second')}for s in WEAPONS}
+                if self.library:self.library.set_setting('try_on_weapon_dyes_v1',json.dumps(self.weapon_saved_dyes))
                 self.save_dye_settings({slot:{key:choice[key]for key in('first','second')}for slot,choice in result['state']['equipment'].items()})
                 self.applied_template_id=arguments[1]['id']
         accepted=super().submit(fn,callback,*arguments)
         if accepted:
             if getattr(fn,'__name__','')=='draw':
-                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))and self.state.get('visor',False)==self.good.get('visor',False)and self.state.get('facewear')==self.good.get('facewear')
+                same_outfit=all(self.state[key]==self.good[key]for key in('equipment','head_visible','effects_visible'))and all(self.state.get(k)==self.good.get(k)for k in('pose','visor','facewear','weapons','preview_mode','weapon_focus','weapon_secondary_visible','weapon_drawn'))
                 self.loading_kind='正在调整视角…'if same_outfit else'正在绘制模版…'
             else:
                 operation=arguments[0]if arguments and isinstance(arguments[0],str)else''
@@ -516,6 +549,7 @@ class QtClient(NativeClient):
     def poll_job(self):
         super().poll_job()
         if self.closed:return
+        if self.job is None and not self.dirty and self.emote_playback.reconcile():self.update_outfit()
         if self.present_requested:self.request_present()
         self.sync_loading()
         if self.editor and self.job is None:
@@ -531,6 +565,7 @@ class QtClient(NativeClient):
         self.level_timer.stop()
         self.occlusion_timer.stop()
         self.effect_timer.stop();self.effect_clock.pause(self.effect_last_frame)
+        self.emote_playback.timer.stop();self.emote_playback.clock.pause()
         self.effect_deferred=None
         if self.present_timer is not None:self.root.after_cancel(self.present_timer);self.present_timer=None
         self.present_requested=False
@@ -582,9 +617,40 @@ class QtClient(NativeClient):
         if self.settings_handler:self.settings_handler();return
         from settings import SettingsStore
         from qt_settings import SettingsDialog
-        dialog=SettingsDialog(SettingsStore(),self.game,parent=self.window,storage_context=self.storage_identity,memory_release=self.release_memory)
+        store=SettingsStore()
+        dialog=SettingsDialog(store,self.game,parent=self.window,storage_context=self.storage_identity,memory_release=self.release_memory,studio=self.studio)
+        self.connect_scene_settings(dialog,store)
         dialog.accepted.connect(lambda:self.apply_studio(dialog.saved_studio)if dialog.saved_game==self.game else self.message.set('资源来源已保存，下次启动软件时生效'))
         self.show_dialog(dialog)
+
+    def connect_scene_settings(self,dialog,store):
+        previous=deepcopy(self.studio)
+        dialog.sceneUpdated.connect(self.apply_studio)
+        dialog.lightingRequested.connect(lambda value:self.open_lighting(store,value,previous))
+        def finished(result):
+            if result!=W.QDialog.Accepted and not dialog.lighting_handoff:self.apply_studio(previous)
+        dialog.finished.connect(finished)
+
+    def open_lighting(self,store,value,previous=None):
+        existing=getattr(self,'lighting_dialog',None)
+        if existing is not None:existing.raise_();existing.activateWindow();return existing
+        from qt_scene_lighting import LightingDialog
+        previous=deepcopy(self.studio)if previous is None else previous
+        dialog=LightingDialog(store,self.game,value,parent=self.window,place_light=self.current_light_position,camera_rotation=self.current_light_rotation);self.lighting_dialog=dialog
+        dialog.previewRequested.connect(self.apply_studio)
+        def finished(result):
+            self.lighting_dialog=None
+            if result!=W.QDialog.Accepted:self.apply_studio(previous)
+        dialog.finished.connect(finished);self.apply_studio(value)
+        return self.show_dialog(dialog)
+
+    def current_light_position(self):
+        if not self.ready or self.engine is None:return None
+        return getattr(self.engine.renderer,'light_camera_position',None)
+
+    def current_light_rotation(self):
+        if not self.ready or self.engine is None:return None
+        return getattr(self.engine.renderer,'light_camera_rotation',None)
 
     def release_memory(self):
         from concurrent.futures import Future
@@ -629,11 +695,28 @@ class QtClient(NativeClient):
         if not self.ready or self.closing:return
         from pose_preview import validate_pose
         validate_pose(pose_id)
+        if pose_id.startswith('weapon_')and not self.state.get('weapons',{}).get('MainHand',{}).get('item_id'):
+            self.message.set('请先试穿主武器，再选择拔出武器姿势。');self.update_outfit();return
+        self.emote_playback.pause();self.state.pop('emote',None);self.emote_playback.metadata=None
         if pose_id=='default':self.state.pop('pose',None)
         else:self.state['pose']=pose_id
         self.queue_render()
 
+    def select_weapon_state(self,drawn):
+        if not self.ready or self.closing:return
+        if drawn:self.state['weapon_drawn']=True
+        else:self.state.pop('weapon_drawn',None)
+        self.queue_render()
+
     def toggle_slot_visibility(self,slot):
+        if slot in WEAPONS:
+            if not self.ready or self.job is not None:return
+            from weapons import selection
+            chosen=selection(self.state.get('weapons'))or {s:{'item_id':None,'first':0,'second':0}for s in WEAPONS}
+            if slot in self.hidden_weapons:chosen[slot]=self.hidden_weapons.pop(slot)
+            elif chosen[slot]['item_id']:self.hidden_weapons[slot]=deepcopy(chosen[slot]);chosen[slot]={'item_id':None,'first':0,'second':0}
+            else:return
+            self.state['weapons']=chosen;self.update_outfit();self.queue_render();return
         if not self.ready or self.job is not None:return
         if slot in self.hidden_equipment:
             self.state['equipment'][slot]=self.hidden_equipment.pop(slot)
@@ -645,12 +728,45 @@ class QtClient(NativeClient):
         self.update_outfit();self.queue_render()
 
     def clear_outfit(self):
+        self.hidden_weapons.clear();self.state.pop('weapons',None)
         self.hidden_equipment.clear();self.hidden_facewear.clear();self.state.pop('facewear',None);super().clear_outfit()
 
     def open_facewear(self):
         if self.ready and not self.closing:self.select_slot('Facewear')
 
     def slot_key(self):return next(s for s,n in UI_SLOTS.items()if n==self.slot.get())
+
+    def set_preview_mode(self,mode):
+        if not self.ready or self.closing:return
+        current=self.state.get('preview_mode','character')
+        if mode==current:return
+        if mode=='weapon':self.emote_playback.pause();self.state.pop('emote',None)
+        keys=('yaw','pitch','pan','pan_x','zoom');self.mode_cameras[current]={k:self.state[k]for k in keys}
+        self.state.update(self.mode_cameras.get(mode,dict(yaw=0.,pitch=0.,pan=0.,pan_x=0.,zoom=1.)))
+        if mode=='character':self.state.pop('preview_mode',None)
+        else:self.state['preview_mode']='weapon'
+        self.update_outfit();self.queue_render()
+
+    def weapon_parts_toggled(self,checked):
+        if not self.ready:return
+        if checked:self.state.pop('weapon_secondary_visible',None)
+        else:self.state['weapon_secondary_visible']=False
+        self.queue_render()
+
+    def choose_weapon(self,identifier,slot):
+        if not self.ready or self.closing:return
+        from weapons import selection
+        from qt_weapons import metadata,dye_settings
+        chosen=selection(self.state.get('weapons'))or {s:{'item_id':None,'first':0,'second':0}for s in WEAPONS}
+        row=metadata(identifier)if identifier else{};self.hidden_weapons.pop(slot,None)
+        if identifier and row['slot']!=slot:raise ValueError('武器部位不匹配')
+        if row:
+            self.weapon_items[identifier]=row;settings=dye_settings(self)[slot];chosen[slot]={'item_id':identifier,'first':settings['first']if row['dye_count']>=1 else 0,'second':settings['second']if row['dye_count']>=2 else 0}
+            if slot=='MainHand'and json.loads(row['slot_rules']).get('OffHand',0)<0:chosen['OffHand']={'item_id':None,'first':0,'second':0};self.hidden_weapons.pop('OffHand',None)
+        else:chosen[slot]={'item_id':None,'first':0,'second':0}
+        if any(c['item_id']for c in chosen.values()):self.state['weapons']=chosen
+        else:self.state.pop('weapons',None)
+        self.state['weapon_focus']=slot;self.update_outfit();self.queue_render()
 
     def choose_facewear(self,identifier,slot=None):
         if not self.ready or self.closing:return
@@ -677,7 +793,9 @@ class QtClient(NativeClient):
         if not self.boot:return
         if self.library is not None:self.dye_settings()
         for dialog in self.dialogs:
-            if hasattr(dialog,'dye_slot'):dialog.set_selected(self.dye_settings()[dialog.dye_slot][dialog.dye_channel])
+            if hasattr(dialog,'dye_slot'):
+                from qt_weapons import dye_settings as weapon_dyes
+                values=weapon_dyes(self)if dialog.dye_slot in WEAPONS else self.dye_settings();dialog.set_selected(values[dialog.dye_slot][dialog.dye_channel])
         for slot,choice in self.state['equipment'].items():
             if choice['item_id']:self.hidden_equipment.pop(slot,None)
             hidden=slot in self.hidden_equipment
@@ -687,7 +805,24 @@ class QtClient(NativeClient):
             self.outfit_cards[slot].display(choice,self.items.get(choice['item_id'],{}),slot==self.slot_key(),hidden)
         self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values())+sum(bool(i)for i in self.state.get('facewear',[0,0])))+' 件')
         for card in self.facewear_cards.values():card.refresh()
-        self.pose_picker.setEnabled(self.ready and not self.closing)
+        from qt_weapons import metadata as weapon_metadata
+        for slot,card in self.weapon_cards.items():
+            chosen=self.state.get('weapons',{}).get(slot,{'item_id':None,'first':0,'second':0});hidden=slot in self.hidden_weapons;chosen=self.hidden_weapons.get(slot,chosen);identifier=chosen['item_id']
+            if identifier and identifier not in self.weapon_items:self.weapon_items[identifier]=weapon_metadata(identifier)
+            card.display(chosen,self.weapon_items.get(identifier,{}),slot==self.slot_key(),hidden)
+        self.worn_count.setText(str(sum(c['item_id']is not None for c in self.state['equipment'].values())+sum(bool(i)for i in self.state.get('facewear',[0,0]))+sum(bool(c['item_id'])for c in self.state.get('weapons',{}).values()))+' 件')
+        self.preview_picker.setCurrentIndex(self.preview_picker.findData(self.state.get('preview_mode','character')))
+        self.preview_picker.setEnabled(self.ready);self.weapon_parts_check.setVisible(self.group==WEAPONS and bool(self.state.get('weapons')))
+        self.weapon_parts_check.blockSignals(True);self.weapon_parts_check.setChecked(self.state.get('weapon_secondary_visible',True));self.weapon_parts_check.blockSignals(False)
+        weapon_view=self.state.get('preview_mode','character')=='weapon'
+        self.pose_picker.setVisible(not weapon_view);self.weapon_state_picker.setVisible(weapon_view)
+        self.emote_button.setVisible(not weapon_view);self.emote_button.setEnabled(self.ready and not self.closing)
+        record=self.emote_playback.metadata if self.state.get('emote')else None
+        self.emote_button.setText('动作：'+G.QFontMetrics(self.emote_button.font()).elidedText(record['name'],C.Qt.ElideRight,90)if record else'情感动作')
+        self.weapon_state_picker.setEnabled(self.ready and not self.closing)
+        self.weapon_state_picker.setCurrentIndex(self.weapon_state_picker.findData(self.state.get('weapon_drawn',False)))
+        if self.state.get('pose','default').startswith('weapon_')and not self.state.get('weapons',{}).get('MainHand',{}).get('item_id'):self.state.pop('pose',None)
+        self.pose_picker.setEnabled(self.ready and not self.closing and not weapon_view)
         self.pose_picker.setCurrentIndex(self.pose_picker.findData(self.state.get('pose','default')))
         self.head_check.blockSignals(True);self.head_check.setChecked(self.state.get('visor',False));self.head_check.blockSignals(False)
         visor=(getattr(self.engine,'last',None)or{}).get('visor',{})
@@ -699,17 +834,18 @@ class QtClient(NativeClient):
         if not self.state['effects_visible']:self.pause_effects()
         self.effects_play.setEnabled(self.ready and self.state['effects_visible'])
         self.zoom_label.setText(f"{self.state['zoom']*100:.0f}%")
-        for yaw,b in self.camera_buttons:b.setChecked(abs(self.state['yaw']-yaw)<.01)
+        for yaw,b in self.camera_buttons:b.setChecked(abs((self.state['yaw']-yaw+180)%360-180)<.01)
         for s,b in self.slot_buttons.items():b.setChecked(s==self.slot_key())
         face=self.slot_key()=='Facewear'
-        current=self.state.get('facewear',[0,0])[0]if face else self.state['equipment'][self.slot_key()]['item_id']
+        weapon=self.slot_key()in WEAPONS
+        current=self.state.get('facewear',[0,0])[0]if face else self.state.get('weapons',{}).get(self.slot_key(),{}).get('item_id')if weapon else self.state['equipment'][self.slot_key()]['item_id']
         if face:
             from facewear import catalogue
             model=catalogue()[2].get(current,{}).get('style_id')
-        else:model=self.items.get(current,{}).get('model_set')
+        else:model=(self.weapon_items if weapon else self.items).get(current,{}).get('model_set')
         for i in range(self.catalog.count()):
             item=self.catalog.item(i);row=item.data(C.Qt.UserRole)
-            item.setData(C.Qt.UserRole+1,bool(row.get('facewear'))==face and(row['model_set']==model if row.get('is_group')else row['item_id']==current))
+            item.setData(C.Qt.UserRole+1,bool(row.get('facewear'))==face and bool(row.get('weapon'))==weapon and(row['model_set']==model if row.get('is_group')else row['item_id']==current))
         for card in self.facewear_cards.values():card.setProperty('selected',face);polish(card)
 
     def rebuild_part_tabs(self):
@@ -725,24 +861,29 @@ class QtClient(NativeClient):
     def switch_group(self,group):
         self.group=group
         for buttons in(self.browse_groups,self.outfit_tabs):
-            for i,b in enumerate(buttons):b.setChecked((i==0)==(group==ARMOR))
+            for b,(_,parts)in zip(buttons,BROWSE_GROUPS):b.setChecked(parts==group)
         for slot,card in self.outfit_cards.items():card.setVisible(slot in group)
         for card in self.facewear_cards.values():card.setVisible(group==ARMOR)
+        for card in self.weapon_cards.values():card.setVisible(group==WEAPONS)
+        self.weapon_category.setVisible(group==WEAPONS)
         self.rebuild_part_tabs()
         if self.slot_key()not in group:self.select_slot(group[0])
 
     def select_slot(self,slot):
         if not self.boot:return
-        group=ARMOR if slot in ARMOR else ACCESSORIES
+        group=ARMOR if slot in ARMOR else WEAPONS if slot in WEAPONS else ACCESSORIES
         self.slot.set(UI_SLOTS[slot]);self.folder=None;self.outer=None;self.cancel_search()
         if group!=self.group:self.switch_group(group)
-        face=slot=='Facewear'
-        for control in(self.min_level,self.max_level,self.tag_picker,self.favorite_filter,self.tag_summary):control.setEnabled(not face)
+        face=slot=='Facewear';weapon=slot in WEAPONS
+        for control in(self.min_level,self.max_level):control.setEnabled(not face)
+        for control in(self.tag_picker,self.favorite_filter,self.tag_summary):control.setEnabled(not face and not weapon)
         self.search.setToolTip('搜索面饰名称、颜色或编号；同款颜色归在一个目录。'if face else'空格分隔多个条件（同时满足）。#标签、标签:礼服 只搜索标签。')
         self.update_outfit()
-        card=self.facewear_cards.get(0)if face else self.outfit_cards[slot]
+        card=self.facewear_cards.get(0)if face else self.weapon_cards[slot]if weapon else self.outfit_cards[slot]
         if card is not None:self.outfit_scroll.ensureWidgetVisible(card)
-        self.load_catalog(locate_item=self.state.get('facewear',[0,0])[0]if face else self.state['equipment'][slot]['item_id'])
+        if weapon:self.state['weapon_focus']=slot
+        self.load_catalog(locate_item=self.state.get('facewear',[0,0])[0]if face else self.state.get('weapons',{}).get(slot,{}).get('item_id')if weapon else self.state['equipment'][slot]['item_id'])
+        if weapon and self.state.get('preview_mode')=='weapon':self.queue_render()
 
     def search_changed(self,text):self.query.value=text;self.schedule_search()
 
@@ -791,7 +932,7 @@ class QtClient(NativeClient):
             for i in range(self.catalog.count()):
                 item=self.catalog.item(i);identifier=item.data(C.Qt.UserRole).get('icon_id')
                 if identifier in changed:item.setIcon(self.icons[identifier])
-            for card in self.outfit_cards.values():
+            for card in [*self.outfit_cards.values(),*self.weapon_cards.values()]:
                 key=getattr(card,'display_key',None)
                 if key and (-1 in changed or key[3]in changed or any(self.library.dye_icon(stain)in changed for stain in key[1:3]if stain)):
                     card.display_key=None
@@ -853,6 +994,7 @@ class QtClient(NativeClient):
         self.level_timer.start()
 
     def reset_filters(self):
+        self.weapon_category.setCurrentIndex(0)
         self.level_timer.stop();self.cancel_search();self.search.blockSignals(True);self.query.set('');self.search.clear();self.search.blockSignals(False)
         for control in(self.min_level,self.max_level):control.blockSignals(True);control.setValue(0);control.blockSignals(False)
         self.favorite_filter.setChecked(False);self.active_tags=[];self.tag_picker.setCurrentIndex(0);self.tag_picker.clearEditText();self.filters_changed()
@@ -864,7 +1006,7 @@ class QtClient(NativeClient):
         self.tag_summary.setToolTip('同时满足：'+text+'\n点击清除标签筛选');self.load_catalog()
 
     def refresh_library(self):
-        if self.slot_key()=='Facewear':self.refresh_tag_picker();self.update_outfit();return
+        if self.slot_key()=='Facewear'or self.slot_key()in WEAPONS:self.refresh_tag_picker();self.update_outfit();return
         self.refresh_tag_picker();self.library.refresh_annotations(self.rows,self.slot_key())
         for i,row in enumerate(self.rows):
             if i>=self.catalog.count():break
@@ -885,10 +1027,10 @@ class QtClient(NativeClient):
     def catalog_context(self,position):
         item=self.catalog.itemAt(position)
         if not item:return
-        if item.data(C.Qt.UserRole).get('facewear'):
+        if item.data(C.Qt.UserRole).get('facewear')or item.data(C.Qt.UserRole).get('weapon'):
             row=item.data(C.Qt.UserRole);menu=W.QMenu(self.catalog)
-            menu.addAction('复制面饰名称',lambda:W.QApplication.clipboard().setText(row['name']))
-            menu.addAction('打开颜色目录'if row.get('is_group')else'试穿',lambda:self.activate_item(item))
+            menu.addAction('复制名称',lambda:W.QApplication.clipboard().setText(row['name']))
+            menu.addAction('打开款式目录'if row.get('is_group')else'试穿',lambda:self.activate_item(item))
             try:menu.exec(self.catalog.viewport().mapToGlobal(position))
             finally:menu.deleteLater()
             return
@@ -1005,10 +1147,14 @@ class QtClient(NativeClient):
             'tags':tuple(self.active_tags),'min_level':self.level_bounds()[0],'max_level':self.level_bounds()[1],
             'favorite_snapshot':None if new_query else getattr(self,'favorite_snapshot',None),'restore':restore,
             'locate_item':locate_item,'locate_model':self.items.get(locate_item,{}).get('model_set')}
+        request['weapon_category']=self.weapon_category.currentData()if self.slot_key()in WEAPONS else 0
         if self.catalog_job is not None:self.catalog_queued=request
         else:self.start_catalog_request(request)
 
     def fetch_catalog(self,request):
+        if request['slot']in WEAPONS:
+            from qt_weapons import catalogue_rows
+            return catalogue_rows(request),None
         if request['slot']=='Facewear':
             from qt_facewear import catalogue_rows
             return catalogue_rows(request),None
@@ -1065,12 +1211,16 @@ class QtClient(NativeClient):
         if request['page']>=self.page_count:
             self.catalog_loading=False;self.load_catalog(page=self.page_count-1,restore=request['restore']);return
         self.page_index=result['offset']//60;self.rows=list(result['items']);self.offset=result['offset']+len(self.rows);self.more=result['more']
-        if request['slot']!='Facewear':self.items.update({r['item_id']:r for r in self.rows})
+        if request['slot']in WEAPONS:self.weapon_items.update({r['item_id']:r for r in self.rows})
+        elif request['slot']!='Facewear':self.items.update({r['item_id']:r for r in self.rows})
         self.populate_catalog(self.rows);self.back_button.setVisible(self.folder is not None)
         face=request['slot']=='Facewear'
-        text=('面饰'if face else'全部装备')if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
+        weapon=request['slot']in WEAPONS
+        text=('面饰'if face else'武器'if weapon else'全部装备')if self.folder is None else self.outer['name'];self.breadcrumb.setText(text);self.breadcrumb.setToolTip(text)
         self.search.setPlaceholderText('名称、颜色、编号 · 多词组合'if face else'名称、编号、标签 · 多词组合'if self.folder is None else'搜索此目录的款式或标签')
         self.count_note.setText(f"{result['total']:,} "+(('个款式目录'if self.folder is None else'个颜色变体')if face else'项 · 收藏优先 · 右键查看详情'if self.folder is None else'款装备 · 收藏优先'))
+        if weapon:
+            self.search.setPlaceholderText('名称、编号 · 多词组合');self.count_note.setText(f"{result['total']:,} "+('个款式目录'if self.folder is None else'款武器'))
         self.catalog.verticalScrollBar().setValue(0)
         self.catalog_loading=False;self.catalog_spinner.set_running(False);self.catalog.setEnabled(True)
         self.sync_pagination()
@@ -1095,6 +1245,7 @@ class QtClient(NativeClient):
                 'filters':self.filter_signature(),'favorite_snapshot':self.favorite_snapshot}
             self.folder=row['model_set'];self.load_catalog();return
         if row.get('facewear'):self.choose_facewear(row['item_id']);return
+        if row.get('weapon'):self.choose_weapon(row['item_id'],self.slot_key());return
         slot=self.slot_key();self.state['equipment'][slot]=self.equipment_choice(slot,row);self.update_outfit();self.queue_render()
 
     def back_folder(self):
@@ -1108,7 +1259,7 @@ class QtClient(NativeClient):
             self.rows=record['rows'];self.offset=record['offset'];self.more=record['more'];self.favorite_snapshot=record['favorite_snapshot'];self.populate_catalog(self.rows)
             self.page_index=record['page'];self.page_count=record['pages'];self.catalog_total=record['total'];self.sync_pagination()
         self.catalog.doItemsLayout();self.catalog.verticalScrollBar().setValue(record['scroll'])
-        self.breadcrumb.setText('面饰'if self.slot_key()=='Facewear'else'全部装备');self.back_button.hide()
+        self.breadcrumb.setText('面饰'if self.slot_key()=='Facewear'else'武器'if self.slot_key()in WEAPONS else'全部装备');self.back_button.hide()
         if not rebuild:self.count_note.setText(record['count'])
         self.search.setPlaceholderText('名称、颜色、编号 · 多词组合'if self.slot_key()=='Facewear'else'名称、编号、标签 · 多词组合');self.update_outfit()
 
@@ -1173,13 +1324,22 @@ class QtClient(NativeClient):
         if 'effect_frame'not in result:return
         self.effect_last_frame=result['effect_frame']
         if not self.effect_clock.playing:self.effect_clock.pause(self.effect_last_frame)
+        self.emote_playback.presented(result)
 
     def tick_effects(self):
-        if(self.closing or not self.ready or not self.effect_clock.playing or not self.state['effects_visible']
-            or self.job is not None or self.effect_future is not None or self.dirty or self.dialogs
-            or self.window.isMinimized()or not self.window.isVisible()):return
-        if not self.engine.last or not self.engine.last.get('equipment_effects'):return
-        frame=self.effect_clock.sample();state=deepcopy(self.state)
+        animation=self.emote_playback
+        hidden=self.window.isMinimized()or not self.window.isVisible()
+        animation.clock.suspend(hidden)
+        if(self.closing or not self.ready or hidden or self.job is not None or self.effect_future is not None or self.dirty):return
+        moving=animation.playing
+        if not moving and(not self.effect_clock.playing or not self.state['effects_visible']):return
+        from qt_emotes import EmoteDialog
+        from qt_scene_lighting import LightingDialog
+        if any(not isinstance(d,(EmoteDialog,LightingDialog))for d in self.dialogs):return
+        if not moving and(not self.engine.last or not self.engine.last.get('equipment_effects')):return
+        frame=self.effect_clock.sample()if self.effect_clock.playing and self.state['effects_visible']else self.effect_last_frame
+        state=deepcopy(self.state)
+        if moving:state['emote']['time']=animation.clock.sample()
         self.effect_started_at=time.perf_counter()
         self.effect_future=self.engine.pool.submit(self.engine.render,state,effect_frame=frame)
         self.effect_future.add_done_callback(self.effect_delivery.finished.emit)
@@ -1195,7 +1355,7 @@ class QtClient(NativeClient):
         try:
             result=future.result();self.effect_frame_presented(result)
         except Exception as error:
-            self.pause_effects();self.message.set('特效播放未能完成，已暂停。'+str(error))
+            self.pause_effects();self.emote_playback.pause();self.message.set('预览播放未能完成，已暂停。'+str(error))
         if self.closing:return
         if self.effect_deferred is not None:
             fn,callback,arguments,baseline,generation=self.effect_deferred;self.effect_deferred=None
@@ -1391,6 +1551,9 @@ class QtClient(NativeClient):
         return self.icon(identifier)if identifier else G.QIcon()
 
     def reset_slot_dye(self,slot,channel):
+        if slot in WEAPONS:
+            from qt_weapons import dye_action
+            return dye_action(self,slot,channel,reset=True)
         if not self.ready or self.closing:return
         choice=self.state['equipment'][slot]
         if slot in self.hidden_equipment or self.items.get(choice['item_id'],{}).get('dye_count',0)<channel:return
@@ -1398,6 +1561,9 @@ class QtClient(NativeClient):
         self.save_dye_settings(settings);choice[key]=0;self.update_outfit();self.queue_render()
 
     def swap_slot_dyes(self,slot):
+        if slot in WEAPONS:
+            from qt_weapons import dye_action
+            return dye_action(self,slot,swap=True)
         if not self.ready or self.closing:return
         choice=self.state['equipment'][slot]
         if self.items.get(choice['item_id'],{}).get('dye_count',0)<2:return
@@ -1406,6 +1572,9 @@ class QtClient(NativeClient):
         choice.update(values);self.update_outfit();self.queue_render()
 
     def open_dyes(self,slot,channel):
+        if slot in WEAPONS:
+            from qt_weapons import dye_action
+            return dye_action(self,slot,channel)
         choice=self.state['equipment'][slot];item=self.items.get(choice['item_id'],{})
         if item.get('dye_count',0)<channel:return
         colors=[{'value':0,'label':'原色','color':UNDYED_SWATCH_COLOR}]+[{'value':d['stain_id'],'label':d['name'],'color':'#%06x'%(d['color']&0xffffff),'metallic':bool(d['metallic']),'icon_id':self.library.dye_icon(d['stain_id'])if self.library else None}for d in self.boot['dyes']if d['stain_id']]
@@ -1834,22 +2003,31 @@ class AppearanceDialog(W.QDialog):
 
 class DesktopSession(C.QObject):
     """Apply game-directory changes after the old GPU worker releases HWND."""
-    def __init__(self,application,store,game,preset=None):
+    def __init__(self,application,store,game,preset=None,*,update_controller=None):
         super().__init__(application);self.application=application;self.store=store;self.next_game=None;self.settings_dialog=None
         self.preset=preset or (ROOT/'defaults/test.dat' if (ROOT/'defaults/test.dat').is_file() else paths().presets/'test.dat');self.controller=None
         self.timer=C.QTimer(self);self.timer.setInterval(40);self.timer.timeout.connect(self.poll);self.timer.start()
         self.update_folder=None
-        self.start(game)
         from qt_updates import UpdateController
-        self.updates=UpdateController(self)
+        self.updates=update_controller or UpdateController(self)
+        if update_controller is not None:self.updates.attach(self)
+        self.start(game)
 
     def start(self,game):
         self.window=WardrobeWindow();self.controller=QtClient(self.window,game,self.preset,settings_handler=self.open_settings,studio=self.store.studio());self.window.show()
 
+    def install_update(self,folder):
+        self.update_folder=folder;self.window.setEnabled(False)
+        if self.settings_dialog:self.settings_dialog.reject()
+        self.controller.close()
+
     def open_settings(self):
         if self.settings_dialog:self.settings_dialog.raise_();return
         from qt_settings import SettingsDialog
-        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window,storage_context=self.controller.storage_identity,update_controller=self.updates,memory_release=self.controller.release_memory)
+        existing=getattr(self.controller,'lighting_dialog',None)
+        if existing is not None:existing.raise_();existing.activateWindow();return
+        dialog=SettingsDialog(self.store,self.controller.game,parent=self.window,storage_context=self.controller.storage_identity,update_controller=self.updates,memory_release=self.controller.release_memory,studio=self.controller.studio)
+        self.controller.connect_scene_settings(dialog,self.store)
         self.settings_dialog=dialog
         def finish(result):
             self.settings_dialog=None
@@ -1878,19 +2056,23 @@ def main():
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--game',type=Path);parser.add_argument('--preset',type=Path)
     args=parser.parse_args();migrate();os.chdir(ROOT);application=W.QApplication.instance()or W.QApplication(sys.argv[:1]);application.setStyle('Fusion');application.setStyleSheet(STYLE)
     application.setFont(G.QFont('Microsoft YaHei UI',10));application.setQuitOnLastWindowClosed(False)
-    from settings import SettingsStore,validate_game
-    from qt_first_run import FirstRunDialog
-    store=SettingsStore();game,error=store.read()
-    if args.game:
-        try:game=store.save(validate_game(args.game));error=''
-        except Exception as issue:game=None;error=str(issue)
-    automatic_host=store.network_setup_host()if not args.game else None
-    if game is None or automatic_host:
-        from qt_first_run import open_source_setup
-        game=open_source_setup(store,args.game,error=error,automatic_host=automatic_host)
-        if game is None:return 0
-    session=DesktopSession(application,store,game,args.preset)
-    return application.exec()
+    from qt_updates import StartupUpdates
+    startup=StartupUpdates(application)
+    try:
+        if not startup.run():return 0
+        from settings import SettingsStore,validate_game
+        store=SettingsStore();game,error=store.read()
+        if args.game:
+            try:game=store.save(validate_game(args.game));error=''
+            except Exception as issue:game=None;error=str(issue)
+        automatic_host=store.network_setup_host()if not args.game else None
+        if game is None or automatic_host:
+            from qt_first_run import open_source_setup
+            game=open_source_setup(store,args.game,error=error,automatic_host=automatic_host)
+            if game is None:return 0
+        session=DesktopSession(application,store,game,args.preset,update_controller=startup.updates)
+        return application.exec()
+    finally:startup.updates.shutdown()
 
 
 def startup_check():

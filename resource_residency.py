@@ -123,7 +123,7 @@ def release_inactive_cpu(engine,scene,*,force=False):
     """The current scene owns selected immutable meshes; discard look-back caches."""
     if not force and not getattr(engine.pack,'memory_only',True):return
     for key,value in list(engine.scene_cache.items()):
-        if value is not scene:engine.scene_cache.pop(key)
+        if value is not getattr(scene,'emote_base_scene',scene):engine.scene_cache.pop(key)
     outfit=engine.character.outfit
     wanted={mesh['shader_path']for mesh in engine.character.base.meshes+scene.meshes}
     for packages in(engine.character.base.packages,scene.packages):
@@ -136,4 +136,8 @@ def release_inactive_cpu(engine,scene,*,force=False):
     engine.accessories.prepared.clear()
     facewear=getattr(engine.character,'facewear',None)
     if facewear is not None:facewear.prepared.clear()
+    weapons=getattr(engine.character,'weapons',None)
+    if weapons is not None:
+        weapons.prepared.clear()
+        if force and hasattr(weapons,'effect_provider'):weapons.effect_provider.sources.clear()
     if hasattr(engine.pack,'release_idle'):engine.pack.release_idle(force=True)if force else engine.pack.release_idle()

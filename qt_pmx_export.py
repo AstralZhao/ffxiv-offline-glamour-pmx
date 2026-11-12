@@ -20,6 +20,10 @@ def export_dialog(client):
     def rig_changed():
         for option in(ik,expressions,physics):option.setEnabled(rig.currentData()=='standard')
     rig.currentIndexChanged.connect(rig_changed)
+    if client.state.get('preview_mode')=='weapon':
+        rig.setCurrentIndex(1)
+        rig.model().item(0).setEnabled(False)
+        rig.setToolTip('单独预览武器时使用原生模式；导出标准角色骨架请切回角色预览。')
     scale=W.QDoubleSpinBox();scale.setRange(.01,1000);scale.setDecimals(2);scale.setValue(12.5)
     scale.setToolTip('默认将游戏中的 1 米转换为 12.5 个 MMD 单位')
     form.addRow('尺寸倍率',scale)
@@ -28,7 +32,7 @@ def export_dialog(client):
     for size in(512,1024,2048):resolution.addItem(f'{size} × {size}',size)
     resolution.setCurrentIndex(1);form.addRow('每个材质的贴图尺寸',resolution)
     textures.toggled.connect(resolution.setEnabled)
-    note=label('标准骨架会自动映射日文骨名并恢复 A 姿势。基础表情和物理为自动生成，不同脸型、装备及 VMD 动作仍可能需要微调。原生模式保留预览姿势与游戏骨架。游戏反射、透射和粒子特效不会完整保留。','Muted')
+    note=label('标准骨架会自动映射日文骨名并恢复 A 姿势及中性面部。基础表情和物理为自动生成，不同脸型、装备及 VMD 动作仍可能需要微调。原生模式保留当前帧与游戏骨架。武器按当前形态固定在独立控制骨上；游戏反射、透射和粒子特效不会完整保留。','Muted')
     note.setWordWrap(True);layout.addWidget(note)
     footer=horizontal();footer.addStretch();footer.addWidget(button('取消',dialog.reject))
     save=button('选择位置并导出',lambda:None,primary=True);footer.addWidget(save);layout.addLayout(footer)
