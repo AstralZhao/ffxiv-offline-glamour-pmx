@@ -2,6 +2,10 @@
 
 本项目基于 [kilislan-wei / ffxiv_offline_glamour（幻化柜）](https://gitee.com/kilislan-wei/ffxiv_offline_glamour) 的官方 **v0.0.9 发行包中的应用源码与完整运行环境**，合入 PMX 导出、骨架方向修复、IK、表情和物理功能。这是独立维护的 PMX 修改版，并非上游官方发行版；保留原项目署名及 v0.0.9 的武器、情感动作、环境光/补光/独立灯光与抗锯齿功能。
 
+源码在 [Gitee Fork](https://gitee.com/AyanamiDesu/ffxiv_offline_glamour) 的 `codex/pmx-v0.0.9` 分支维护，[GitHub 仓库](https://github.com/AstralZhao/ffxiv-offline-glamour-pmx) 提供镜像与便携版下载。Gitee 的 `master` 保留上游源码；PMX 分支继续使用已验证的 v0.0.9 基础，尚未合入上游后续版本的功能。
+
+上游原创客户端源码采用 [MIT 许可证](LICENSE)，保留 Kilislan 的版权声明。游戏模型、纹理、图标和其他第三方内容适用各自的权利声明与许可条款。
+
 ## 下载与使用
 
 1. 在 [Releases 下载页](https://github.com/AstralZhao/ffxiv-offline-glamour-pmx/releases/latest) 下载 `ffxiv-offline-glamour-pmx-v0.0.9-r2-windows-x64.zip`。为兼容 GitHub，下载文件使用英文名，解压后仍为中文目录与启动程序。GitHub 自动生成的 `Source code` 压缩包仅含源码，不是可直接运行的软件。
