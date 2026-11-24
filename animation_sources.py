@@ -41,12 +41,14 @@ def facial_clip(pack,name,rig,variant,*,library=None,primary_paths=(),channel=17
     not admit special root overrides or the MLT resident-only dispatch.
     """
     if not re.fullmatch('[a-z0-9_]+',name):raise ValueError('表情片段名称不正确')
-    if channel not in(17,19):raise ValueError('表情来源通道不正确')
+    if channel not in(17,18,19):raise ValueError('表情来源通道不正确')
     if not re.fullmatch('c[0-9]{4}',rig)or not re.fullmatch('f[0-9]{4}',variant):
         raise ValueError('表情资源身份不正确')
     if library is not None and not re.fullmatch('[a-z0-9_]+(?:/[a-z0-9_]+)*',library):
         raise ValueError('表情库名称不正确')
     flags=MotionLines(pack.read(MLT)).flags(name)
+    if channel==18 and not name.startswith('cfxb_'):
+        raise NotImplementedError('此眨眼的动作线路尚未接入')
     if channel==19 and(not name.startswith('cfxl_')or flags!=0x229):
         raise NotImplementedError('此口型的动作线路尚未接入')
     if flags&0x10:raise NotImplementedError('此表情的专用驻留调度尚未接入')

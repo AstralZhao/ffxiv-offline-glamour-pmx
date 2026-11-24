@@ -61,6 +61,8 @@ class Model:
     joints: list = field(default_factory=list)
     displays: list = field(default_factory=list)
     rig: str = 'native'
+    expression_source: str = 'procedural'
+    morph_sources: list = field(default_factory=list)
 
 
 def _finite(value, shape, label):
@@ -268,7 +270,7 @@ def _rest_mesh(scene, mesh, vertices, positions, weights, palette, rig):
     result = (blends[1] @ source)[:, :3, 0]
     if not np.isfinite(result).all():
         raise ValueError('PMX：无法恢复参考姿势')
-    return result, {**mesh, 'joint_matrices': new}
+    return result, {**mesh, 'joint_matrices': new}, source[:, :, 0]
 
 
 def export_source(scene, rig='native'):
@@ -330,6 +332,7 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
         '不导出装备粒子特效，MMD 光照与游戏预览存在差异。',
     ])
     model.rig = rig
+    if not standard or not expressions: model.expression_source = 'none'
     if standard:
         model.warnings = ['使用自定义身材的 A 姿势与自动生成的 MMD 骨架；VMD 动作仍需按角色比例调整。',
                           '不导出装备粒子特效，MMD 光照与游戏预览存在差异。']
@@ -337,6 +340,19 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
         model.warnings.append('标准模式使用动作播放前的角色与面部参考姿势；不把游戏动作或表情烘焙为初始姿势。')
     if any(mesh.get('weapon_attachment_bone') for mesh in scene.meshes):
         model.warnings.append('武器按当前形态固定在独立控制骨上并跟随角色挂点；不导出武器内部活动骨骼或粒子特效。')
+    authored = None
+    if standard and expressions:
+        from pmx_morphs import authored_targets, bake_offsets, palette_deltas
+        authored = authored_targets(scene, outfit, reference, check_cancel)
+        if authored is not None:
+            targets, notices = authored
+            model.expression_source = 'native_facial'
+            model.warnings.extend(notices)
+            model.warnings.append('表情使用当前脸型的原始面部动作及完整蒙皮权重生成；口型为原始说话片段的近似采样，多个同部位表情叠加仍需控制强度。')
+            for target in targets:
+                model.morphs.append({**{key: target[key] for key in ('name', 'english', 'panel')}, 'indices': [], 'offsets': []})
+                model.morph_sources.append({'name': target['name'], **target['source']})
+    vertex_base = 0
     for number, mesh in enumerate(scene.meshes):
         check_cancel()
         indices = np.asarray(mesh['indices'])
@@ -356,7 +372,16 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
         bones, weights, original, reduced, loss = _weights(vertices, palette)
         normal_mesh = mesh
         if standard:
-            positions, normal_mesh = _rest_mesh(scene, mesh, vertices, positions, original, palette, skeleton)
+            positions, normal_mesh, source_points = _rest_mesh(scene, mesh, vertices, positions, original, palette, skeleton)
+            if authored is not None:
+                for target, morph in zip(targets, model.morphs):
+                    check_cancel()
+                    delta = palette_deltas(skeleton, palette, outfit, target['delta'])
+                    if np.allclose(delta, np.eye(4), atol=1e-12, rtol=0): continue
+                    offsets = bake_offsets(source_points, vertices['joints'], original, normal_mesh['joint_matrices'], delta)*AXES*scale
+                    active = np.linalg.norm(offsets, axis=1) > scale*1e-7
+                    morph['indices'].extend((np.flatnonzero(active)+vertex_base).tolist())
+                    morph['offsets'].extend(offsets[active])
         normals = _normals(scene, normal_mesh, vertices, original, positions, triangles)
         uv = np.asarray(vertices['uv'], dtype=float)[:, :2]
         texture, notices = None, []
@@ -373,9 +398,18 @@ def build_model(scene, outfit, *, name='FFXIV', scale=DEFAULT_SCALE, material_pr
             not bool(mesh.get('material', {}).get('shader_flags', 0) & 1),
             {key: mesh.get(key) for key in ('slot', 'source_mesh', 'material_path', 'shader_path', 'item_id', 'dyes')},
         ))
+        vertex_base += len(vertices)
     if not model.parts:
         raise ValueError('PMX：没有可导出的可见三角形')
     if standard:
+        if authored is not None:
+            model.morphs = [m for m in model.morphs if len(m['indices'])]
+            for morph in model.morphs:
+                morph['indices'] = np.asarray(morph['indices'], dtype=np.int32)
+                morph['offsets'] = np.asarray(morph['offsets'], dtype=float)
+            present = {m['name'] for m in model.morphs}
+            model.morph_sources = [source for source in model.morph_sources if source['name'] in present]
+            if not model.morphs: model.warnings.append('当前可见网格没有可导出的原始面部表情，未生成表情。')
         from pmx_rig import prepare_standard
         check_cancel()
         prepare_standard(model, ik=ik, expressions=expressions, physics=physics, check_cancel=check_cancel)
@@ -590,7 +624,8 @@ def export_scene(scene, outfit, destination, *, name=None, scale=DEFAULT_SCALE,
             textures.append(relative)
         report = {'format': 'PMX 2.0', 'model': destination.name, 'scale': model.scale,
                   'pose': 'customized A pose' if rig == 'standard' else 'current preview as rest pose',
-                  'rig': model.rig, 'morphs': len(model.morphs), 'rigid_bodies': len(model.rigids),
+                  'rig': model.rig, 'morphs': len(model.morphs), 'expression_source': model.expression_source,
+                  'morph_sources': model.morph_sources, 'rigid_bodies': len(model.rigids),
                   'physics_joints': len(model.joints), 'ik_bones': sum(b.ik is not None for b in model.bones),
                   'vertices': sum(len(p.positions) for p in model.parts),
                   'triangles': sum(len(p.triangles) for p in model.parts), 'bones': len(model.bones),

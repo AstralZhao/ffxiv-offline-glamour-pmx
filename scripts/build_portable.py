@@ -17,7 +17,8 @@ sys.path.insert(0,str(ROOT))
 from scripts.run_dev import TAG,ARCHIVE_SHA256,download_archive
 
 MANIFEST='程序/artifacts/package-manifest.json'
-PMX_MODULES={'demo/pmx_export.py','demo/pmx_material.py','demo/pmx_rig.py','demo/qt_pmx_export.py'}
+BUILD_REVISION=2
+PMX_MODULES={'demo/pmx_export.py','demo/pmx_material.py','demo/pmx_rig.py','demo/pmx_morphs.py','demo/qt_pmx_export.py'}
 
 
 def sha(path):
@@ -157,7 +158,7 @@ def zip_tree(folder,destination,epoch):
         if bad is not None:raise ValueError('Output ZIP failed CRC verification: '+bad)
 
 
-def build(output,revision=1,overwrite=False):
+def build(output,revision=BUILD_REVISION,overwrite=False):
     if type(revision)is not int or not 1<=revision<=9999:raise ValueError('Invalid build revision')
     output=Path(output).resolve();output.mkdir(parents=True,exist_ok=True)
     name=f'幻化柜-PMX-{TAG}-r{revision}-便携版';target=output/(name+'.zip')
@@ -185,7 +186,7 @@ def build(output,revision=1,overwrite=False):
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output',type=Path,default=ROOT/'dist')
-    parser.add_argument('--revision',type=int,default=1)
+    parser.add_argument('--revision',type=int,default=BUILD_REVISION)
     parser.add_argument('--overwrite',action='store_true')
     args=parser.parse_args();build(args.output,args.revision,args.overwrite)
 

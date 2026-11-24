@@ -48,8 +48,8 @@ def inside(install,game,report_path):
     verify_source_release();migrate()
     from qt_runtime import enable
     enable()
-    import numpy,PIL,PySide6,shiboken6,app,pmx_export,pmx_material,pmx_rig,qt_pmx_export
-    imports={module.__name__:str(Path(module.__file__).resolve())for module in(numpy,PIL,PySide6,shiboken6,app,pmx_export,pmx_material,pmx_rig,qt_pmx_export)}
+    import numpy,PIL,PySide6,shiboken6,app,pmx_export,pmx_material,pmx_rig,pmx_morphs,qt_pmx_export
+    imports={module.__name__:str(Path(module.__file__).resolve())for module in(numpy,PIL,PySide6,shiboken6,app,pmx_export,pmx_material,pmx_rig,pmx_morphs,qt_pmx_export)}
     assert all(Path(path).is_relative_to(program)for path in imports.values()),imports
     assert Path(sys.executable).resolve().is_relative_to(program)
     from PySide6 import QtWidgets as W,QtCore as C
@@ -108,6 +108,7 @@ def inside(install,game,report_path):
         exports=[json.loads(path.read_bytes())for path in output.glob('pmx_assets_*/export.json')]
         standard=next(record for record in exports if record['model']==destination.name)
         assert standard['ik_bones']==4 and standard['morphs']==13 and standard['physics_joints']>0
+        assert standard['expression_source']=='native_facial'and len(standard['morph_sources'])==13
         assert standard['textures']>0 and destination.is_file()
         for item in list(client.dialogs):item.close()
         future=client.engine.pool.submit(client.engine.export_pmx,output/'便携版 原生角色.pmx',{'rig':'native','textures':False,'overwrite':True})

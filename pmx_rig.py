@@ -342,7 +342,7 @@ def prepare_standard(model, *, ik=True, expressions=True, physics=True, check_ca
     _reorder(model)
     lookup = {bone.english: i for i, bone in enumerate(model.bones) if bone.english}
     check_cancel()
-    if expressions: _expressions(model, lookup)
+    if expressions and model.expression_source != 'native_facial': _expressions(model, lookup)
     check_cancel()
     if physics: _physics(model, lookup)
     controls = [(0, i) for i, bone in enumerate(model.bones) if i and bone.visible]

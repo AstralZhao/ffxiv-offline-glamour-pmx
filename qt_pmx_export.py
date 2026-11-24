@@ -15,7 +15,7 @@ def export_dialog(client):
     rig=W.QComboBox();rig.addItem('标准 MMD 骨架 · A 姿势','standard');rig.addItem('原生骨架 · 当前预览姿势','native')
     form.addRow('骨架与初始姿势',rig)
     ik=W.QCheckBox('生成腿部与脚尖 IK');ik.setChecked(True);form.addRow('IK',ik)
-    expressions=W.QCheckBox('生成眨眼、口型和眉毛表情');expressions.setChecked(True);form.addRow('基础表情',expressions)
+    expressions=W.QCheckBox('按角色原始表情生成眨眼、口型和眉毛');expressions.setChecked(True);form.addRow('基础表情',expressions)
     physics=W.QCheckBox('生成头发、尾巴、裙摆及身体碰撞体');physics.setChecked(True);form.addRow('基础物理',physics)
     def rig_changed():
         for option in(ik,expressions,physics):option.setEnabled(rig.currentData()=='standard')
@@ -32,7 +32,7 @@ def export_dialog(client):
     for size in(512,1024,2048):resolution.addItem(f'{size} × {size}',size)
     resolution.setCurrentIndex(1);form.addRow('每个材质的贴图尺寸',resolution)
     textures.toggled.connect(resolution.setEnabled)
-    note=label('标准骨架会自动映射日文骨名并恢复 A 姿势及中性面部。基础表情和物理为自动生成，不同脸型、装备及 VMD 动作仍可能需要微调。原生模式保留当前帧与游戏骨架。武器按当前形态固定在独立控制骨上；游戏反射、透射和粒子特效不会完整保留。','Muted')
+    note=label('标准骨架会自动映射日文骨名并恢复 A 姿势及中性面部。表情按当前脸型的原始动作生成，口型和同部位表情叠加仍可能需要微调；基础物理需按装备和动作调整。原生模式保留当前帧与游戏骨架。武器按当前形态固定在独立控制骨上；游戏反射、透射和粒子特效不会完整保留。','Muted')
     note.setWordWrap(True);layout.addWidget(note)
     footer=horizontal();footer.addStretch();footer.addWidget(button('取消',dialog.reject))
     save=button('选择位置并导出',lambda:None,primary=True);footer.addWidget(save);layout.addLayout(footer)
