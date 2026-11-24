@@ -4,7 +4,7 @@
 
 ## 下载与使用
 
-1. 在本仓库 **Releases** 中下载 `幻化柜-PMX-v0.0.9-r2-便携版.zip`。GitHub 自动生成的 `Source code` 压缩包仅含源码，不是可直接运行的软件。
+1. 在 [Releases 下载页](https://github.com/AstralZhao/ffxiv-offline-glamour-pmx/releases/latest) 下载 `幻化柜-PMX-v0.0.9-r2-便携版.zip`。GitHub 自动生成的 `Source code` 压缩包仅含源码，不是可直接运行的软件。
 2. 完整解压到可写目录，双击 **幻化柜.exe**。已内置 Python 和依赖，使用者无需安装开发环境。
 3. 首次启动选择匹配的国服 FFXIV 游戏目录或已有 `.ff14resources` 资源包；准备角色后，点击右侧 **导出 PMX 模型**。
 
